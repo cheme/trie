@@ -1056,6 +1056,40 @@ mod tests {
 	}
 
 	#[test]
+	fn fuzz_that() {
+    let data = vec![
+     (vec![0u8,1,2,3,4,5], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,0], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,1], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,2], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,3], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,4], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,5], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,6], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,7], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,8], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,9], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,10], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,11], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,12], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,13], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,14], vec![2u8,3u8]),
+     (vec![0u8,1,2,3,6,15], vec![2u8,3u8]),
+     (vec![0u8,1,8,3,4,5], vec![2u8,3u8])
+    ];
+		let mut memdb = MemoryDB::default();
+		let mut root = Default::default();
+		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
+    for a in 0..data.len() {
+		  t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+    }
+		assert_eq!(*t.root(), ref_trie_root(data));
+    panic!("disp");
+	}
+
+
+  
+	#[test]
 	fn remove_to_empty() {
 		let big_value = b"00000000000000000000000000000000";
 
