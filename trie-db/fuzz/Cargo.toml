@@ -22,3 +22,6 @@ members = ["."]
 [[bin]]
 name = "trie_root"
 path = "fuzz_targets/trie_root.rs"
+[[bin]]
+name = "trie_root_fix_len"
+path = "fuzz_targets/trie_root_fix_len.rs"
