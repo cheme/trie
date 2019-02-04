@@ -325,7 +325,7 @@ pub fn compare_impl(
   ) {
   let mut root_new = Default::default();
   {
-    let mut cb = trie_db::trie_db_builder!(hashdb, root_new, <KeccakHasher as Hasher>::Out);
+    let mut cb = trie_db::trie_db_builder!(hashdb, root_new, KeccakHasher);
     trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
   }
   let root = {
@@ -364,7 +364,7 @@ pub fn compare_root(
   ) {
     let mut root_new = Default::default();
     {
-      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new, <KeccakHasher as Hasher>::Out);
+      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new);
       trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
     }
     let root = {
@@ -390,7 +390,7 @@ where
 {
     let mut root_new = Default::default();
     {
-      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new, <KeccakHasher as Hasher>::Out);
+      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new);
       trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
     }
     root_new

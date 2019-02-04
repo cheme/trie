@@ -22,6 +22,8 @@ use ChildReference;
 use elastic_array::{ElasticArray128};
 
 /// Trait for trie node encoding/decoding
+/// TODO add const MAX_NODE_LEN and run all encoding over a mutable buffer, returning size. ->
+/// avoid Vec by all means.
 pub trait NodeCodec<H: Hasher>: Sized {
 	/// Codec error type
 	type Error: ::std::error::Error;

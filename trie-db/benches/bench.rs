@@ -49,9 +49,10 @@ fn nibble_common_prefix(b: &mut Criterion) {
 
 fn root_old(c: &mut Criterion) {
 	let data : Vec<Vec<(Vec<u8>,Vec<u8>)>> = vec![
-		input("./testset0"),
-		input("./testset1"),
-		input("./testset2"),
+		input("./testset0"), // 286 vals
+		input("./testset1"), // 571 vals
+		input("./testset2"), // 5649 vals
+		input("./testset3"), // 11376 vals
 	];
 
 	c.bench_function_over_inputs("root_old",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
@@ -68,6 +69,7 @@ fn root_new(c: &mut Criterion) {
 		input("./testset0"),
 		input("./testset1"),
 		input("./testset2"),
+		input("./testset3"),
 	];
 
 	c.bench_function_over_inputs("root_new",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|

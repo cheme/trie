@@ -374,7 +374,8 @@ fn encoded_nibble(ori: &[u8], is_leaf: bool) -> ElasticArray36<u8> {
 // second str is in branch value and can be remove for fix key scenario
 struct CacheAccum<H: Hasher,C,V> (Vec<(Vec<CacheNode<<H as Hasher>::Out>>, usize, usize)>,Vec<Option<V>>,PhantomData<(H,C)>);
 
-const DEPTH: usize = 64;
+/// initially allocated cache
+const INITIAL_DEPTH: usize = 10;
 const NIBBLE_SIZE: usize = 16;
 impl<H,C,V> CacheAccum<H,C,V>
 where
@@ -384,14 +385,20 @@ where
 	{
 	// TODO switch to static and bench
 	fn new() -> Self {
-		CacheAccum(vec![(vec![CacheNode::None; NIBBLE_SIZE],0,0); DEPTH],
-		std::iter::repeat_with(|| None).take(DEPTH).collect() // vec![None; DEPTH] for non clone
+		CacheAccum(vec![(vec![CacheNode::None; NIBBLE_SIZE],0,0); INITIAL_DEPTH],
+		std::iter::repeat_with(|| None).take(INITIAL_DEPTH).collect() // vec![None; DEPTH] for non clone
 		, PhantomData)
 	}
 	fn get_node(&self, depth:usize, nibble_ix:usize) -> &CacheNode<H::Out> {
 		&self.0[depth].0[nibble_ix]
 	}
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
+    if depth > self.0.len() {
+		  for _i in self.0.len()..depth { 
+        self.0.push((vec![CacheNode::None; NIBBLE_SIZE],0,0));
+        self.1.push(None);
+      }
+    }
 		self.0[depth].0[nibble_ix] = node;
 		// strong heuristic from the fact that we do not delete depth except globally
 		// and that we only check relevant size for 0 and 1 TODO replace counter by enum
@@ -419,8 +426,8 @@ where
 		C::branch_node(
 			self.0[depth].0.iter().map(|v| 
 				match v {
-					CacheNode::Hash(ref h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
-					CacheNode::Ext(ref n, ref h) => {
+					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
+					CacheNode::Ext(n, h) => {
 						let mut n = n.to_vec();
 						n.reverse();// TODO use proper encoded_nibble algo.
 						let enc_nibble = encoded_nibble(&n[..], false); // not leaf!!
@@ -439,7 +446,7 @@ where
 		&mut self, //(64 * 16 size) 
 		cb_ext: &mut impl FnMut(Vec<u8>, bool) -> ChildReference<H::Out>,
 		target_depth: usize, 
-		&(ref k2, ref v2): &(impl AsRef<[u8]>,impl AsRef<[u8]>), 
+		(k2, v2): &(impl AsRef<[u8]>,impl AsRef<[u8]>), 
 	) {
 		let nibble_value = nibble_at(&k2.as_ref()[..], target_depth-1);
 		// is it a branch value (two candidate same ix)
@@ -523,18 +530,18 @@ impl<HO: Clone> Clone for CacheNode<HO> {
 	fn clone(&self) -> Self {
 		match self {
 			CacheNode::None => CacheNode::None,
-			CacheNode::Hash(ChildReference::Hash(ref h)) => CacheNode::Hash(ChildReference::Hash(h.clone())),
-			CacheNode::Hash(ChildReference::Inline(ref h, s)) => CacheNode::Hash(ChildReference::Inline(h.clone(), *s)),
-			CacheNode::Ext(ref v, ChildReference::Hash(ref h)) => CacheNode::Ext(v.clone(), ChildReference::Hash(h.clone())),
-			CacheNode::Ext(ref v, ChildReference::Inline(ref h, s)) => CacheNode::Ext(v.clone(), ChildReference::Inline(h.clone(), *s)),
+			CacheNode::Hash(ChildReference::Hash(h)) => CacheNode::Hash(ChildReference::Hash(h.clone())),
+			CacheNode::Hash(ChildReference::Inline(h, s)) => CacheNode::Hash(ChildReference::Inline(h.clone(), *s)),
+			CacheNode::Ext(v, ChildReference::Hash(h)) => CacheNode::Ext(v.clone(), ChildReference::Hash(h.clone())),
+			CacheNode::Ext(v, ChildReference::Inline(h, s)) => CacheNode::Ext(v.clone(), ChildReference::Inline(h.clone(), *s)),
 		}
 	}
 }
 
 fn clone_child_ref<HO: Clone>(r: &ChildReference<HO>) -> ChildReference<HO> {
 	match r {
-		ChildReference::Hash(ref h) => ChildReference::Hash(h.clone()),
-		ChildReference::Inline(ref h, s) => ChildReference::Inline(h.clone(), *s),
+		ChildReference::Hash(h) => ChildReference::Hash(h.clone()),
+		ChildReference::Inline(h, s) => ChildReference::Inline(h.clone(), *s),
 	}
 }
 
@@ -562,8 +569,8 @@ macro_rules! trie_db_builder {
 			 ($memdb: ident, $root_dest: ident, $hash_ty: ty) => {
 		|enc_ext: Vec<u8>, is_root: bool| {
 			let len = enc_ext.len();
-			if !is_root && len < DEPTH/2 {
-				let mut h = <$hash_ty as Default>::default();
+			if !is_root && len < <$hash_ty as Hasher>::LENGTH {
+				let mut h = <<$hash_ty as Hasher>::Out as Default>::default();
 				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
 
 				return ChildReference::Inline(h, len);
@@ -577,18 +584,19 @@ macro_rules! trie_db_builder {
 	}
 }
 
+// TODO do not pass Vec in closure param &'a[u8] is better
 #[macro_export]
 /// fn mut to feed a hash map with trie elements
 macro_rules! trie_root_only {
-			 ($hash_trait: ident, $root_dest: ident, $hash_ty: ty) => {
+			 ($hash_ty: ty, $root_dest: ident) => {
 		|enc_ext: Vec<u8>, is_root: bool| {
 			let len = enc_ext.len();
-			if !is_root && len < DEPTH/2 {
-				let mut h = <$hash_ty as Default>::default();
+			if !is_root && len < <$hash_ty as Hasher>::LENGTH {
+				let mut h = <<$hash_ty as Hasher>::Out as Default>::default();
 				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
 				return ChildReference::Inline(h, len);
 			}
-			let hash = $hash_trait::hash(&enc_ext[..]);
+			let hash = <$hash_ty as Hasher>::hash(&enc_ext[..]);
 			if is_root {
 				$root_dest = hash.clone();
 			};
@@ -637,7 +645,7 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 		// last pendings
 		if prev_depth == 0 {
 			// one element
-			let (ref k2,ref v2) = &prev_val; 
+			let (k2, v2) = prev_val; 
 			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..],prev_depth).encoded(true);
 			let encoded = C::leaf_node(&nkey.as_ref()[..], &v2.as_ref()[..]);
 			cb_ext(encoded, true);
