@@ -393,8 +393,8 @@ where
 		&self.0[depth].0[nibble_ix]
 	}
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
-    if depth > self.0.len() {
-		  for _i in self.0.len()..depth { 
+    if depth >= self.0.len() {
+		  for _i in self.0.len()..depth+1 { 
         self.0.push((vec![CacheNode::None; NIBBLE_SIZE],0,0));
         self.1.push(None);
       }

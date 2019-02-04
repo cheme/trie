@@ -2,11 +2,13 @@
 [package]
 name = "trie-db-fuzz"
 version = "0.0.1"
-authors = ["Automatically generated"]
+authors = []
 publish = false
+edition = "2018"
 
 [package.metadata]
 cargo-fuzz = true
+
 [dependencies]
 memory-db = { path = "../../memory-db", version = "0.9.1" }
 reference-trie = { path = "../../test-support/reference-trie", version = "0.2.0" }
@@ -19,6 +21,8 @@ git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 # Prevent this from interfering with workspaces
 [workspace]
 members = ["."]
+
+
 [[bin]]
 name = "trie_root_new"
 path = "fuzz_targets/trie_root_new.rs"
