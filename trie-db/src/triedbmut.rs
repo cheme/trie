@@ -1055,27 +1055,6 @@ mod tests {
 		assert_eq!(*t.root(), ref_trie_root(vec![ (vec![0x01u8, 0x23], vec![0x01u8, 0x23]) ]));
 	}
 
-
-
-	#[test]
-	fn fuzz_that() {
-    let data = vec![
-     (vec![0u8,1,2,3,4,5], vec![2u8,3u8]),
-     (vec![0u8,1,2,3,6,15], vec![2u8,3u8]),
-     (vec![0u8,1,8,3,4,5], vec![2u8,3u8])
-    ];
-		let mut memdb = MemoryDB::default();
-		let mut root = Default::default();
-		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
-    for a in 0..data.len() {
-		  t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
-    }
-		assert_eq!(*t.root(), ref_trie_root(data));
-    panic!("disp");
-	}
-
-
-  
 	#[test]
 	fn remove_to_empty() {
 		let big_value = b"00000000000000000000000000000000";

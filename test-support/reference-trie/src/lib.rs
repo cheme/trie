@@ -323,18 +323,48 @@ pub fn compare_impl(
   mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
   mut hashdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
   ) {
+  let mut root_new = Default::default();
+  {
+    let mut cb = trie_db::trie_db_builder!(hashdb, root_new, <KeccakHasher as Hasher>::Out);
+    trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
+  }
+  let root = {
+    let mut root = Default::default();
+    let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
+    for i in 0..data.len() {
+      t.insert(&data[i].0[..],&data[i].1[..]);
+    }
+    let mut nbelt = 0;
+    t.root().clone()
+  };
+  let test = root == root_new;
+  if !test {
+  {
+    let t = RefTrieDB::new(&memdb, &root).unwrap();
+    println!("{:?}", t);
+    for a in t.iter().unwrap() {
+     println!("a:{:?}", a);
+    }
+  }
+  {
+    let t = RefTrieDB::new(&hashdb, &root_new).unwrap();
+    println!("{:?}", t);
+    for a in t.iter().unwrap() {
+     println!("a:{:?}", a);
+    }
+  }
+  }
+
+  assert_eq!(root, root_new);
+}
+
+pub fn compare_root(
+  data: Vec<(Vec<u8>,Vec<u8>)>,
+  mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+  ) {
     let mut root_new = Default::default();
     {
-      let mut cb = |enc_ext: Vec<u8>, is_root: bool| {
-        if !is_root && enc_ext.len() < DEPTH/2 {
-          unimplemented!("direct data not implemented");
-        }
-        let hash = hashdb.insert(&enc_ext[..]);
-        if is_root {
-          root_new = hash.clone();
-        };
-        hash
-      };
+      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new, <KeccakHasher as Hasher>::Out);
       trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
     }
     let root = {
@@ -346,26 +376,10 @@ pub fn compare_impl(
       let mut nbelt = 0;
       t.root().clone()
     };
-    let test = root == root_new;
-    if !test {
-    {
-      let t = RefTrieDB::new(&memdb, &root).unwrap();
-      println!("{:?}", t);
-      for a in t.iter().unwrap() {
-       println!("a:{:?}", a);
-      }
-    }
-    {
-      let t = RefTrieDB::new(&hashdb, &root_new).unwrap();
-      println!("{:?}", t);
-      for a in t.iter().unwrap() {
-       println!("a:{:?}", a);
-      }
-    }
-    }
 
     assert_eq!(root, root_new);
   }
+
 pub fn calc_root<I,A,B>(
   data: I,
   ) -> <KeccakHasher as Hasher>::Out 
@@ -376,16 +390,7 @@ where
 {
     let mut root_new = Default::default();
     {
-      let mut cb = |enc_ext: Vec<u8>, is_root: bool| {
-        if !is_root && enc_ext.len() < DEPTH/2 {
-          unimplemented!("direct data not implemented");
-        }
-        let hash = KeccakHasher::hash(&enc_ext[..]);
-        if is_root {
-          root_new = hash.clone();
-        };
-        hash
-      };
+      let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new, <KeccakHasher as Hasher>::Out);
       trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
     }
     root_new

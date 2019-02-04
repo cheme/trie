@@ -109,29 +109,25 @@ fn fuzz_to_data(fp: &std::path::Path) -> Vec<(Vec<u8>,Vec<u8>)> {
         input[ix..ix+keylen].to_vec()
       } else { break };
       ix += keylen;
-      let val = if input.len() > ix + 32 {
-        input[ix..ix+32].to_vec()
+      let val = if input.len() > ix + 2 {
+        input[ix..ix + 2].to_vec()
       } else { break };
-      ix += 32;
+      ix += 2;
       result.push((key,val));
     }
     result
+}
+
+fn data_sorted_unique(input: Vec<(Vec<u8>,Vec<u8>)>) -> Vec<(Vec<u8>,Vec<u8>)> {
+  let mut m = std::collections::BTreeMap::new();
+  for (k,v) in input.into_iter() {
+    let _  = m.insert(k,v); // latest value for uniqueness
   }
+  m.into_iter().collect()
+}
 
-  fn data_sorted_unique(input: Vec<(Vec<u8>,Vec<u8>)>) -> Vec<(Vec<u8>,Vec<u8>)> {
-    let mut m = std::collections::BTreeMap::new();
-    for (k,v) in input.into_iter() {
-      let _  = m.insert(k,v); // latest value for uniqueness
-    }
-    m.into_iter().collect()
-  }
-	fn input(file: &str) -> Vec<(Vec<u8>,Vec<u8>)> {
-    let pb = std::path::PathBuf::from(file);
-    let data = data_sorted_unique(fuzz_to_data(&pb));
-    data
-   // reference_trie::calc_root(data);
-    //reference_trie::ref_trie_root(data);
-	}
-
-
-
+fn input(file: &str) -> Vec<(Vec<u8>,Vec<u8>)> {
+  let pb = std::path::PathBuf::from(file);
+  let data = data_sorted_unique(fuzz_to_data(&pb));
+  data
+}

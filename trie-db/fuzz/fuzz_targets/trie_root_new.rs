@@ -45,7 +45,7 @@ fn fuzz_to_data(input: &[u8]) -> Vec<(Vec<u8>,Vec<u8>)> {
       } else { break };
       ix += keylen;
       let val = if input.len() > ix + 32 {
-        input[ix..ix+32].to_vec()
+        input[ix..ix + 2].to_vec()
       } else { break };
       ix += 32;
       result.push((key,val));

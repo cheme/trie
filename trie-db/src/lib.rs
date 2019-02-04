@@ -415,20 +415,20 @@ where
     self.0[depth] = (vec![CacheNode::None; NIBBLE_SIZE], 0, 0);
   }
 
-  fn encode_branch(&mut self, depth:usize, has_val: bool, cb_ext: &mut impl FnMut(Vec<u8>, bool) -> H::Out) -> Vec<u8>  {
+  fn encode_branch(&mut self, depth:usize, has_val: bool, cb_ext: &mut impl FnMut(Vec<u8>, bool) -> ChildReference<H::Out>) -> Vec<u8>  {
     C::branch_node(
       self.0[depth].0.iter().map(|v| 
         match v {
-          CacheNode::None => None,
-          CacheNode::Hash(ref h) => Some(::ChildReference::Hash(*h)),
+          CacheNode::Hash(ref h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
           CacheNode::Ext(ref n, ref h) => {
             let mut n = n.to_vec();
             n.reverse();// TODO use proper encoded_nibble algo.
             let enc_nibble = encoded_nibble(&n[..], false); // not leaf!!
-            let encoded = C::ext_node(&enc_nibble[..], ::ChildReference::Hash(*h));
+            let encoded = C::ext_node(&enc_nibble[..], clone_child_ref(h));
             let h = cb_ext(encoded, false);
-            Some(::ChildReference::Hash(h))
+            Some(h)
           },
+          CacheNode::None => None,
         }
       ), if has_val {
         std::mem::replace(&mut self.1[depth], None).map(|v|v.as_ref().into()) // TODO value could be a &[u8] instead of elastic!!
@@ -437,7 +437,7 @@ where
 
   fn flush_val (
     &mut self, //(64 * 16 size) 
-    cb_ext: &mut impl FnMut(Vec<u8>, bool) -> H::Out,
+    cb_ext: &mut impl FnMut(Vec<u8>, bool) -> ChildReference<H::Out>,
     target_depth: usize, 
     &(ref k2, ref v2): &(impl AsRef<[u8]>,impl AsRef<[u8]>), 
   ) {
@@ -456,7 +456,7 @@ where
 
   fn flush_branch(
     &mut self,
-    cb_ext: &mut impl FnMut(Vec<u8>, bool) -> H::Out,
+    cb_ext: &mut impl FnMut(Vec<u8>, bool) -> ChildReference<H::Out>,
     ref_branch: impl AsRef<[u8]> + Ord,
     new_depth: usize, 
     old_depth: usize, 
@@ -464,7 +464,6 @@ where
     for d in (new_depth..old_depth).rev() {
    
       // check if branch empty TODO switch to optional storage
-      let mut empty = true;
       let has_val = self.1[d].is_some();
       let depth_size = self.depth_added(d);
       assert!(depth_size != 0);
@@ -483,7 +482,7 @@ where
             n.push(unit as u8);
             n.reverse(); // TODO use proper encoded_nibble algo.
             let enc_nibble = encoded_nibble(&n[..], false);
-            let encoded = C::ext_node(&enc_nibble[..], ::ChildReference::Hash(v_hash)); // TODO try rem clone
+            let encoded = C::ext_node(&enc_nibble[..], v_hash);
             cb_ext(encoded, true);
           }
         } else {
@@ -494,7 +493,7 @@ where
             self.set_node(d-1, nibble as usize, CacheNode::Ext(vec![unit as u8], v_hash));
           } else {
             let enc_nibble = encoded_nibble(&[unit as u8], false);
-            let encoded = C::ext_node(&enc_nibble[..], ::ChildReference::Hash(v_hash)); // TODO try rem clone
+            let encoded = C::ext_node(&enc_nibble[..], v_hash);
             cb_ext(encoded, true);
           }
         }
@@ -515,29 +514,90 @@ where
   }
 }
 
-// TODO try split struct
-#[derive(Clone,Debug)]
 enum CacheNode<HO> {
   None,
-  Hash(HO),
-  Ext(Vec<u8>,HO),// vec<u8> for nibble slice is not super good looking): TODO bench diff if explicitely boxed
+  Hash(ChildReference<HO>),
+  Ext(Vec<u8>,ChildReference<HO>),// vec<u8> for nibble slice is not super good looking): TODO bench diff if explicitely boxed
+}
+
+impl<HO: Clone> Clone for CacheNode<HO> {
+  fn clone(&self) -> Self {
+    match self {
+      CacheNode::None => CacheNode::None,
+      CacheNode::Hash(ChildReference::Hash(ref h)) => CacheNode::Hash(ChildReference::Hash(h.clone())),
+      CacheNode::Hash(ChildReference::Inline(ref h, s)) => CacheNode::Hash(ChildReference::Inline(h.clone(), *s)),
+      CacheNode::Ext(ref v, ChildReference::Hash(ref h)) => CacheNode::Ext(v.clone(), ChildReference::Hash(h.clone())),
+      CacheNode::Ext(ref v, ChildReference::Inline(ref h, s)) => CacheNode::Ext(v.clone(), ChildReference::Inline(h.clone(), *s)),
+    }
+  }
+}
+
+fn clone_child_ref<HO: Clone>(r: &ChildReference<HO>) -> ChildReference<HO> {
+  match r {
+    ChildReference::Hash(ref h) => ChildReference::Hash(h.clone()),
+    ChildReference::Inline(ref h, s) => ChildReference::Inline(h.clone(), *s),
+  }
 }
 
 impl<HO> CacheNode<HO> {
   // unsafe accessors TODO bench diff with safe one
-  fn hash(self) -> HO {
+  fn hash(self) -> ChildReference<HO> {
     if let CacheNode::Hash(h) = self {
       return h
     }
     unreachable!()
   }
-  fn ext(self) -> (Vec<u8>,HO) {
+  fn ext(self) -> (Vec<u8>,ChildReference<HO>) {
     if let CacheNode::Ext(n,h) = self {
       return (n,h)
     }
     unreachable!()
   }
 }
+
+//							let len = encoded.len();
+//							h.as_mut()[..len].copy_from_slice(&encoded[..len]);
+#[macro_export]
+/// fn mut to feed a hash map with trie elements
+macro_rules! trie_db_builder {
+       ($memdb: ident, $root_dest: ident, $hash_ty: ty) => {
+    |enc_ext: Vec<u8>, is_root: bool| {
+      let len = enc_ext.len();
+      if !is_root && len < DEPTH/2 {
+      	let mut h = <$hash_ty as Default>::default();
+				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
+
+        return ChildReference::Inline(h, len);
+      }
+      let hash = $memdb.insert(&enc_ext[..]);
+      if is_root {
+        $root_dest = hash.clone();
+      };
+      ChildReference::Hash(hash)
+    };
+       }
+}
+
+#[macro_export]
+/// fn mut to feed a hash map with trie elements
+macro_rules! trie_root_only {
+       ($hash_trait: ident, $root_dest: ident, $hash_ty: ty) => {
+    |enc_ext: Vec<u8>, is_root: bool| {
+      let len = enc_ext.len();
+      if !is_root && len < DEPTH/2 {
+      	let mut h = <$hash_ty as Default>::default();
+				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
+        return ChildReference::Inline(h, len);
+      }
+      let hash = $hash_trait::hash(&enc_ext[..]);
+      if is_root {
+        $root_dest = hash.clone();
+      };
+      ChildReference::Hash(hash)
+    };
+       }
+}
+
 
 pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 
   where
@@ -546,7 +606,7 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
     B: AsRef<[u8]>,
     H: Hasher,
     C: NodeCodec<H>,
-    F: FnMut(Vec<u8>, bool) -> H::Out
+    F: FnMut(Vec<u8>, bool) -> ChildReference<H::Out>,
   {
   let mut depth_queue = CacheAccum::<H,C,B>::new();
   // compare iter ordering
@@ -611,19 +671,19 @@ mod test {
   //use memory_db::MemoryDB;
   //use hash_db::Hasher;
   //use reference_trie::ReferenceNodeCodec;
-#[test]
+  #[test]
   fn trie_root_empty () {
     compare_impl(vec![])
   }
 
-#[test]
+  #[test]
   fn trie_one_node () {
     compare_impl(vec![
                  (vec![1u8,2u8,3u8,4u8],vec![7u8]),
     ]);
   }
 
-#[test]
+  #[test]
   fn root_extension () {
     compare_impl(vec![
                  (vec![1u8,2u8,3u8,3u8],vec![8u8;32]),
@@ -636,8 +696,13 @@ mod test {
     let hashdb = MemoryDB::<KeccakHasher, DBValue>::default();
     reference_trie::compare_impl(data, memdb, hashdb);
   }
+  fn compare_root(data: Vec<(Vec<u8>,Vec<u8>)>) {
+    let memdb = MemoryDB::default();
+    reference_trie::compare_root(data, memdb);
+  }
 
-#[test]
+
+  #[test]
   fn trie_middle_node () {
     compare_impl(vec![
                  (vec![1u8,2u8],vec![8u8;32]),
@@ -645,7 +710,7 @@ mod test {
     ]);
   }
 
-#[test]
+  #[test]
   fn trie_middle_node2 () {
     compare_impl(vec![
                  (vec![0u8,2u8,3u8,5u8,3u8],vec![1u8;32]),
@@ -653,6 +718,24 @@ mod test {
                  (vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
                  (vec![1u8,2u8,3u8,5u8],vec![7u8;32]),
                  (vec![1u8,2u8,3u8,5u8,3u8],vec![7u8;32]),
+    ]);
+  }
+  #[test]
+  fn root_extension_bis () {
+    compare_root(vec![
+      (vec![1u8,2u8,3u8,3u8],vec![8u8;32]),
+      (vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
+    ]);
+  }
+
+  #[test]
+  fn trie_middle_node2x () {
+    compare_impl(vec![
+      (vec![0u8,2u8,3u8,5u8,3u8],vec![1u8;2]),
+      (vec![1u8,2u8],vec![8u8;2]),
+      (vec![1u8,2u8,3u8,4u8],vec![7u8;2]),
+      (vec![1u8,2u8,3u8,5u8],vec![7u8;2]),
+      (vec![1u8,2u8,3u8,5u8,3u8],vec![7u8;2]),
     ]);
   }
 
