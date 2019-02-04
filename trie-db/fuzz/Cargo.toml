@@ -13,6 +13,9 @@ cargo-fuzz = true
 memory-db = { path = "../../memory-db", version = "0.9.1" }
 reference-trie = { path = "../../test-support/reference-trie", version = "0.2.0" }
 keccak-hasher = { path = "../../test-support/keccak-hasher", version = "0.2.1" }
+afl = "0.4.3"
+honggfuzz = "0.5"
+
 [dependencies.trie-db]
 path = ".."
 [dependencies.libfuzzer-sys]
@@ -22,7 +25,6 @@ git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
 [workspace]
 members = ["."]
 
-
 [[bin]]
 name = "trie_root_new"
 path = "fuzz_targets/trie_root_new.rs"
@@ -30,6 +32,15 @@ path = "fuzz_targets/trie_root_new.rs"
 [[bin]]
 name = "trie_root"
 path = "fuzz_targets/trie_root.rs"
+
 [[bin]]
 name = "trie_root_fix_len"
 path = "fuzz_targets/trie_root_fix_len.rs"
+
+[[bin]]
+name = "afl_trie_root_new"
+path = "afl_targets/trie_root_new.rs"
+
+[[bin]]
+name = "hfuzz_trie_root_new"
+path = "hongfuzz_targets/trie_root_new.rs"
