@@ -239,17 +239,12 @@ fn build_trie<H, S, A, B>(input: &[(A, B)], cursor: usize, stream: &mut S) where
 				let mut begin = match value { None => 0, _ => 1 };
 				for i in 0..16 {
 					shared_nibble_counts[i] = input[begin..].iter()
-						.take_while(|(k, _)|{ 
-              let r = k.as_ref()[cursor] == i as u8;
-            //  if r { 
-                //println!("in{} {} {:?}", cursor, i, k.as_ref())}
-              r
-            })
+						.take_while(|(k, _)| k.as_ref()[cursor] == i as u8)
 						.count();
 					begin += shared_nibble_counts[i];
 				}
 			}
-//println!("shared count{:?}", shared_nibble_counts);
+
 			// Put out the node header:
 			stream.begin_branch(value, shared_nibble_counts.iter().map(|&n| n > 0));
 

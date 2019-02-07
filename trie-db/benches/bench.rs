@@ -16,7 +16,7 @@
 extern crate criterion;
 use criterion::{Criterion, black_box, Bencher};
 criterion_group!(benches,
-	//nibble_common_prefix, 
+	nibble_common_prefix,
 	root_old,
 	root_new,
 );
@@ -29,22 +29,25 @@ use trie_standardmap::{Alphabet, StandardMap, ValueMode};
 use trie_db::NibbleSlice;
 
 fn nibble_common_prefix(b: &mut Criterion) {
-/*	let st = StandardMap {
+	let st = StandardMap {
 		alphabet: Alphabet::Custom(b"abcd".to_vec()),
 		min_key: 32,
 		journal_key: 0,
 		value_mode: ValueMode::Mirror,
 		count: 255,
 	};
-	let (keys, values): (Vec<_>, Vec<_>) = st.make().iter().cloned().unzip();
-	let mixed: Vec<_> = keys.iter().zip(values.iter().rev()).map(|pair| {
-		(NibbleSlice::new(pair.0), NibbleSlice::new(pair.1))
-	}).collect();*/
-	b.bench_function("nibble_common_prefix", |b| b.iter(&mut ||{
-/*		for (left, right) in mixed.iter() {
-			let _ = black_box(left.common_prefix(&right));
-		}*/
-	}));
+	let (keys, values): (Vec<_>, Vec<_>) = st.make().into_iter().unzip();
+	b.bench_function("nibble_common_prefix", move |b| {
+		let mixed: Vec<_> = keys.iter().zip(values.iter().rev()).map(|pair| {
+			(NibbleSlice::new(pair.0), NibbleSlice::new(pair.1))
+		}).collect();
+
+		b.iter(&mut ||{
+			for (left, right) in mixed.iter() {
+				let _ = black_box(left.common_prefix(&right));
+			}
+		})
+	});
 }
 
 fn root_old(c: &mut Criterion) {
@@ -57,7 +60,7 @@ fn root_old(c: &mut Criterion) {
 
 	c.bench_function_over_inputs("root_old",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
 		b.iter(||{
-			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone(); 
+			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone();
 			reference_trie::ref_trie_root(datac);
 		})
 	,data);
@@ -74,7 +77,7 @@ fn root_new(c: &mut Criterion) {
 
 	c.bench_function_over_inputs("root_new",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
 		b.iter(||{
-			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone(); 
+			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone();
 			reference_trie::calc_root(datac);
 		})
 	,data);
@@ -82,7 +85,7 @@ fn root_new(c: &mut Criterion) {
 
 fn fuzz_to_data(fp: &std::path::Path) -> Vec<(Vec<u8>,Vec<u8>)> {
 	let mut file = std::fs::File::open(fp).unwrap();
-	let mut input = Vec::new(); 
+	let mut input = Vec::new();
 	file.read_to_end(&mut input).unwrap();
 		let mut result = Vec::new();
 		// enc = (minkeylen, maxkeylen (min max up to 32), datas)
