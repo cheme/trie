@@ -25,7 +25,15 @@ use std::error::Error as StdError;
 use std::iter::once;
 use codec::{Decode, Input, Output, Encode, Compact};
 use trie_root::Hasher;
-use trie_db::{node::Node, triedbmut::ChildReference, DBValue, trie_visit};
+use trie_db::{
+	node::Node,
+	triedbmut::ChildReference,
+	DBValue,
+	trie_visit,
+	ProcessEncodedNode,
+	TrieBuilder,
+	TrieRoot,
+};
 use keccak_hasher::KeccakHasher;
 
 pub use trie_db::{Trie, TrieMut, NibbleSlice, NodeCodec, Recorder, Record};
@@ -323,11 +331,11 @@ pub fn compare_impl(
 	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
 	mut hashdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
 ) {
-	let mut root_new = Default::default();
-	{
-		let mut cb = trie_db::trie_db_builder!(hashdb, root_new, KeccakHasher);
+	let root_new = {
+		let mut cb = TrieBuilder::new(&mut hashdb);
 		trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
-	}
+		cb.root.unwrap_or(Default::default())
+	};
 	let root = {
 		let mut root = Default::default();
 		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
@@ -363,11 +371,11 @@ pub fn compare_root(
 	data: Vec<(Vec<u8>,Vec<u8>)>,
 	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
 ) {
-	let mut root_new = Default::default();
-	{
-		let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new);
+	let root_new = {
+		let mut cb = TrieRoot::<KeccakHasher, _>::default();
 		trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
-	}
+		cb.root.unwrap_or(Default::default())
+	};
 	let root = {
 		let mut root = Default::default();
 		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
@@ -389,11 +397,8 @@ pub fn calc_root<I,A,B>(
 		A: AsRef<[u8]> + Ord + fmt::Debug,
 		B: AsRef<[u8]> + fmt::Debug,
 {
-	let mut root_new = Default::default();
-	{
-		let mut cb = trie_db::trie_root_only!(KeccakHasher, root_new);
-		trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
-	}
-	root_new
+	let mut cb = TrieRoot::<KeccakHasher, _>::default();
+	trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
+	cb.root.unwrap_or(Default::default())
 }
 

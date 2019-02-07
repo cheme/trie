@@ -64,7 +64,7 @@ pub use self::recorder::{Recorder, Record};
 pub use self::lookup::Lookup;
 pub use self::nibbleslice::NibbleSlice;
 pub use node_codec::NodeCodec;
-pub use iter_build::trie_visit;
+pub use iter_build::{trie_visit, ProcessEncodedNode, TrieBuilder, TrieRoot};
 
 pub type DBValue = elastic_array::ElasticArray128<u8>;
 
@@ -327,46 +327,4 @@ where
 
 	/// Returns true iff the trie DB is a fat DB (allows enumeration of keys).
 	pub fn is_fat(&self) -> bool { self.spec == TrieSpec::Fat }
-}
-
-#[macro_export]
-/// fn mut to feed a hash map with trie elements
-macro_rules! trie_db_builder {
-			 ($memdb: ident, $root_dest: ident, $hash_ty: ty) => {
-		|enc_ext: Vec<u8>, is_root: bool| {
-			let len = enc_ext.len();
-			if !is_root && len < <$hash_ty as Hasher>::LENGTH {
-				let mut h = <<$hash_ty as Hasher>::Out as Default>::default();
-				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
-
-				return ChildReference::Inline(h, len);
-			}
-			let hash = $memdb.insert(&enc_ext[..]);
-			if is_root {
-				$root_dest = hash.clone();
-			};
-			ChildReference::Hash(hash)
-		};
-	}
-}
-
-// TODO do not pass Vec in closure param &'a[u8] is better
-#[macro_export]
-/// fn mut to feed a hash map with trie elements
-macro_rules! trie_root_only {
-			 ($hash_ty: ty, $root_dest: ident) => {
-		|enc_ext: Vec<u8>, is_root: bool| {
-			let len = enc_ext.len();
-			if !is_root && len < <$hash_ty as Hasher>::LENGTH {
-				let mut h = <<$hash_ty as Hasher>::Out as Default>::default();
-				h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
-				return ChildReference::Inline(h, len);
-			}
-			let hash = <$hash_ty as Hasher>::hash(&enc_ext[..]);
-			if is_root {
-				$root_dest = hash.clone();
-			};
-			ChildReference::Hash(hash)
-		};
-	}
 }
