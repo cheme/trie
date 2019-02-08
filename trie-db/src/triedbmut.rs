@@ -71,7 +71,11 @@ enum Node<H> {
 	/// The child node is always a branch.
 	Extension(NodeKey, NodeHandle<H>),
 	/// A branch has up to 16 children and an optional value.
-	Branch(Box<[Option<NodeHandle<H>>; 16]>, Option<DBValue>)
+	Branch(Box<[Option<NodeHandle<H>>; 16]>, Option<DBValue>),
+	/// Branch node with support for a nibble (to avoid extension node)
+	NibbledBranch(NodeKey, Box<[Option<NodeHandle<H>>; 16]>, Option<DBValue>),
+	/// FixedKey trie branch
+	FixKeyBranch(NodeKey, Box<[Option<NodeHandle<H>>; 16]>),
 }
 
 impl<O> Node<O>
@@ -97,9 +101,24 @@ where
 	}
 
 	// decode a node from encoded bytes without getting its children.
-	fn from_encoded<C, H>(data: &[u8], db: &HashDB<H, DBValue>, storage: &mut NodeStorage<H::Out>) -> Self
+	fn from_encoded<'a, 'b, C, H>(data: &'a[u8], db: &HashDB<H, DBValue>, storage: &'b mut NodeStorage<H::Out>) -> Self
 	where C: NodeCodec<H>, H: Hasher<Out = O>,
 	{
+    let dec_children = |encoded_children: &[Option<&'a [u8]>; 16], storage: &'b mut NodeStorage<H::Out>| {
+      let mut child = |i:usize| {
+					encoded_children[i].map(|data|
+						Self::inline_or_hash::<C, H>(data, db, storage)
+					)
+				};
+
+				Box::new([
+					child(0), child(1), child(2), child(3),
+					child(4), child(5), child(6), child(7),
+					child(8), child(9), child(10), child(11),
+					child(12), child(13), child(14), child(15),
+				])
+    };
+
 		match C::decode(data).expect("encoded bytes read from db; qed") {
 			EncodedNode::Empty => Node::Empty,
 			EncodedNode::Leaf(k, v) => Node::Leaf(k.encoded(true), DBValue::from_slice(&v)),
@@ -107,23 +126,21 @@ where
 				Node::Extension(
 					key.encoded(false),
 					Self::inline_or_hash::<C, H>(cb, db, storage))
-			}
-			EncodedNode::Branch(ref encoded_children, val) => {
-				let mut child = |i:usize| {
-					encoded_children[i].map(|data|
-						Self::inline_or_hash::<C, H>(data, db, storage)
-					)
-				};
-
-				let children = Box::new([
-					child(0), child(1), child(2), child(3),
-					child(4), child(5), child(6), child(7),
-					child(8), child(9), child(10), child(11),
-					child(12), child(13), child(14), child(15),
-				]);
-
-				Node::Branch(children, val.map(DBValue::from_slice))
-			}
+        },
+        EncodedNode::Branch(encoded_children, val) => {
+          let children = dec_children(&encoded_children, storage);
+          Node::Branch(children, val.map(DBValue::from_slice))
+        },
+        EncodedNode::NibbledBranch(k, encoded_children, val) => {
+          let children = dec_children(&encoded_children, storage);
+          // TODO slice currently encoded as extension: makes sense to replace bit id
+          // TODO this bit info does not seem to be use anywhere -> remove decoding code??
+          Node::NibbledBranch(k.encoded(false), children, val.map(DBValue::from_slice))
+        },
+        EncodedNode::FixKeyBranch(k, encoded_children) => {
+          let children = dec_children(&encoded_children, storage);
+          Node::FixKeyBranch(k.encoded(false), children)
+        },
 		}
 	}
 
@@ -146,9 +163,34 @@ where
 						.map(|maybe_child|
 							maybe_child.map(|child| child_cb(child))
 						),
-					value
+					value.as_ref().map(|v|&v[..])
+				)
+			},
+			Node::NibbledBranch(partial, mut children, value) => {
+				C::branch_node_nibbled(
+          &partial,
+					// map the `NodeHandle`s from the Branch to `ChildReferences`
+					children.iter_mut()
+						.map(Option::take)
+						.map(|maybe_child|
+							maybe_child.map(|child| child_cb(child))
+						),
+					value.as_ref().map(|v|&v[..])
+				)
+			},
+			Node::FixKeyBranch(partial, mut children) => {
+				C::branch_node_nibbled_fix(
+          &partial,
+					// map the `NodeHandle`s from the Branch to `ChildReferences`
+					children.iter_mut()
+						.map(Option::take)
+						.map(|maybe_child|
+							maybe_child.map(|child| child_cb(child))
+						)
 				)
 			}
+
+
 		}
 	}
 }
@@ -401,7 +443,7 @@ where
 						} else {
 							return Ok(None);
 						}
-					}
+					},
 					Node::Extension(ref slice, ref child) => {
 						let slice = NibbleSlice::from_encoded(slice).0;
 						if partial.starts_with(&slice) {
@@ -409,7 +451,7 @@ where
 						} else {
 							return Ok(None);
 						}
-					}
+					},
 					Node::Branch(ref children, ref value) => {
 						if partial.is_empty() {
 							return Ok(value.as_ref().map(|v| DBValue::from_slice(v)));
@@ -420,7 +462,37 @@ where
 								None => return Ok(None),
 							}
 						}
-					}
+					},
+					Node::NibbledBranch(ref slice, ref children, ref value) => {
+						let slice = NibbleSlice::from_encoded(slice).0;
+						if partial.is_empty() {
+							return Ok(value.as_ref().map(|v| DBValue::from_slice(v)));
+						} else if partial.starts_with(&slice) {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1 + slice.len(), child),
+								None => return Ok(None),
+							}
+						} else {
+              return Ok(None)
+            }
+					},
+					Node::FixKeyBranch(ref slice, ref children) => {
+						let slice = NibbleSlice::from_encoded(slice).0;
+						if partial.is_empty() {
+              // should we fail (it means a look up on non fix key length)
+              // returning None seems correct to
+							return Ok(None);
+						} else if partial.starts_with(&slice) {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1 + slice.len(), child),
+								None => return Ok(None),
+							}
+						} else {
+              return Ok(None)
+            }
+					},
 				}
 			};
 
@@ -435,7 +507,7 @@ where
 			NodeHandle::InMemory(h) => h,
 			NodeHandle::Hash(h) => self.cache(h)?,
 		};
-		let stored = self.storage.destroy(h);
+		let stored = self.storage.destroy(h); // cache then destroy for hash handle (handle being root in most case), direct access somehow?
 		let (new_stored, changed) = self.inspect(stored, move |trie, stored| {
 			trie.insert_inspector(stored, partial, value, old_val).map(|a| a.into_action())
 		})?.expect("Insertion never deletes.");
@@ -484,6 +556,7 @@ where
 					InsertAction::Replace(Node::Branch(children, stored_value))
 				}
 			}
+
 			Node::Leaf(encoded, stored_value) => {
 				let existing_key = NibbleSlice::from_encoded(&encoded).0;
 				let cp = partial.common_prefix(&existing_key);
@@ -541,6 +614,11 @@ where
 					let augmented_low = self.insert_inspector(low, partial.mid(cp), value, old_val)?.unwrap_node();
 
 					// make an extension using it. this is a replacement.
+          // TODO ECH : variant here not an extension but a branch TODO previous should already
+          // create branch aka Leaf -> cp == 0 -> no do not want this recurse shit : just create it
+          // in place 
+          // TODO this case is in midle branch with value over anything
+          // TODO this is getting messy : use different method for visit?? probably yes
 					InsertAction::Replace(Node::Extension(
 						existing_key.encoded_leftmost(cp, false),
 						self.storage.alloc(Stored::New(augmented_low)).into()
@@ -601,6 +679,15 @@ where
 					))
 				}
 			}
+			Node::NibbledBranch(encoded, mut children, stored_value) => {
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+        unimplemented!()
+      }
+			Node::FixKeyBranch(encoded, mut children) => {
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+        unimplemented!()
+      }
+
 		})
 	}
 
@@ -697,6 +784,16 @@ where
 					Action::Restore(Node::Extension(encoded, child_branch))
 				}
 			}
+			(Node::NibbledBranch(encoded, mut children, stored_value), _) => {
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+        unimplemented!()
+      }
+			(Node::FixKeyBranch(encoded, mut children), _) => {
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+        unimplemented!()
+      }
+
+
 		})
 	}
 

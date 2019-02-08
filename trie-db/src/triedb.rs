@@ -151,15 +151,15 @@ where
 			match C::decode(&node) {
 				Ok(Node::Leaf(slice, value)) =>
 					match (f.debug_struct("Node::Leaf"), self.index) {
-						(ref mut d, Some(ref i)) => d.field("index", i),
+						(ref mut d, Some(i)) => d.field("index", &i),
 						(ref mut d, _) => d,
 					}
 						.field("slice", &slice)
 						.field("value", &value)
 						.finish(),
-				Ok(Node::Extension(ref slice, ref item)) =>
+				Ok(Node::Extension(slice, item)) =>
 					match (f.debug_struct("Node::Extension"), self.index) {
-						(ref mut d, Some(ref i)) => d.field("index", i),
+						(ref mut d, Some(i)) => d.field("index", &i),
 						(ref mut d, _) => d,
 					}
 						.field("slice", &slice)
@@ -177,6 +177,37 @@ where
 					}
 						.field("nodes", &nodes)
 						.field("value", &value)
+						.finish()
+				},
+				Ok(Node::NibbledBranch(slice, nodes, value)) => {
+					let nodes: Vec<TrieAwareDebugNode<H, C>> = nodes.into_iter()
+						.enumerate()
+						.filter_map(|(i, n)| n.map(|n| (i, n)))
+						.map(|(i, n)| TrieAwareDebugNode { trie: self.trie, index: Some(i as u8), key: n, is_root: false })
+						.collect();
+
+					match (f.debug_struct("Node::NibbledBranch"), self.index) {
+						(ref mut d, Some(ref i)) => d.field("index", i),
+						(ref mut d, _) => d,
+					}
+						.field("slice", &slice)
+						.field("nodes", &nodes)
+						.field("value", &value)
+						.finish()
+				},
+				Ok(Node::FixKeyBranch(slice, nodes)) => {
+					let nodes: Vec<TrieAwareDebugNode<H, C>> = nodes.into_iter()
+						.enumerate()
+						.filter_map(|(i, n)| n.map(|n| (i, n)))
+						.map(|(i, n)| TrieAwareDebugNode { trie: self.trie, index: Some(i as u8), key: n, is_root: false })
+						.collect();
+
+					match (f.debug_struct("Node::FixKeyBranch"), self.index) {
+						(ref mut d, Some(ref i)) => d.field("index", i),
+						(ref mut d, _) => d,
+					}
+						.field("slice", &slice)
+						.field("nodes", &nodes)
 						.finish()
 				},
 				Ok(Node::Empty) => f.debug_struct("Node::Empty").finish(),

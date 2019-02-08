@@ -207,14 +207,19 @@ fn take<'a>(input: &mut &'a[u8], count: usize) -> Option<&'a[u8]> {
 }
 
 fn partial_to_key(partial: &[u8], offset: u8, over: u8) -> Vec<u8> {
+	let mut output = Vec::with_capacity(partial.len() + 1);
+  partial_to_key_append(partial, offset, over, &mut output);
+	output
+}
+
+fn partial_to_key_append(partial: &[u8], offset: u8, over: u8, output: &mut Vec<u8>) {
 	let nibble_count = (partial.len() - 1) * 2 + if partial[0] & 16 == 16 { 1 } else { 0 };
 	assert!(nibble_count < over as usize);
-	let mut output = vec![offset + nibble_count as u8];
+	output.push(offset + nibble_count as u8);
 	if nibble_count % 2 == 1 {
 		output.push(partial[0] & 0x0f);
 	}
 	output.extend_from_slice(&partial[1..]);
-	output
 }
 
 // NOTE: what we'd really like here is:
@@ -299,12 +304,12 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 		output
 	}
 
-	fn branch_node<I>(children: I, maybe_value: Option<DBValue>) -> Vec<u8> where
+	fn branch_node<I>(children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
 		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
 	{
 		let mut output = vec![0, 0, 0];
 		let have_value = if let Some(value) = maybe_value {
-			(&*value).encode_to(&mut output);
+			value.encode_to(&mut output);
 			true
 		} else {
 			false
@@ -323,9 +328,62 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 		output[0..3].copy_from_slice(&prefix[..]);
 		output
 	}
+
+	fn branch_node_nibbled<I>(partial: &[u8], children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
+		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
+	{
+		let mut output = Vec::with_capacity(partial.len() + 4); // TODO choose a good capacity estimation value (here it is only partial)
+    for _ in 0..3 {
+      output.push(0);
+    }
+		partial_to_key_append(partial, EXTENSION_NODE_OFFSET, EXTENSION_NODE_OVER, &mut output);
+		let have_value = if let Some(value) = maybe_value {
+			value.encode_to(&mut output);
+			true
+		} else {
+			false
+		};
+		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child {
+			Some(ChildReference::Hash(h)) => {
+				h.as_ref().encode_to(&mut output);
+				true
+			}
+			Some(ChildReference::Inline(inline_data, len)) => {
+				(&AsRef::<[u8]>::as_ref(&inline_data)[..len]).encode_to(&mut output);
+				true
+			}
+			None => false,
+		}));
+		output[0..3].copy_from_slice(&prefix[..]);
+		output
+	}
+
+	fn branch_node_nibbled_fix<I>(partial: &[u8], children: I) -> Vec<u8> where
+		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
+	{
+		let mut output = Vec::with_capacity(partial.len() + 4); // TODO choose a good capacity estimation value (here it is only partial)
+    for _ in 0..3 {
+      output.push(0);
+    }
+		partial_to_key_append(partial, EXTENSION_NODE_OFFSET, EXTENSION_NODE_OVER, &mut output);
+    // TODO skip no value encoding
+		let prefix = branch_node(false, children.map(|maybe_child| match maybe_child {
+			Some(ChildReference::Hash(h)) => {
+				h.as_ref().encode_to(&mut output);
+				true
+			}
+			Some(ChildReference::Inline(inline_data, len)) => {
+				(&AsRef::<[u8]>::as_ref(&inline_data)[..len]).encode_to(&mut output);
+				true
+			}
+			None => false,
+		}));
+		output[0..3].copy_from_slice(&prefix[..]);
+		output
+	}
+
 }
 
-const DEPTH: usize = 64;
 pub fn compare_impl(
 	data: Vec<(Vec<u8>,Vec<u8>)>,
 	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
@@ -340,9 +398,8 @@ pub fn compare_impl(
 		let mut root = Default::default();
 		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
 		for i in 0..data.len() {
-			t.insert(&data[i].0[..],&data[i].1[..]);
+			t.insert(&data[i].0[..],&data[i].1[..]).unwrap();
 		}
-		let mut nbelt = 0;
 		t.root().clone()
 	};
 	if root != root_new {
@@ -380,9 +437,8 @@ pub fn compare_root(
 		let mut root = Default::default();
 		let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
 		for i in 0..data.len() {
-			t.insert(&data[i].0[..],&data[i].1[..]);
+			t.insert(&data[i].0[..],&data[i].1[..]).unwrap();
 		}
-		let mut nbelt = 0;
 		t.root().clone()
 	};
 
