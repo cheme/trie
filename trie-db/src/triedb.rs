@@ -195,26 +195,11 @@ where
 						.field("value", &value)
 						.finish()
 				},
-				Ok(Node::FixKeyBranch(slice, nodes)) => {
-					let nodes: Vec<TrieAwareDebugNode<H, C>> = nodes.into_iter()
-						.enumerate()
-						.filter_map(|(i, n)| n.map(|n| (i, n)))
-						.map(|(i, n)| TrieAwareDebugNode { trie: self.trie, index: Some(i as u8), key: n, is_root: false })
-						.collect();
-
-					match (f.debug_struct("Node::FixKeyBranch"), self.index) {
-						(ref mut d, Some(ref i)) => d.field("index", i),
-						(ref mut d, _) => d,
-					}
-						.field("slice", &slice)
-						.field("nodes", &nodes)
-						.finish()
-				},
 				Ok(Node::Empty) => f.debug_struct("Node::Empty").finish(),
 
 				Err(e) => f.debug_struct("BROKEN_NODE")
 					.field("index", &self.index)
-					.field("key", &self.key)
+					.field("key", &self.key) // [128, 225, 183, 218, 100, 173, 146, 231, 107, 158, 188, 21],
 					.field("error",  &format!("ERROR decoding node branch Rlp: {}", e))
 					.finish()
 			}

@@ -33,8 +33,6 @@ pub enum Node<'a> {
 	Branch([Option<&'a [u8]>; 16], Option<&'a [u8]>),
 	/// Branch node with support for a nibble (to avoid extension node)
 	NibbledBranch(NibbleSlice<'a>, [Option<&'a [u8]>; 16], Option<&'a [u8]>),
-	/// FixedKey trie branch
-	FixKeyBranch(NibbleSlice<'a>, [Option<&'a [u8]>; 16]),
 }
 
 /// A Sparse (non mutable) owned vector struct to hold branch keys and value
@@ -103,9 +101,6 @@ pub enum OwnedNode {
 	Branch(Branch),
 	/// Branch node: 16 children and an optional value.
 	NibbledBranch(NibbleVec, Branch),
-	/// Branch node: 16 children and an optional value.
-  /// TODO rem ptr to None val
-	FixKeyBranch(NibbleVec, Branch),
 }
 
 impl<'a> From<Node<'a>> for OwnedNode {
@@ -116,7 +111,6 @@ impl<'a> From<Node<'a>> for OwnedNode {
 			Node::Extension(k, child) => OwnedNode::Extension(k.into(), DBValue::from_slice(child)),
 			Node::Branch(c, val) => OwnedNode::Branch(Branch::new(c, val)),
 			Node::NibbledBranch(k, c, val) => OwnedNode::NibbledBranch(k.into(), Branch::new(c, val)),
-			Node::FixKeyBranch(k, c) => OwnedNode::FixKeyBranch(k.into(), Branch::new(c, None)),
 		}
 	}
 }

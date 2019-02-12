@@ -54,8 +54,4 @@ pub trait NodeCodec<H: Hasher>: Sized {
 	/// Returns an encoded branch node with a possible partial path.
 	fn branch_node_nibbled<I>(partial: &[u8], children: I, value: Option<&[u8]>) -> Vec<u8>
 	where I: IntoIterator<Item=Option<ChildReference<H::Out>>> + Iterator<Item=Option<ChildReference<H::Out>>>;
-
-	/// Returns an encoded branch node with a possible partial path but no value.
-	fn branch_node_nibbled_fix<I>(partial: &[u8], children: I) -> Vec<u8>
-	where I: IntoIterator<Item=Option<ChildReference<H::Out>>> + Iterator<Item=Option<ChildReference<H::Out>>>;
 }

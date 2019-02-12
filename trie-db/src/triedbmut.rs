@@ -74,8 +74,6 @@ enum Node<H> {
 	Branch(Box<[Option<NodeHandle<H>>; 16]>, Option<DBValue>),
 	/// Branch node with support for a nibble (to avoid extension node)
 	NibbledBranch(NodeKey, Box<[Option<NodeHandle<H>>; 16]>, Option<DBValue>),
-	/// FixedKey trie branch
-	FixKeyBranch(NodeKey, Box<[Option<NodeHandle<H>>; 16]>),
 }
 
 impl<O> Node<O>
@@ -137,10 +135,6 @@ where
           // TODO this bit info does not seem to be use anywhere -> remove decoding code??
           Node::NibbledBranch(k.encoded(false), children, val.map(DBValue::from_slice))
         },
-        EncodedNode::FixKeyBranch(k, encoded_children) => {
-          let children = dec_children(&encoded_children, storage);
-          Node::FixKeyBranch(k.encoded(false), children)
-        },
 		}
 	}
 
@@ -178,19 +172,6 @@ where
 					value.as_ref().map(|v|&v[..])
 				)
 			},
-			Node::FixKeyBranch(partial, mut children) => {
-				C::branch_node_nibbled_fix(
-          &partial,
-					// map the `NodeHandle`s from the Branch to `ChildReferences`
-					children.iter_mut()
-						.map(Option::take)
-						.map(|maybe_child|
-							maybe_child.map(|child| child_cb(child))
-						)
-				)
-			}
-
-
 		}
 	}
 }
@@ -338,6 +319,30 @@ where
 	marker: PhantomData<C>, // TODO: rpheimer: "we could have the NodeCodec trait take &self to its methods and then we don't need PhantomData. we can just store an instance of C: NodeCodec in the trie struct. If it's a ZST it won't have any additional overhead anyway"
 }
 
+pub struct TrieDBMutNoExt<'a, H, C>(TrieDBMut<'a, H, C>)
+where
+	H: Hasher + 'a,
+	C: NodeCodec<H>;
+
+
+impl<'a, H, C> TrieDBMutNoExt<'a, H, C>
+where
+	H: Hasher,
+	C: NodeCodec<H>
+{
+	/// Create a new trie with backing database `db` and empty `root`.
+	pub fn new(db: &'a mut HashDB<H, DBValue>, root: &'a mut H::Out) -> Self {
+    TrieDBMutNoExt(TrieDBMut::new(db, root))
+	}
+
+	/// Create a new trie with the backing database `db` and `root.
+	/// Returns an error if `root` does not exist.
+	pub fn from_existing(db: &'a mut HashDB<H, DBValue>, root: &'a mut H::Out) -> Result<Self, H::Out, C::Error> {
+    Ok(TrieDBMutNoExt(TrieDBMut::from_existing(db, root)?))
+  }
+}
+
+
 impl<'a, H, C> TrieDBMut<'a, H, C>
 where
 	H: Hasher,
@@ -477,22 +482,6 @@ where
               return Ok(None)
             }
 					},
-					Node::FixKeyBranch(ref slice, ref children) => {
-						let slice = NibbleSlice::from_encoded(slice).0;
-						if partial.is_empty() {
-              // should we fail (it means a look up on non fix key length)
-              // returning None seems correct to
-							return Ok(None);
-						} else if partial.starts_with(&slice) {
-							let idx = partial.at(0);
-							match children[idx as usize].as_ref() {
-								Some(child) => (1 + slice.len(), child),
-								None => return Ok(None),
-							}
-						} else {
-              return Ok(None)
-            }
-					},
 				}
 			};
 
@@ -514,6 +503,20 @@ where
 
 		Ok((self.storage.alloc(new_stored), changed))
 	}
+
+  fn insert_at_no_ext(&mut self, handle: NodeHandle<H::Out>, partial: NibbleSlice, value: DBValue, old_val: &mut Option<DBValue>) -> Result<(StorageHandle, bool), H::Out, C::Error> {
+		let h = match handle {
+			NodeHandle::InMemory(h) => h,
+			NodeHandle::Hash(h) => self.cache(h)?,
+		};
+		let stored = self.storage.destroy(h); // cache then destroy for hash handle (handle being root in most case), direct access somehow?
+		let (new_stored, changed) = self.inspect(stored, move |trie, stored| {
+			trie.insert_inspector_no_ext(stored, partial, value, old_val).map(|a| a.into_action())
+		})?.expect("Insertion never deletes.");
+
+		Ok((self.storage.alloc(new_stored), changed))
+	}
+
 
 	/// the insertion inspector.
 	fn insert_inspector(&mut self, node: Node<H::Out>, partial: NibbleSlice, value: DBValue, old_val: &mut Option<DBValue>) -> Result<InsertAction<H::Out>, H::Out, C::Error> {
@@ -556,7 +559,6 @@ where
 					InsertAction::Replace(Node::Branch(children, stored_value))
 				}
 			}
-
 			Node::Leaf(encoded, stored_value) => {
 				let existing_key = NibbleSlice::from_encoded(&encoded).0;
 				let cp = partial.common_prefix(&existing_key);
@@ -614,11 +616,6 @@ where
 					let augmented_low = self.insert_inspector(low, partial.mid(cp), value, old_val)?.unwrap_node();
 
 					// make an extension using it. this is a replacement.
-          // TODO ECH : variant here not an extension but a branch TODO previous should already
-          // create branch aka Leaf -> cp == 0 -> no do not want this recurse shit : just create it
-          // in place 
-          // TODO this case is in midle branch with value over anything
-          // TODO this is getting messy : use different method for visit?? probably yes
 					InsertAction::Replace(Node::Extension(
 						existing_key.encoded_leftmost(cp, false),
 						self.storage.alloc(Stored::New(augmented_low)).into()
@@ -679,17 +676,144 @@ where
 					))
 				}
 			}
-			Node::NibbledBranch(encoded, mut children, stored_value) => {
-				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+			Node::NibbledBranch(..) => {
         unimplemented!()
       }
-			Node::FixKeyBranch(encoded, mut children) => {
-				let existing_key = NibbleSlice::from_encoded(&encoded).0;
-        unimplemented!()
-      }
-
 		})
 	}
+
+  fn insert_inspector_no_ext(&mut self, node: Node<H::Out>, partial: NibbleSlice, value: DBValue, old_val: &mut Option<DBValue>) -> Result<InsertAction<H::Out>, H::Out, C::Error> {
+		trace!(target: "trie", "augmented (partial: {:?}, value: {:#x?})", partial, value);
+
+		Ok(match node {
+			Node::Empty => {
+				trace!(target: "trie", "empty: COMPOSE");
+				InsertAction::Replace(Node::Leaf(partial.encoded(true), value))
+			}
+      Node::NibbledBranch(encoded, mut children, stored_value) => {
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+
+				let cp = partial.common_prefix(&existing_key);
+				if cp == existing_key.len() && cp == partial.len() {
+					let unchanged = stored_value.as_ref() == Some(&value);
+					let branch = Node::NibbledBranch(existing_key.encoded(false), children, Some(value));
+					*old_val = stored_value;
+
+					match unchanged {
+						true => InsertAction::Restore(branch),
+						false => InsertAction::Replace(branch),
+					}
+        } else if cp < existing_key.len() {
+          // insert a branch value in between
+					trace!(target: "trie", "partially-shared-prefix (exist={:?}; new={:?}; cp={:?}): AUGMENT-AT-END", existing_key.len(), partial.len(), cp);
+					let low = Node::NibbledBranch(partial.mid(cp+1).encoded(false), children, Some(value));
+
+          let ix = partial.at(cp);
+          let mut children = empty_children();
+          let alloc_storage = self.storage.alloc(Stored::New(low));
+          children[ix as usize] = Some(alloc_storage.into());
+					// always replace, since this extension is not the one we started with.
+					// this is known because the partial key is only the common prefix.
+					InsertAction::Replace(Node::NibbledBranch(
+						existing_key.encoded_leftmost(existing_key.len() - cp, false),
+            children,
+            stored_value,
+						)
+					)
+
+        } else {
+          // append after cp == existing_key and partial > cp
+				  trace!(target: "trie", "branch: ROUTE,AUGMENT");
+          let idx = partial.at(cp) as usize;
+					let partial = partial.mid(cp + 1);
+					if let Some(child) = children[idx].take() {
+						// original had something there. recurse down into it.
+						let (new_child, changed) = self.insert_at_no_ext(child, partial, value, old_val)?;
+						children[idx] = Some(new_child.into());
+						if !changed {
+							// the new node we composed didn't change. that means our branch is untouched too.
+							return Ok(InsertAction::Restore(Node::NibbledBranch(existing_key.encoded(false), children, stored_value)));
+						}
+					} else {
+						// original had nothing there. compose a leaf.
+						let leaf = self.storage.alloc(Stored::New(Node::Leaf(partial.encoded(true), value)));
+						children[idx] = Some(leaf.into());
+          }
+					InsertAction::Replace(Node::NibbledBranch(
+              existing_key.encoded(false),
+              children,
+              stored_value,
+              ))
+
+        }
+
+			},
+			Node::Leaf(encoded, stored_value) => {
+  
+				let existing_key = NibbleSlice::from_encoded(&encoded).0;
+				let cp = partial.common_prefix(&existing_key);
+				if cp == existing_key.len() && cp == partial.len() {
+					trace!(target: "trie", "equivalent-leaf: REPLACE");
+					// equivalent leaf.
+					let unchanged = stored_value == value;
+					*old_val = Some(stored_value);
+
+					match unchanged {
+						// unchanged. restore
+						true => InsertAction::Restore(Node::Leaf(encoded.clone(), value)),
+						false => InsertAction::Replace(Node::Leaf(encoded.clone(), value)),
+					}
+				} else if cp < existing_key.len() {
+					trace!(target: "trie", "no-common-prefix, not-both-empty (exist={:?}; new={:?}): TRANSMUTE,AUGMENT", existing_key.len(), partial.len());
+
+					// one of us isn't empty: transmute to branch here
+					let mut children = empty_children();
+					let branch = if existing_key.is_empty() {
+						// always replace since branch isn't leaf.
+						Node::NibbledBranch(existing_key.encoded(false), children, Some(stored_value))
+					} else {
+						let idx = existing_key.at(cp) as usize;
+						let new_leaf = Node::Leaf(existing_key.mid(cp + 1).encoded(true), stored_value);
+						children[idx] = Some(self.storage.alloc(Stored::New(new_leaf)).into());
+
+						Node::NibbledBranch(partial.encoded_leftmost(cp, false), children, None)
+					};
+
+					// always replace because whatever we get out here is not the branch we started with.
+					let branch_action = self.insert_inspector_no_ext(branch, partial, value, old_val)?.unwrap_node();
+					InsertAction::Replace(branch_action)
+				} else if cp == existing_key.len() {
+					trace!(target: "trie", "complete-prefix (cp={:?}): AUGMENT-AT-END", cp);
+
+					// fully-shared prefix for an extension.
+					// make a stub branch and an extension.
+					let branch = Node::NibbledBranch(existing_key.encoded(false), empty_children(), Some(stored_value));
+					// augment the new branch.
+					let branch = self.insert_inspector_no_ext(branch, partial.mid(cp), value, old_val)?.unwrap_node();
+
+					InsertAction::Replace(branch)
+				} else {
+					trace!(target: "trie", "partially-shared-prefix (exist={:?}; new={:?}; cp={:?}): AUGMENT-AT-END", existing_key.len(), partial.len(), cp);
+
+					// partially-shared prefix for an extension.
+					// start by making a leaf.
+					let low = Node::Leaf(existing_key.mid(cp).encoded(true), stored_value);
+
+					// augment it. this will result in the Leaf -> cp == 0 routine,
+					// which creates a branch.
+					let augmented_low = self.insert_inspector_no_ext(low, partial.mid(cp), value, old_val)?.unwrap_node();
+
+					// replace it 
+					InsertAction::Replace(augmented_low)
+				}
+			},
+			Node::Extension(..) => {
+        unreachable!()
+			},
+			Node::Branch(..) => unreachable!(),
+		})
+	}
+
 
 	/// Remove a node from the trie based on key.
 	fn remove_at(&mut self, handle: NodeHandle<H::Out>, partial: NibbleSlice, old_val: &mut Option<DBValue>) -> Result<Option<(StorageHandle, bool)>, H::Out, C::Error> {
@@ -705,6 +829,22 @@ where
 
 		Ok(opt.map(|(new, changed)| (self.storage.alloc(new), changed)))
 	}
+
+  /// Remove a node from the trie based on key.
+	fn remove_at_no_ext(&mut self, handle: NodeHandle<H::Out>, partial: NibbleSlice, old_val: &mut Option<DBValue>) -> Result<Option<(StorageHandle, bool)>, H::Out, C::Error> {
+		let stored = match handle {
+			NodeHandle::InMemory(h) => self.storage.destroy(h),
+			NodeHandle::Hash(h) => {
+				let handle = self.cache(h)?;
+				self.storage.destroy(handle)
+			}
+		};
+
+		let opt = self.inspect(stored, move |trie, node| trie.remove_inspector_no_ext(node, partial, old_val))?;
+
+		Ok(opt.map(|(new, changed)| (self.storage.alloc(new), changed)))
+	}
+
 
 	/// the removal inspector
 	fn remove_inspector(&mut self, node: Node<H::Out>, partial: NibbleSlice, old_val: &mut Option<DBValue>) -> Result<Action<H::Out>, H::Out, C::Error> {
@@ -784,18 +924,90 @@ where
 					Action::Restore(Node::Extension(encoded, child_branch))
 				}
 			}
-			(Node::NibbledBranch(encoded, mut children, stored_value), _) => {
-				let existing_key = NibbleSlice::from_encoded(&encoded).0;
-        unimplemented!()
+			(Node::NibbledBranch(..), _) => {
+        unreachable!()
       }
-			(Node::FixKeyBranch(encoded, mut children), _) => {
-				let existing_key = NibbleSlice::from_encoded(&encoded).0;
-        unimplemented!()
-      }
-
-
 		})
 	}
+
+	/// the removal inspector for no extension variant
+	fn remove_inspector_no_ext(&mut self, node: Node<H::Out>, partial: NibbleSlice, old_val: &mut Option<DBValue>) -> Result<Action<H::Out>, H::Out, C::Error> {
+		Ok(match (node, partial.is_empty()) {
+			(Node::Empty, _) => Action::Delete,
+			(Node::NibbledBranch(n, c, None), true) => Action::Restore(Node::NibbledBranch(n, c, None)),
+			(Node::NibbledBranch(n, children, Some(val)), true) => {
+				*old_val = Some(val);
+				// always replace since we took the value out.
+				Action::Replace(self.fix(Node::NibbledBranch(n, children, None))?)
+			},
+			(Node::NibbledBranch(encoded, mut children, value), false) => {
+				let (cp, existing_len) = {
+					let existing_key = NibbleSlice::from_encoded(&encoded).0;
+					(existing_key.common_prefix(&partial), existing_key.len())
+				};
+
+				if cp == existing_len && cp == partial.len() {
+          // replace val
+          if let Some(val) = value {
+            *old_val = Some(val);
+				    Action::Replace(self.fix(Node::NibbledBranch(encoded, children, None))?)
+          } else {
+			      Action::Restore(Node::NibbledBranch(encoded, children, None))
+          }
+        } else if cp < existing_len {
+					// partway through an extension -- nothing to do here.
+          Action::Restore(Node::NibbledBranch(encoded, children, value))
+        } else {
+          // cp == existing_len && cp < partial.len() : check children
+          // TODO can merge with branch remove code
+          let idx = partial.at(cp) as usize;
+
+          if let Some(child) = children[idx].take() {
+            trace!(target: "trie", "removing value out of branch child, partial={:?}", partial);
+            match self.remove_at_no_ext(child, partial.mid(cp + 1), old_val)? {
+              Some((new, changed)) => {
+                children[idx] = Some(new.into());
+                let branch = Node::NibbledBranch(encoded, children, value);
+                match changed {
+                  // child was changed, so we were too.
+                  true => Action::Replace(branch),
+                  // unchanged, so we are too.
+                  false => Action::Restore(branch),
+                }
+              },
+              None => {
+                // the child we took was deleted.
+                // the node may need fixing.
+                trace!(target: "trie", "branch child deleted, partial={:?}", partial);
+                Action::Replace(self.fix(Node::NibbledBranch(encoded, children, value))?)
+              },
+            }
+          } else {
+            // no change needed.
+            Action::Restore(Node::NibbledBranch(encoded, children, value))
+          }
+				}
+			},
+			(Node::Leaf(encoded, value), _) => {
+				if NibbleSlice::from_encoded(&encoded).0 == partial {
+					// this is the node we were looking for. Let's delete it.
+					*old_val = Some(value);
+					Action::Delete
+				} else {
+					// leaf the node alone.
+					trace!(target: "trie", "restoring leaf wrong partial, partial={:?}, existing={:?}", partial, NibbleSlice::from_encoded(&encoded).0);
+					Action::Restore(Node::Leaf(encoded, value))
+				}
+			},
+			(Node::Extension(..), _) => {
+        unreachable!()
+			}
+			(Node::Branch(..), _) => {
+        unreachable!()
+      }
+		})
+	}
+
 
 	/// Given a node which may be in an _invalid state_, fix it such that it is then in a valid
 	/// state.
@@ -845,7 +1057,83 @@ where
 						Ok(Node::Branch(children, value))
 					}
 				}
-			}
+			},
+			Node::NibbledBranch(enc_nibble, mut children, value) => {
+				// if only a single value, transmute to leaf/extension and feed through fixed.
+				#[derive(Debug)]
+				enum UsedIndex {
+					None,
+					One(u8),
+					Many,
+				};
+				let mut used_index = UsedIndex::None;
+				for i in 0..16 {
+					match (children[i].is_none(), &used_index) {
+						(false, &UsedIndex::None) => used_index = UsedIndex::One(i as u8),
+						(false, &UsedIndex::One(_)) => {
+							used_index = UsedIndex::Many;
+							break;
+						}
+						_ => continue,
+					}
+				}
+
+				match (used_index, value) {
+					(UsedIndex::None, None) => panic!("Branch with no subvalues. Something went wrong."),
+					(UsedIndex::One(a), None) => {
+						// only one onward node. use child instead
+						let child = children[a as usize].take().expect("used_index only set if occupied; qed");
+						//let new_node = Node::Extension(new_partial, child);
+            let stored = match child {
+              NodeHandle::InMemory(h) => self.storage.destroy(h),
+              NodeHandle::Hash(h) => {
+                let handle = self.cache(h)?;
+                self.storage.destroy(handle)
+              }
+            };
+            let child_node = match stored {
+              Stored::New(node) => node,
+              Stored::Cached(node, hash) => {
+							  self.death_row.insert(hash);
+                node
+              },
+            };
+				    match child_node {
+					    Node::Leaf(sub_partial, value) => {
+                let ix = [a];
+						    let new_partial = NibbleSlice::new_composed(
+                  &NibbleSlice::new_composed(
+                    &NibbleSlice::from_encoded(&enc_nibble).0,
+                    &NibbleSlice::new_offset(&ix, 1)),
+                  &NibbleSlice::from_encoded(&sub_partial).0);
+                Ok(Node::Leaf(new_partial.encoded(false), value))
+              },
+					    Node::NibbledBranch(sub_partial, ch_children, ch_value) => {
+                let ix = [a];
+						    let new_partial = NibbleSlice::new_composed(
+                  &NibbleSlice::new_composed(
+                    &NibbleSlice::from_encoded(&enc_nibble).0,
+                    &NibbleSlice::new_offset(&ix, 1)),
+                  &NibbleSlice::from_encoded(&sub_partial).0);
+					      Ok(Node::NibbledBranch(new_partial.encoded(false), ch_children, ch_value))
+              },
+              _ => unreachable!(),
+            }
+					},
+					(UsedIndex::None, Some(value)) => {
+						// make a leaf.
+						trace!(target: "trie", "fixing: branch -> leaf");
+						let partial = NibbleSlice::from_encoded(&enc_nibble).0;
+            // TODO encoded switch can be almost costless instead of this enc/dec
+						Ok(Node::Leaf(partial.encoded(true), value))
+					},
+					(_, value) => {
+						// all is well.
+						trace!(target: "trie", "fixing: restoring branch");
+						Ok(Node::NibbledBranch(enc_nibble, children, value))
+					},
+				}
+			},
 			Node::Extension(partial, child) => {
 				let stored = match child {
 					NodeHandle::InMemory(h) => self.storage.destroy(h),
@@ -900,7 +1188,7 @@ where
 						Ok(Node::Extension(partial, self.storage.alloc(stored).into()))
 					}
 				}
-			}
+			},
 			other => Ok(other), // only ext and branch need fixing.
 		}
 	}
@@ -1048,6 +1336,69 @@ where
 	}
 }
 
+impl<'a, H, C> TrieMut<H, C> for TrieDBMutNoExt<'a, H, C>
+where
+	H: Hasher,
+	C: NodeCodec<H>
+{
+	fn root(&mut self) -> &H::Out {
+		self.0.root()
+	}
+
+	fn is_empty(&self) -> bool {
+    self.0.is_empty()
+	}
+
+	fn get<'x, 'key>(&'x self, key: &'key [u8]) -> Result<Option<DBValue>, H::Out, C::Error>
+		where 'x: 'key
+	{
+    self.0.get(key)
+	}
+
+	fn insert(&mut self, key: &[u8], value: &[u8]) -> Result<Option<DBValue>, H::Out, C::Error> {
+		if value.is_empty() { return self.remove(key) }
+
+		let mut old_val = None;
+
+		trace!(target: "trie", "insert: key={:#x?}, value={:#x?}", key, value);
+
+		let root_handle = self.0.root_handle();
+		let (new_handle, changed) = self.0.insert_at_no_ext(
+			root_handle,
+			NibbleSlice::new(key),
+			DBValue::from_slice(value),
+			&mut old_val,
+		)?;
+
+		trace!(target: "trie", "insert: altered trie={}", changed);
+		self.0.root_handle = NodeHandle::InMemory(new_handle);
+
+		Ok(old_val)
+	}
+
+	fn remove(&mut self, key: &[u8]) -> Result<Option<DBValue>, H::Out, C::Error> {
+		trace!(target: "trie", "remove: key={:#x?}", key);
+
+		let root_handle = self.0.root_handle();
+		let key = NibbleSlice::new(key);
+		let mut old_val = None;
+
+		match self.0.remove_at_no_ext(root_handle, key, &mut old_val)? {
+			Some((handle, changed)) => {
+				trace!(target: "trie", "remove: altered trie={}", changed);
+				self.0.root_handle = NodeHandle::InMemory(handle);
+			}
+			None => {
+				trace!(target: "trie", "remove: obliterated trie");
+				self.0.root_handle = NodeHandle::Hash(C::hashed_null_node());
+				*self.0.root = C::hashed_null_node();
+			}
+		}
+
+		Ok(old_val)
+	}
+}
+
 impl<'a, H, C> Drop for TrieDBMut<'a, H, C>
 where
 	H: Hasher,
@@ -1060,14 +1411,14 @@ where
 
 #[cfg(test)]
 mod tests {
-	use env_logger;
+  use env_logger;
 	use standardmap::*;
 	use DBValue;
 	use memory_db::MemoryDB;
 	use hash_db::{Hasher, HashDB};
 	use keccak_hasher::KeccakHasher;
-	use reference_trie::{RefTrieDBMut, TrieMut, NodeCodec,
-		ReferenceNodeCodec, ref_trie_root};
+	use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMut, TrieMut, NodeCodec,
+		ReferenceNodeCodec, ref_trie_root, RefTrieDB, RefTrieDBNoExt};
 
 	fn populate_trie<'db>(
 		db: &'db mut HashDB<KeccakHasher, DBValue>,
@@ -1089,6 +1440,28 @@ mod tests {
 			t.remove(key).unwrap();
 		}
 	}
+
+	fn populate_trie_no_ext<'db>(
+		db: &'db mut HashDB<KeccakHasher, DBValue>,
+		root: &'db mut <KeccakHasher as Hasher>::Out,
+		v: &[(Vec<u8>, Vec<u8>)]
+	) -> RefTrieDBMutNoExt<'db> {
+		let mut t = RefTrieDBMutNoExt::new(db, root);
+		for i in 0..v.len() {
+			let key: &[u8]= &v[i].0;
+			let val: &[u8] = &v[i].1;
+			t.insert(key, val).unwrap();
+		}
+		t
+	}
+
+	fn unpopulate_trie_no_ext<'db>(t: &mut RefTrieDBMutNoExt<'db>, v: &[(Vec<u8>, Vec<u8>)]) {
+		for i in v {
+			let key: &[u8]= &i.0;
+			t.remove(key).unwrap();
+		}
+	}
+
 
 	#[test]
 	fn playpen() {
@@ -1170,6 +1543,34 @@ mod tests {
 		t2.insert(&[0x01, 0x34], big_value).unwrap();
 		t2.remove(&[0x01]).unwrap();
 	}
+
+	#[test]
+	fn remove_to_empty_no_ext() {
+		let big_value = b"00000000000000000000000000000000";
+		let big_value2 = b"00000000000000000000000000000002";
+		let big_value3 = b"00000000000000000000000000000004";
+
+		let mut memdb2 = MemoryDB::default();
+		let mut root2 = Default::default();
+    {
+      let mut memdb = MemoryDB::default();
+      let mut root = Default::default();
+      let mut t1 = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+      //t1.insert(&[0x01, 0x23], big_value).unwrap();
+      //t1.insert(&[0x01, 0x34], big_value).unwrap();
+      let mut t2 = RefTrieDBMutNoExt::new(&mut memdb2, &mut root2);
+
+      t2.insert(&[0x01, 0x23], big_value3).unwrap();
+      t2.insert(&[0x01], big_value2).unwrap();
+      t2.insert(&[0x01, 0x34], big_value).unwrap();
+		t2.remove(&[0x01, 0x34]).unwrap();
+		t2.remove(&[0x01]).unwrap(); // TODO fix that then fix with two value (rem prev rem)
+    }
+    let t2 = RefTrieDBNoExt::new(& memdb2, &root2); 
+    println!("{:?}",t2);
+    panic!("disp");
+	}
+
 
 	#[test]
 	fn insert_replace_root() {

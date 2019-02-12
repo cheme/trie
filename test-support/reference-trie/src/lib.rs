@@ -40,7 +40,9 @@ pub use trie_db::{Trie, TrieMut, NibbleSlice, NodeCodec, Recorder, Record};
 pub use trie_root::TrieStream;
 
 pub type RefTrieDB<'a> = trie_db::TrieDB<'a, keccak_hasher::KeccakHasher, ReferenceNodeCodec>;
+pub type RefTrieDBNoExt<'a> = trie_db::TrieDB<'a, keccak_hasher::KeccakHasher, ReferenceNodeCodecNoExt>;
 pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, KeccakHasher, ReferenceNodeCodec>;
+pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMutNoExt<'a, KeccakHasher, ReferenceNodeCodecNoExt>;
 pub type RefFatDB<'a> = trie_db::FatDB<'a, KeccakHasher, ReferenceNodeCodec>;
 pub type RefFatDBMut<'a> = trie_db::FatDBMut<'a, KeccakHasher, ReferenceNodeCodec>;
 pub type RefSecTrieDB<'a> = trie_db::SecTrieDB<'a, KeccakHasher, ReferenceNodeCodec>;
@@ -177,6 +179,10 @@ impl Decode for NodeHeader {
 /// Simple reference implementation of a `NodeCodec`.
 #[derive(Default, Clone)]
 pub struct ReferenceNodeCodec;
+
+/// Simple reference implementation of a `NodeCodec`.
+#[derive(Default, Clone)]
+pub struct ReferenceNodeCodecNoExt;
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 /// Error concerning the Parity-Codec based decoder.
@@ -332,11 +338,95 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 	fn branch_node_nibbled<I>(partial: &[u8], children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
 		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
 	{
+    unreachable!()
+	}
+
+}
+
+impl NodeCodec<KeccakHasher> for ReferenceNodeCodecNoExt {
+	type Error = ReferenceError;
+
+	fn hashed_null_node() -> <KeccakHasher as Hasher>::Out {
+    ReferenceNodeCodec::hashed_null_node()
+	}
+
+	fn decode(data: &[u8]) -> ::std::result::Result<Node, Self::Error> {
+		let input = &mut &*data;
+		match NodeHeader::decode(input).ok_or(ReferenceError::BadFormat)? {
+			NodeHeader::Null => Ok(Node::Empty),
+			NodeHeader::Branch(has_value) => {
+				let bitmap = u16::decode(input).ok_or(ReferenceError::BadFormat)?;
+        let nibble_count = take(input, 1).ok_or(ReferenceError::BadFormat)?[0] as usize;
+				let nibble_data = take(input, (nibble_count + 1) / 2).ok_or(ReferenceError::BadFormat)?;
+				let nibble_slice = NibbleSlice::new_offset(nibble_data, nibble_count % 2);
+				let value = if has_value {
+					let count = <Compact<u32>>::decode(input).ok_or(ReferenceError::BadFormat)?.0 as usize;
+					Some(take(input, count).ok_or(ReferenceError::BadFormat)?)
+				} else {
+					None
+				};
+				let mut children = [None; 16];
+				let mut pot_cursor = 1;
+				for i in 0..16 {
+					if bitmap & pot_cursor != 0 {
+						let count = <Compact<u32>>::decode(input).ok_or(ReferenceError::BadFormat)?.0 as usize;
+						children[i] = Some(take(input, count).ok_or(ReferenceError::BadFormat)?);
+					}
+					pot_cursor <<= 1;
+				}
+				Ok(Node::NibbledBranch(nibble_slice, children, value))
+			}
+			NodeHeader::Extension(_) => unreachable!(),
+			NodeHeader::Leaf(nibble_count) => {
+				let nibble_data = take(input, (nibble_count + 1) / 2).ok_or(ReferenceError::BadFormat)?;
+				let nibble_slice = NibbleSlice::new_offset(nibble_data, nibble_count % 2);
+				let count = <Compact<u32>>::decode(input).ok_or(ReferenceError::BadFormat)?.0 as usize;
+				Ok(Node::Leaf(nibble_slice, take(input, count).ok_or(ReferenceError::BadFormat)?))
+			}
+    }
+  }
+
+	fn try_decode_hash(data: &[u8]) -> Option<<KeccakHasher as Hasher>::Out> {
+    ReferenceNodeCodec::try_decode_hash(data)
+	}
+
+	fn is_empty_node(data: &[u8]) -> bool {
+    ReferenceNodeCodec::is_empty_node(data)
+	}
+
+	fn empty_node() -> Vec<u8> {
+    ReferenceNodeCodec::empty_node()
+	}
+
+	fn leaf_node(partial: &[u8], value: &[u8]) -> Vec<u8> {
+    ReferenceNodeCodec::leaf_node(partial, value)
+	}
+
+	fn ext_node(_partial: &[u8], _child: ChildReference<<KeccakHasher as Hasher>::Out>) -> Vec<u8> {
+    unreachable!()
+	}
+
+	fn branch_node<I>(_children: I, _maybe_value: Option<&[u8]>) -> Vec<u8> where
+		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
+	{
+    unreachable!()
+	}
+
+	fn branch_node_nibbled<I>(partial: &[u8], children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
+		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
+	{
 		let mut output = Vec::with_capacity(partial.len() + 4); // TODO choose a good capacity estimation value (here it is only partial)
     for _ in 0..3 {
       output.push(0);
     }
-		partial_to_key_append(partial, EXTENSION_NODE_OFFSET, EXTENSION_NODE_OVER, &mut output);
+
+  	let nibble_count = partial.len();
+	  output.push(nibble_count as u8);
+    if nibble_count % 2 == 1 {
+      output.push(partial[0] & 0x0f);
+    }
+    output.extend_from_slice(&partial[1..]);
+
 		let have_value = if let Some(value) = maybe_value {
 			value.encode_to(&mut output);
 			true
@@ -344,30 +434,6 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 			false
 		};
 		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child {
-			Some(ChildReference::Hash(h)) => {
-				h.as_ref().encode_to(&mut output);
-				true
-			}
-			Some(ChildReference::Inline(inline_data, len)) => {
-				(&AsRef::<[u8]>::as_ref(&inline_data)[..len]).encode_to(&mut output);
-				true
-			}
-			None => false,
-		}));
-		output[0..3].copy_from_slice(&prefix[..]);
-		output
-	}
-
-	fn branch_node_nibbled_fix<I>(partial: &[u8], children: I) -> Vec<u8> where
-		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
-	{
-		let mut output = Vec::with_capacity(partial.len() + 4); // TODO choose a good capacity estimation value (here it is only partial)
-    for _ in 0..3 {
-      output.push(0);
-    }
-		partial_to_key_append(partial, EXTENSION_NODE_OFFSET, EXTENSION_NODE_OVER, &mut output);
-    // TODO skip no value encoding
-		let prefix = branch_node(false, children.map(|maybe_child| match maybe_child {
 			Some(ChildReference::Hash(h)) => {
 				h.as_ref().encode_to(&mut output);
 				true
