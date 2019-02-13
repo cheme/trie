@@ -213,19 +213,14 @@ fn take<'a>(input: &mut &'a[u8], count: usize) -> Option<&'a[u8]> {
 }
 
 fn partial_to_key(partial: &[u8], offset: u8, over: u8) -> Vec<u8> {
-	let mut output = Vec::with_capacity(partial.len() + 1);
-  partial_to_key_append(partial, offset, over, &mut output);
-	output
-}
-
-fn partial_to_key_append(partial: &[u8], offset: u8, over: u8, output: &mut Vec<u8>) {
 	let nibble_count = (partial.len() - 1) * 2 + if partial[0] & 16 == 16 { 1 } else { 0 };
 	assert!(nibble_count < over as usize);
-	output.push(offset + nibble_count as u8);
+	let mut output = vec![offset + nibble_count as u8];
 	if nibble_count % 2 == 1 {
 		output.push(partial[0] & 0x0f);
 	}
 	output.extend_from_slice(&partial[1..]);
+	output
 }
 
 // NOTE: what we'd really like here is:
@@ -420,8 +415,8 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodecNoExt {
       output.push(0);
     }
 
-  	let nibble_count = partial.len();
-	  output.push(nibble_count as u8);
+    let nibble_count = (partial.len() - 1) * 2 + if partial[0] & 16 == 16 { 1 } else { 0 };
+    output.push(nibble_count as u8);
     if nibble_count % 2 == 1 {
       output.push(partial[0] & 0x0f);
     }
