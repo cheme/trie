@@ -60,6 +60,11 @@ fn encoded_nibble(ori: &[u8], is_leaf: bool) -> ElasticArray36<u8> {
 	r
 }
 
+enum CacheNode<HO> {
+	None,
+	Hash(ChildReference<HO>),
+	Ext(Vec<u8>,ChildReference<HO>),// vec<u8> for nibble slice is not super good looking): TODO bench diff if explicitely boxed
+}
 
 // (64 * 16) aka 2*byte size of key * nb nibble value, 2 being byte/nible (8/4)
 // TODO test others layout
@@ -186,7 +191,8 @@ where
 					let v_hash = node.hash(); // TODO proper match!!
 					if d > 0 {
 						let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d-1);
-						// TODO capacity vec of 64?
+						// TODO capacity vec of 64? TODO super ineficient : could be removed on next iteration
+            // if using pointer (ref on rem_node return value) can be ok
 						self.set_node(d-1, nibble as usize, CacheNode::Ext(vec![unit as u8], v_hash));
 					} else {
 						let enc_nibble = encoded_nibble(&[unit as u8], false);
@@ -209,12 +215,6 @@ where
 			}
 		}
 	}
-}
-
-enum CacheNode<HO> {
-	None,
-	Hash(ChildReference<HO>),
-	Ext(Vec<u8>,ChildReference<HO>),// vec<u8> for nibble slice is not super good looking): TODO bench diff if explicitely boxed
 }
 
 impl<HO: Clone> Clone for CacheNode<HO> {
@@ -246,6 +246,17 @@ impl<HO> CacheNode<HO> {
 	}
 }
 
+pub fn trie_visit_no_ext<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 
+	where
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord,
+		B: AsRef<[u8]>,
+		H: Hasher,
+		C: NodeCodec<H>,
+		F: ProcessEncodedNode<<H as Hasher>::Out>,
+	{
+    unimplemented!()
+  }
 
 pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 
 	where

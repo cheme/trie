@@ -1556,13 +1556,14 @@ mod tests {
       t2.insert(&[0x01, 0x23], big_value3).unwrap();
       t2.insert(&[0x01], big_value2).unwrap();
       t2.insert(&[0x01, 0x34], big_value).unwrap();
-		//t2.remove(&[0x01, 0x34]).unwrap();
-		//t2.remove(&[0x01]).unwrap();
-//		t2.remove(&[0x01, 0x34]).unwrap();
-//		t2.remove(&[0x01]).unwrap();
+		  t2.remove(&[0x01]).unwrap();
+      // commit on drop
     }
     let t2 = RefTrieDBNoExt::new(& memdb2, &root2); 
-    println!("{:?}",t2);
+		assert_eq!(&root2[..], &reference_trie::calc_root_no_ext(vec![
+     (vec![0x01u8, 0x23], big_value3.to_vec()),
+     (vec![0x01u8, 0x34], big_value.to_vec()),
+    ])[..]);
 	}
 
 

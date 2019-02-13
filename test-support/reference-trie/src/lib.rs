@@ -519,3 +519,16 @@ pub fn calc_root<I,A,B>(
 	cb.root.unwrap_or(Default::default())
 }
 
+pub fn calc_root_no_ext<I,A,B>(
+	data: I,
+) -> <KeccakHasher as Hasher>::Out
+	where
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord + fmt::Debug,
+		B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = TrieRoot::<KeccakHasher, _>::default();
+	trie_db::trie_visit_no_ext::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
