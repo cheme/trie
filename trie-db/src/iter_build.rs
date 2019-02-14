@@ -552,18 +552,4 @@ mod test {
 			(vec![255],vec![186, 255]),
 		]);
 	}
-  /* 
-   * damn wrong 
-TrieDB {
-  hash_count: 0,
-  root: Node::NibbledBranch {
-    slice: , nodes: [
-      Node::NibbledBranch {
-        index: 0, slice: f'f, nodes: [
-          Node::Leaf { index: 0, slice: , value: [6, 255] },
-          Node::Leaf { index: 6, slice: , value: [255, 186] }], value: None }
-    ], value: Some([186, 255])
-  }
-}
-*/
 }

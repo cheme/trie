@@ -687,7 +687,6 @@ where
 
 		Ok(match node {
 			Node::Empty => {
-				trace!(target: "trie", "empty: COMPOSE");
 				InsertAction::Replace(Node::Leaf(partial.encoded(true), value))
 			}
 			Node::NibbledBranch(encoded, mut children, stored_value) => {
@@ -695,6 +694,7 @@ where
 
 				let cp = partial.common_prefix(&existing_key);
 				if cp == existing_key.len() && cp == partial.len() {
+        println!("branch replace");
 					let unchanged = stored_value.as_ref() == Some(&value);
 					let branch = Node::NibbledBranch(existing_key.encoded(false), children, Some(value));
 					*old_val = stored_value;
@@ -704,25 +704,43 @@ where
 						false => InsertAction::Replace(branch),
 					}
 				} else if cp < existing_key.len() {
+        println!("branch in between");
 					// insert a branch value in between
 					trace!(target: "trie", "partially-shared-prefix (exist={:?}; new={:?}; cp={:?}): AUGMENT-AT-END", existing_key.len(), partial.len(), cp);
-					let low = Node::NibbledBranch(partial.mid(cp).encoded(false), children, stored_value);
+					let low = Node::NibbledBranch(existing_key.mid(cp + 1).encoded(false), children, stored_value);
+        println!("low {:?}", &low);
+        println!("ek {:?}", &existing_key);
 					let ix = existing_key.at(cp);
+        println!("partil {:?} {:?} {}", &partial, ix, cp);
 					let mut children = empty_children();
 					let alloc_storage = self.storage.alloc(Stored::New(low));
 
 
 					children[ix as usize] = Some(alloc_storage.into());
-					// always replace, since this extension is not the one we started with.
-					// this is known because the partial key is only the common prefix.
-					InsertAction::Replace(Node::NibbledBranch(
-						existing_key.encoded_leftmost(cp, false),
-						children,
-						Some(value),
-						)
-					)
+
+          if partial.len() - cp == 1 {
+            InsertAction::Replace(Node::NibbledBranch(
+              existing_key.encoded_leftmost(cp,false),
+              children,
+              Some(value),
+              )
+            )
+          } else {
+            let ix = partial.at(cp);
+						let leaf = self.storage.alloc(Stored::New(Node::Leaf(partial.mid(cp + 1).encoded(true), value)));
+
+					  children[ix as usize] = Some(leaf.into());
+            InsertAction::Replace(Node::NibbledBranch(
+              existing_key.encoded_leftmost(cp,false),
+              children,
+              None,
+              )
+            )
+
+          }
 
 				} else {
+        println!("branch after");
 					// append after cp == existing_key and partial > cp
 					trace!(target: "trie", "branch: ROUTE,AUGMENT");
 					let idx = partial.at(cp) as usize;
@@ -751,6 +769,7 @@ where
 			},
 			Node::Leaf(encoded, stored_value) => {
 	
+        println!("leaf");
 				let existing_key = NibbleSlice::from_encoded(&encoded).0;
 				let cp = partial.common_prefix(&existing_key);
 				if cp == existing_key.len() && cp == partial.len() {
@@ -1003,6 +1022,7 @@ where
 	/// - Branch node where there is only a single entry;
 	/// - Extension node followed by anything other than a Branch node.
 	fn fix(&mut self, node: Node<H::Out>) -> Result<Node<H::Out>, H::Out, C::Error> {
+    println!("in fix");
 		match node {
 			Node::Branch(mut children, value) => {
 				// if only a single value, transmute to leaf/extension and feed through fixed.
