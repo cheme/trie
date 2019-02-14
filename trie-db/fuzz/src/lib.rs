@@ -101,6 +101,17 @@ fn data_sorted_unique(input: Vec<(Vec<u8>,Vec<u8>)>) -> Vec<(Vec<u8>,Vec<u8>)> {
 	}
 	m.into_iter().collect()
 }
+fn data_sorted_unique_and_rem(input: Vec<(Vec<u8>,Vec<u8>)>, krem: std::collections::BTreeSet<Vec<u8>>) -> Vec<(Vec<u8>,Vec<u8>)> {
+	let mut m = std::collections::BTreeMap::new();
+	for (k,v) in input.into_iter() {
+		let _ = m.insert(k,v); // latest value for uniqueness
+	}
+  for k in krem.into_iter() {
+    m.remove(&k);
+  }
+	m.into_iter().collect()
+}
+
 
 pub fn fuzz_that_compare_impl(input: &[u8]) {
 	let data = data_sorted_unique(fuzz_to_data(input));
@@ -121,6 +132,42 @@ pub fn fuzz_that_no_ext_insert(input: &[u8]) {
   // we are testing the RefTrie code here so we do not sort or check uniqueness
   // before.
 	let data = data_sorted_unique(fuzz_to_data(input));
+  //println!("data{:?}", data);
+	assert_eq!(*t.root(), calc_root_no_ext(data));
+}
+
+pub fn fuzz_that_no_ext_insert_remove(input: &[u8]) {
+  let data = fuzz_to_data(input);
+  // static rule of insert 3 remove one
+  let mut removed = std::collections::BTreeSet::new();
+  //println!("data{:?}", data);
+	let mut memdb = MemoryDB::default();
+	let mut root = Default::default();
+	let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+  let mut count = 0;
+  let mut torem = None;
+	for a in 0..data.len() {
+    if count % 7 == 0  {
+      // a random removal some time
+		  t.remove(&data[a].0[..]).unwrap();
+      removed.insert(data[a].0[..].to_vec());
+    } else {
+      if count % 3 == 0  {
+        torem = Some(data[a].0.to_vec());
+      }
+      t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+      count += 1;
+      if count % 3 == 2 {
+        if let Some(v) = torem.take() {
+          t.remove(&v[..]);
+          removed.insert(v);
+        }
+      }
+    }
+	}
+  // we are testing the RefTrie code here so we do not sort or check uniqueness
+  // before.
+	let data = data_sorted_unique_and_rem(fuzz_to_data(input), removed);
   //println!("data{:?}", data);
 	assert_eq!(*t.root(), calc_root_no_ext(data));
 }
