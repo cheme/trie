@@ -63,14 +63,13 @@ fn encoded_nibble(ori: &[u8], is_leaf: bool) -> ElasticArray36<u8> {
 enum CacheNode<HO> {
 	None,
 	Hash(ChildReference<HO>),
-	Ext(Vec<u8>,ChildReference<HO>),// vec<u8> for nibble slice is not super good looking): TODO bench diff if explicitely boxed
 }
 
 // (64 * 16) aka 2*byte size of key * nb nibble value, 2 being byte/nible (8/4)
 // TODO test others layout
 // first usize to get nb of added value, second usize last added index
 // second str is in branch value
-struct CacheAccum<H: Hasher,C,V> (Vec<(Vec<CacheNode<<H as Hasher>::Out>>, usize, usize)>,Vec<Option<V>>,PhantomData<(H,C)>);
+struct CacheAccum<H: Hasher,C,V> (Vec<(Vec<CacheNode<<H as Hasher>::Out>>, bool)>,Vec<Option<V>>,PhantomData<(H,C)>);
 
 /// initially allocated cache
 const INITIAL_DEPTH: usize = 10;
@@ -83,49 +82,35 @@ where
 	{
 	// TODO switch to static and bench
 	fn new() -> Self {
-		CacheAccum(vec![(vec![CacheNode::None; NIBBLE_SIZE],0,0); INITIAL_DEPTH],
+		CacheAccum(vec![(vec![CacheNode::None; NIBBLE_SIZE], false); INITIAL_DEPTH],
 		std::iter::repeat_with(|| None).take(INITIAL_DEPTH).collect() // vec![None; DEPTH] for non clone
 		, PhantomData)
 	}
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
     if depth >= self.0.len() {
 		  for _i in self.0.len()..depth+1 { 
-        self.0.push((vec![CacheNode::None; NIBBLE_SIZE],0,0));
+        self.0.push((vec![CacheNode::None; NIBBLE_SIZE], false));
         self.1.push(None);
       }
     }
 		self.0[depth].0[nibble_ix] = node;
-		// strong heuristic from the fact that we do not delete depth except globally
-		// and that we only check relevant size for 0 and 1 TODO replace counter by enum
-		// -> so we do not manage replace case
-		self.0[depth].1 += 1;
-		self.0[depth].2 = nibble_ix; // TODO bench a set if self.0[depth].1 is 0 (probably slower)
-	}
-	fn depth_added(&self, depth:usize) -> usize {
-		self.0[depth].1
-	}
-	fn depth_last_added(&self, depth:usize) -> usize {
-		self.0[depth].2
+		self.0[depth].1 = true;
 	}
 
-	fn rem_node(&mut self, depth:usize, nibble:usize) -> CacheNode<H::Out> {
-		self.0[depth].1 -= 1;
-		self.0[depth].2 = NIBBLE_SIZE; // out of ix -> need to check all value in this case TODO optim it ??
-		std::mem::replace(&mut self.0[depth].0[nibble], CacheNode::None)
+	fn touched(&self, depth:usize) -> bool {
+		self.1[depth].is_some() || self.0[depth].1
 	}
+
 	fn reset_depth(&mut self, depth:usize) {
-		self.0[depth] = (vec![CacheNode::None; NIBBLE_SIZE], 0, 0);
+		self.0[depth] = (vec![CacheNode::None; NIBBLE_SIZE], false);
 	}
 
-	fn encode_branch(&mut self, depth:usize, has_val: bool, cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>) -> Vec<u8>	{
-    let v = if has_val {
-      std::mem::replace(&mut self.1[depth], None)
-    } else { None };
+	fn encode_branch(&mut self, depth:usize) -> Vec<u8>	{
+    let v = self.1[depth].take();
 		C::branch_node(
 			self.0[depth].0.iter().map(|v| 
 				match v {
 					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
-					CacheNode::Ext(n, h) => unreachable!(),
 					CacheNode::None => None,
 				}
 			), v.as_ref().map(|v|v.as_ref()))
@@ -157,18 +142,16 @@ where
 		old_depth: usize,
     is_last: bool,
 	) {
-    let last_branch_written = new_depth;
     let mut last_hash = None;
 		for d in (new_depth..=old_depth).rev() {
 
-			let has_val = self.1[d].is_some();
        // check if branch empty TODO switch to optional storage
        // depth_size could be a set boolean probably!! (considering flushbranch is only call if
         // needed -> switch to > 0 for now 
 
-      let depth_size = self.depth_added(d);
+      let touched = self.touched(d);
 
-			if has_val || depth_size > 0 || d == new_depth {
+			if touched || d == new_depth {
       if let Some((hash, last_d)) = last_hash.take() {
 
           // extension case
@@ -176,7 +159,7 @@ where
           //println!("encn:{:?}", NibbleSlice::from_encoded(&NibbleSlice::new_offset(&ref_branch.as_ref()[..],new_depth).encoded_leftmost(old_depth - new_depth - 1, false)));
           let last_root = d == 0 && is_last;
           // reduce slice for branch
-          let parent_branch = has_val || depth_size > 0;
+          let parent_branch = touched;
           // TODO change this offset to not use nibble slice api (makes it hard to get the index
           // thing)
           let (slice_size, offset) = if parent_branch && last_root {
@@ -206,9 +189,9 @@ where
 
 	
       if d > new_depth || is_last {
-        if has_val || depth_size > 0 {
+        if touched {
           // enc branch
-          let encoded = self.encode_branch(d, has_val, cb_ext);
+          let encoded = self.encode_branch(d);
 
 
           self.reset_depth(d);
@@ -226,8 +209,6 @@ impl<HO: Clone> Clone for CacheNode<HO> {
 			CacheNode::None => CacheNode::None,
 			CacheNode::Hash(ChildReference::Hash(h)) => CacheNode::Hash(ChildReference::Hash(h.clone())),
 			CacheNode::Hash(ChildReference::Inline(h, s)) => CacheNode::Hash(ChildReference::Inline(h.clone(), *s)),
-			CacheNode::Ext(v, ChildReference::Hash(h)) => CacheNode::Ext(v.clone(), ChildReference::Hash(h.clone())),
-			CacheNode::Ext(v, ChildReference::Inline(h, s)) => CacheNode::Ext(v.clone(), ChildReference::Inline(h.clone(), *s)),
 		}
 	}
 }
@@ -236,16 +217,6 @@ fn clone_child_ref<HO: Clone>(r: &ChildReference<HO>) -> ChildReference<HO> {
 	match r {
 		ChildReference::Hash(h) => ChildReference::Hash(h.clone()),
 		ChildReference::Inline(h, s) => ChildReference::Inline(h.clone(), *s),
-	}
-}
-
-impl<HO> CacheNode<HO> {
-	// unsafe accessors TODO bench diff with safe one
-	fn hash(self) -> ChildReference<HO> {
-		if let CacheNode::Hash(h) = self {
-			return h
-		}
-		unreachable!()
 	}
 }
 
@@ -306,8 +277,7 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 		}
 		// last pendings
 		if prev_depth == 0
-      && !depth_queue.1[0].is_some() 
-      && depth_queue.depth_added(0) == 0 {
+      && !depth_queue.touched(0) {
 			// one single element corner case
 			let (k2, v2) = prev_val; 
 			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..],prev_depth).encoded(true);
