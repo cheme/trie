@@ -472,6 +472,12 @@ mod test {
 		let hashdb = MemoryDB::<KeccakHasher, DBValue>::default();
 		reference_trie::compare_impl_no_ext_unordered(data, memdb, hashdb);
 	}
+/*	fn compare_impl_no_ext_unordered_rem(data: Vec<(Vec<u8>,Vec<u8>)>, rem: &[(usize,usize)]) {
+		let memdb = MemoryDB::default();
+		let hashdb = MemoryDB::<KeccakHasher, DBValue>::default();
+		reference_trie::compare_impl_no_ext_unordered_rem(data, rem, memdb, hashdb);
+	}*/
+
 
 
 	fn compare_root(data: Vec<(Vec<u8>,Vec<u8>)>) {
@@ -566,5 +572,17 @@ mod test {
 			(vec![0],vec![0, 0]),
 		]);
 	}
+/*	#[test]
+	fn fuzz_noextrem1 () {
+		compare_impl_no_ext_unordered_rem(vec![
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+			(vec![0],vec![0, 0]),
+		], &[(0,4)]);
+	}*/
 
 }
