@@ -713,7 +713,7 @@ where
 
 					children[ix as usize] = Some(alloc_storage.into());
 
-          if partial.len() - cp == 1 {
+          if partial.len() - cp == 0 {
             InsertAction::Replace(Node::NibbledBranch(
               existing_key.encoded_leftmost(cp,false),
               children,
