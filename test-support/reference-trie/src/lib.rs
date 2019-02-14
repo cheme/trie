@@ -30,6 +30,7 @@ use trie_db::{
 	triedbmut::ChildReference,
 	DBValue,
 	trie_visit,
+	trie_visit_no_ext,
 	ProcessEncodedNode,
 	TrieBuilder,
 	TrieRoot,
@@ -532,3 +533,42 @@ pub fn calc_root_no_ext<I,A,B>(
 	cb.root.unwrap_or(Default::default())
 }
 
+pub fn compare_impl_no_ext(
+	data: Vec<(Vec<u8>,Vec<u8>)>,
+	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+	mut hashdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+) {
+	let root_new = {
+		let mut cb = TrieBuilder::new(&mut hashdb);
+		trie_visit_no_ext::<KeccakHasher, ReferenceNodeCodecNoExt, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+	let root = {
+		let mut root = Default::default();
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for i in 0..data.len() {
+			t.insert(&data[i].0[..],&data[i].1[..]).unwrap();
+		}
+		t.root().clone()
+	};
+	if root != root_new {
+		{
+			let db : &dyn hash_db::HashDB<_,_> = &memdb;
+			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+/*			for a in t.iter().unwrap() {
+				println!("a:{:?}", a);
+			}*/
+		}
+		{
+			let db : &dyn hash_db::HashDB<_,_> = &hashdb;
+			let t = RefTrieDBNoExt::new(&db, &root_new).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:?}", a);
+			}
+		}
+	}
+
+	assert_eq!(root, root_new);
+}

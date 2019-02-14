@@ -119,7 +119,8 @@ where
 	fn encode_branch_no_ext(&mut self, depth:usize, nkey: Option<ElasticArray36<u8>>) -> Vec<u8>	{
 		let v = self.1[depth].take();
 		C::branch_node_nibbled(
-      nkey.as_ref().map(|v|&v[..]).unwrap_or(&[]),
+      // warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
+      nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
 			self.0[depth].0.iter().map(|v| 
 				match v {
 					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
@@ -188,7 +189,7 @@ where
         let is_root = d == 0 && is_last && !parent_branch;
         let h = if no_ext {
           // enc branch
-          self.no_ext(cb_ext, branch_d, is_root, nkey)
+          self.alt_no_ext(cb_ext, branch_d, is_root, nkey)
         } else {
           self.standard_ext(cb_ext, branch_d, is_root, nkey)
         };
@@ -208,7 +209,7 @@ where
 	}
   if let Some(d) = last_branch_ix {
     if no_ext {
-      self.no_ext(cb_ext, d, true, None);
+      self.alt_no_ext(cb_ext, d, true, None);
     } else {
       self.standard_ext(cb_ext, d, true, None);
     }
@@ -239,7 +240,7 @@ where
   }
 
   #[inline(always)]
-  fn no_ext(
+  fn alt_no_ext(
     &mut self,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
     branch_d: usize,
@@ -353,11 +354,7 @@ fn trie_visit_inner<H, C, I, A, B, F>(input: I, cb_ext: &mut F, no_ext: bool)
 			depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 			let ref_branches = prev_val.0;
 			//println!("fbl {} {}", 0, prev_depth);
-      if no_ext {
-			  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
-      } else {
-			  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
-      }
+		  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
 		}
 	} else {
 		// nothing null root corner case
@@ -465,6 +462,12 @@ mod test {
 		let hashdb = MemoryDB::<KeccakHasher, DBValue>::default();
 		reference_trie::compare_impl(data, memdb, hashdb);
 	}
+	fn compare_impl_no_ext(data: Vec<(Vec<u8>,Vec<u8>)>) {
+		let memdb = MemoryDB::default();
+		let hashdb = MemoryDB::<KeccakHasher, DBValue>::default();
+		reference_trie::compare_impl_no_ext(data, memdb, hashdb);
+	}
+
 	fn compare_root(data: Vec<(Vec<u8>,Vec<u8>)>) {
 		let memdb = MemoryDB::default();
 		reference_trie::compare_root(data, memdb);
@@ -534,5 +537,33 @@ mod test {
 			(vec![255],vec![0, 0]),
 		]);
 	}
-	
+	#[test]
+	fn fuzz_noext1 () {
+		compare_impl_no_ext(vec![
+			(vec![0],vec![128, 0]),
+			(vec![128],vec![0, 0]),
+		]);
+	}
+	#[test]
+	fn fuzz_noext2 () {
+		compare_impl_no_ext(vec![
+			(vec![0],vec![6, 255]),
+			(vec![6],vec![255, 186]),
+			(vec![255],vec![186, 255]),
+		]);
+	}
+  /* 
+   * damn wrong 
+TrieDB {
+  hash_count: 0,
+  root: Node::NibbledBranch {
+    slice: , nodes: [
+      Node::NibbledBranch {
+        index: 0, slice: f'f, nodes: [
+          Node::Leaf { index: 0, slice: , value: [6, 255] },
+          Node::Leaf { index: 6, slice: , value: [255, 186] }], value: None }
+    ], value: Some([186, 255])
+  }
+}
+*/
 }
