@@ -528,7 +528,7 @@ pub fn calc_root_no_ext<I,A,B>(
 		B: AsRef<[u8]> + fmt::Debug,
 {
 	let mut cb = TrieRoot::<KeccakHasher, _>::default();
-	trie_db::trie_visit_no_ext::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.into_iter(), &mut cb);
+	trie_db::trie_visit_no_ext::<KeccakHasher, ReferenceNodeCodecNoExt, _, _, _, _>(data.into_iter(), &mut cb);
 	cb.root.unwrap_or(Default::default())
 }
 

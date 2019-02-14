@@ -116,6 +116,18 @@ where
 			), v.as_ref().map(|v|v.as_ref()))
 	}
 
+	fn encode_branch_no_ext(&mut self, depth:usize, nkey: Option<ElasticArray36<u8>>) -> Vec<u8>	{
+		let v = self.1[depth].take();
+		C::branch_node_nibbled(
+      nkey.as_ref().map(|v|&v[..]).unwrap_or(&[]),
+			self.0[depth].0.iter().map(|v| 
+				match v {
+					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
+					CacheNode::None => None,
+				}
+			), v.as_ref().map(|v|v.as_ref()))
+	}
+
 	fn flush_val (
 		&mut self, //(64 * 16 size) 
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
@@ -136,71 +148,111 @@ where
 
 	fn flush_branch(
 		&mut self,
+    no_ext: bool,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize, 
 		old_depth: usize,
 		is_last: bool,
 	) {
-		let mut last_hash = None;
+		let mut last_branch_ix = None;
 		for d in (new_depth..=old_depth).rev() {
-
-			 // check if branch empty TODO switch to optional storage
-			 // depth_size could be a set boolean probably!! (considering flushbranch is only call if
-				// needed -> switch to > 0 for now 
 
 			let touched = self.touched(d);
 
 			if touched || d == new_depth {
-			if let Some((hash, last_d)) = last_hash.take() {
+			if let Some(branch_d) = last_branch_ix.take() {
 
-					// extension case
-//					let enc_nibble = encoded_nibble(&ref_branch.as_ref()[old_depth..new_depth], false); // not leaf!!
-					//println!("encn:{:?}", NibbleSlice::from_encoded(&NibbleSlice::new_offset(&ref_branch.as_ref()[..],new_depth).encoded_leftmost(old_depth - new_depth - 1, false)));
-					let last_root = d == 0 && is_last;
-					// reduce slice for branch
-					let parent_branch = touched;
-					// TODO change this offset to not use nibble slice api (makes it hard to get the index
-					// thing)
-					let (slice_size, offset) = if parent_branch && last_root {
-						// corner branch last
-						(last_d - d - 1, d+1)
-					} else if last_root {
-						// corner case non branch last
-						(last_d - d, d)
-					} else {
-						(last_d - d-1, d+1)
-					};
-					let h = if slice_size > 0 {
-						let nkey = NibbleSlice::new_offset(&ref_branch.as_ref()[..],offset)
-							.encoded_leftmost(slice_size, false);
-						let encoded = C::ext_node(&nkey[..], hash);
-						let h = cb_ext.process(encoded, d == 0 && is_last && !parent_branch);
-						h
-					} else {hash};
+				let last_root = d == 0 && is_last;
+				// reduce slice for branch
+				let parent_branch = touched;
+				// TODO change this offset to not use nibble slice api (makes it hard to get the index
+				// thing)
+				let (slice_size, offset) = if parent_branch && last_root {
+					// corner branch last
+					(branch_d - d - 1, d + 1)
+				} else if last_root {
+					// corner case non branch last
+					(branch_d - d, d)
+				} else {
+					(branch_d - d - 1, d + 1)
+				};
 
-				// clear tmp val
-				// put hash in parent
-					let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
-					self.set_node(d, nibble as usize, CacheNode::Hash(h));
-			}
-
-			}
+				let nkey = if slice_size > 0 {
+					Some(NibbleSlice::new_offset(&ref_branch.as_ref()[..],offset)
+						.encoded_leftmost(slice_size, false))
+        } else {
+          None
+        };
+	
+        let is_root = d == 0 && is_last && !parent_branch;
+        let h = if no_ext {
+          // enc branch
+          self.no_ext(cb_ext, branch_d, is_root, nkey)
+        } else {
+          self.standard_ext(cb_ext, branch_d, is_root, nkey)
+        };
+			  // put hash in parent
+				let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
+				self.set_node(d, nibble as usize, CacheNode::Hash(h));
+		}
+		}
 
 	
-			if d > new_depth || is_last {
-				if touched {
-					// enc branch
-					let encoded = self.encode_branch(d);
-
-
-					self.reset_depth(d);
-					last_hash = Some((cb_ext.process(encoded, d == 0 && is_last), d));
-				}
+		if d > new_depth || is_last {
+			if touched {
+        last_branch_ix = Some(d);
 			}
-
 		}
+
 	}
+  if let Some(d) = last_branch_ix {
+    if no_ext {
+      self.no_ext(cb_ext, d, true, None);
+    } else {
+      self.standard_ext(cb_ext, d, true, None);
+    }
+  }
+	}
+
+  #[inline(always)]
+  fn standard_ext(
+    &mut self,
+		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
+    branch_d: usize,
+    is_root: bool,
+    nkey: Option<ElasticArray36<u8>>,
+    ) -> ChildReference<<H as Hasher>::Out> {
+    // enc branch
+    let encoded = self.encode_branch(branch_d);
+
+    self.reset_depth(branch_d);
+    let branch_hash = cb_ext.process(encoded, is_root && nkey.is_none());
+
+		if let Some(nkey) = nkey {
+			let encoded = C::ext_node(&nkey[..], branch_hash);
+			let h = cb_ext.process(encoded, is_root);
+			h
+		} else {
+      branch_hash
+    }
+  }
+
+  #[inline(always)]
+  fn no_ext(
+    &mut self,
+		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
+    branch_d: usize,
+    is_root: bool,
+    nkey: Option<ElasticArray36<u8>>,
+    ) -> ChildReference<<H as Hasher>::Out> {
+    // enc branch
+    let encoded = self.encode_branch_no_ext(branch_d, nkey);
+
+    self.reset_depth(branch_d);
+    cb_ext.process(encoded, is_root)
+  }
+
 }
 
 impl<HO: Clone> Clone for CacheNode<HO> {
@@ -229,10 +281,23 @@ pub fn trie_visit_no_ext<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 		C: NodeCodec<H>,
 		F: ProcessEncodedNode<<H as Hasher>::Out>,
 	{
-		unimplemented!()
+    trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, true)
 	}
 
 pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 
+	where
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord,
+		B: AsRef<[u8]>,
+		H: Hasher,
+		C: NodeCodec<H>,
+		F: ProcessEncodedNode<<H as Hasher>::Out>,
+	{
+    trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, false)
+	}
+
+// put no_ext as a trait: probably not worth it (fn designed for that)?
+fn trie_visit_inner<H, C, I, A, B, F>(input: I, cb_ext: &mut F, no_ext: bool) 
 	where
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord,
@@ -269,7 +334,7 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 				depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 				let ref_branches = prev_val.0;
 				//println!("fb {} {}", depth_item, prev_depth);
-				depth_queue.flush_branch(cb_ext, ref_branches, depth_item, prev_depth, false); // TODO flush at prev flush depth instead ??
+				depth_queue.flush_branch(no_ext, cb_ext, ref_branches, depth_item, prev_depth, false); // TODO flush at prev flush depth instead ??
 			}
 
 			prev_val = (k, v);
@@ -288,7 +353,11 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 			depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 			let ref_branches = prev_val.0;
 			//println!("fbl {} {}", 0, prev_depth);
-			depth_queue.flush_branch(cb_ext, ref_branches, 0, prev_depth, true);
+      if no_ext {
+			  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
+      } else {
+			  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
+      }
 		}
 	} else {
 		// nothing null root corner case
