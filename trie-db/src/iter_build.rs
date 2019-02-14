@@ -69,7 +69,7 @@ enum CacheNode<HO> {
 // (64 * 16) aka 2*byte size of key * nb nibble value, 2 being byte/nible (8/4)
 // TODO test others layout
 // first usize to get nb of added value, second usize last added index
-// second str is in branch value and can be remove for fix key scenario
+// second str is in branch value
 struct CacheAccum<H: Hasher,C,V> (Vec<(Vec<CacheNode<<H as Hasher>::Out>>, usize, usize)>,Vec<Option<V>>,PhantomData<(H,C)>);
 
 /// initially allocated cache
@@ -125,14 +125,7 @@ where
 			self.0[depth].0.iter().map(|v| 
 				match v {
 					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
-					CacheNode::Ext(n, h) => {
-						let mut n = n.to_vec();
-						n.reverse();// TODO use proper encoded_nibble algo.
-						let enc_nibble = encoded_nibble(&n[..], false); // not leaf!!
-						let encoded = C::ext_node(&enc_nibble[..], clone_child_ref(h));
-						let h = cb_ext.process(encoded, false);
-						Some(h)
-					},
+					CacheNode::Ext(n, h) => unreachable!(),
 					CacheNode::None => None,
 				}
 			), v.as_ref().map(|v|v.as_ref()))
@@ -144,16 +137,16 @@ where
 		target_depth: usize, 
 		(k2, v2): &(impl AsRef<[u8]>,impl AsRef<[u8]>), 
 	) {
-		let nibble_value = nibble_at(&k2.as_ref()[..], target_depth-1);
+		let nibble_value = nibble_at(&k2.as_ref()[..], target_depth);
 		// is it a branch value (two candidate same ix)
-		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..],target_depth).encoded(true);
+		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..],target_depth+1).encoded(true);
 		// Note: fwiu, having fixed key size, all values are in leaf (no value in
 		// branch). TODO run metrics on a node to count branch with values
 		let encoded = C::leaf_node(&nkey.as_ref()[..], &v2.as_ref()[..]);
 		let hash = cb_ext.process(encoded, false);
 
 		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth - 1, nibble_value as usize, CacheNode::Hash(hash));
+		self.set_node(target_depth, nibble_value as usize, CacheNode::Hash(hash));
 	}
 
 	fn flush_branch(
@@ -161,58 +154,68 @@ where
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize, 
-		old_depth: usize, 
+		old_depth: usize,
+    is_last: bool,
 	) {
-		for d in (new_depth..old_depth).rev() {
-	 
-			// check if branch empty TODO switch to optional storage
-			let has_val = self.1[d].is_some();
-			let depth_size = self.depth_added(d);
-			assert!(depth_size != 0);
-			if !has_val && depth_size == 1 {
-				// extension case
-				let unit = self.depth_last_added(d);
+    let last_branch_written = new_depth;
+    let mut last_hash = None;
+		for d in (new_depth..=old_depth).rev() {
 
-				let node = self.rem_node(d, unit);
-				// already extension
-				if let CacheNode::Ext(mut n,v_hash) = node {
-					if d > 0 {
-						let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d-1);
-						n.push(unit as u8);
-						self.set_node(d-1, nibble as usize, CacheNode::Ext(n, v_hash));
-					} else {
-						n.push(unit as u8);
-						n.reverse(); // TODO use proper encoded_nibble algo.
-						let enc_nibble = encoded_nibble(&n[..], false);
-						let encoded = C::ext_node(&enc_nibble[..], v_hash);
-						cb_ext.process(encoded, true);
-					}
-				} else {
-					let v_hash = node.hash(); // TODO proper match!!
-					if d > 0 {
-						let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d-1);
-						// TODO capacity vec of 64? TODO super ineficient : could be removed on next iteration
-            // if using pointer (ref on rem_node return value) can be ok
-						self.set_node(d-1, nibble as usize, CacheNode::Ext(vec![unit as u8], v_hash));
-					} else {
-						let enc_nibble = encoded_nibble(&[unit as u8], false);
-						let encoded = C::ext_node(&enc_nibble[..], v_hash);
-						cb_ext.process(encoded, true);
-					}
-				}
-			} else {
-				let encoded = self.encode_branch(d, has_val, cb_ext);
-				self.reset_depth(d);
-				let hash = cb_ext.process(encoded, d == 0);
+			let has_val = self.1[d].is_some();
+       // check if branch empty TODO switch to optional storage
+       // depth_size could be a set boolean probably!! (considering flushbranch is only call if
+        // needed -> switch to > 0 for now 
+
+      let depth_size = self.depth_added(d);
+
+			if has_val || depth_size > 0 || d == new_depth {
+      if let Some((hash, last_d)) = last_hash.take() {
+
+          // extension case
+//          let enc_nibble = encoded_nibble(&ref_branch.as_ref()[old_depth..new_depth], false); // not leaf!!
+          //println!("encn:{:?}", NibbleSlice::from_encoded(&NibbleSlice::new_offset(&ref_branch.as_ref()[..],new_depth).encoded_leftmost(old_depth - new_depth - 1, false)));
+          let last_root = d == 0 && is_last;
+          // reduce slice for branch
+          let parent_branch = has_val || depth_size > 0;
+          // TODO change this offset to not use nibble slice api (makes it hard to get the index
+          // thing)
+          let (slice_size, offset) = if parent_branch && last_root {
+            // corner branch last
+            (last_d - d - 1, d+1)
+          } else if last_root {
+            // corner case non branch last
+            (last_d - d, d)
+          } else {
+            (last_d - d-1, d+1)
+          };
+          let h = if slice_size > 0 {
+            let nkey = NibbleSlice::new_offset(&ref_branch.as_ref()[..],offset)
+              .encoded_leftmost(slice_size, false);
+            let encoded = C::ext_node(&nkey[..], hash);
+            let h = cb_ext.process(encoded, d == 0 && is_last && !parent_branch);
+            h
+          } else {hash};
+
 				// clear tmp val
 				// put hash in parent
-				if d > 0 {
-					let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d-1);
-					self.set_node(d-1, nibble as usize, CacheNode::Hash(hash));
-				} else {
-					// reachable !!
-				}
-			}
+  				let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
+					self.set_node(d, nibble as usize, CacheNode::Hash(h));
+	    }
+
+      }
+
+	
+      if d > new_depth || is_last {
+        if has_val || depth_size > 0 {
+          // enc branch
+          let encoded = self.encode_branch(d, has_val, cb_ext);
+
+
+          self.reset_depth(d);
+          last_hash = Some((cb_ext.process(encoded, d == 0 && is_last), d));
+        }
+      }
+
 		}
 	}
 }
@@ -271,44 +274,54 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
 	if let Some(mut prev_val) = iter_input.next() {
+    //println!("!st{:?},{:?}",&prev_val.0.as_ref(),&prev_val.1.as_ref());
 		// depth of last item TODO rename to last_depth
 		let mut prev_depth = 0;
 
 		for (k, v) in iter_input {
+      //println!("!{:?},{:?}",&k.as_ref(),&v.as_ref());
 			let common_depth = biggest_depth(&prev_val.0.as_ref()[..], &k.as_ref()[..]);
 			// 0 is a reserved value : could use option
-			let depth_item = common_depth + 1;
+			let depth_item = common_depth;
 			if common_depth == prev_val.0.as_ref().len() * 2 {
+        //println!("stack {} ", common_depth);
 				// the new key include the previous one : branch value case
+        // just stored value at branch depth
 				depth_queue.1[common_depth] = Some(prev_val.1);
 			} else if depth_item >= prev_depth {
-				// put prev with next
+        //println!("fv {}", depth_item);
+				// put prev with next (common branch prev val can be flush)
 				depth_queue.flush_val(cb_ext, depth_item, &prev_val);
 			} else if depth_item < prev_depth {
-				// do not put with next
+        //println!("fbv {}", prev_depth);
+				// do not put with next, previous is last of a branch
 				depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 				let ref_branches = prev_val.0;
-				depth_queue.flush_branch(cb_ext, ref_branches, depth_item, prev_depth);
+        //println!("fb {} {}", depth_item, prev_depth);
+				depth_queue.flush_branch(cb_ext, ref_branches, depth_item, prev_depth, false); // TODO flush at prev flush depth instead ??
 			}
 
 			prev_val = (k, v);
 			prev_depth = depth_item;
 		}
 		// last pendings
-		if prev_depth == 0 {
-			// one element
+		if prev_depth == 0
+      && !depth_queue.1[0].is_some() 
+      && depth_queue.depth_added(0) == 0 {
+			// one single element corner case
 			let (k2, v2) = prev_val; 
 			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..],prev_depth).encoded(true);
 			let encoded = C::leaf_node(&nkey.as_ref()[..], &v2.as_ref()[..]);
 			cb_ext.process(encoded, true);
 		} else {
+      //println!("fbvl {}", prev_depth);
 			depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 			let ref_branches = prev_val.0;
-
-			depth_queue.flush_branch(cb_ext, ref_branches, 0, prev_depth);
+      //println!("fbl {} {}", 0, prev_depth);
+			depth_queue.flush_branch(cb_ext, ref_branches, 0, prev_depth, true);
 		}
 	} else {
-		// nothing null root case
+		// nothing null root corner case
 		cb_ext.process(C::empty_node(), true);
 	}
 }
@@ -340,6 +353,7 @@ impl<'a, H: Hasher, V, DB: HashDB<H,V>> ProcessEncodedNode<<H as Hasher>::Out> f
 		}
 		let hash = self.db.insert(&enc_ext[..]);
 		if is_root {
+      //println!("isroot touch");
 			self.root = Some(hash.clone());
 		};
 		ChildReference::Hash(hash)
@@ -400,7 +414,7 @@ mod test {
 	}
 
 	#[test]
-	fn root_extension () {
+	fn root_extension_one () {
 		compare_impl(vec![
 			(vec![1u8,2u8,3u8,3u8],vec![8u8;32]),
 			(vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
@@ -419,7 +433,7 @@ mod test {
 
 
 	#[test]
-	fn trie_middle_node () {
+	fn trie_middle_node1 () {
 		compare_impl(vec![
 			(vec![1u8,2u8],vec![8u8;32]),
 			(vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
@@ -454,4 +468,32 @@ mod test {
 			(vec![1u8,2u8,3u8,5u8,3u8],vec![7u8;2]),
 		]);
  }
+	#[test]
+	fn fuzz1 () {
+		compare_impl(vec![
+			(vec![01u8],vec![42u8,9]),
+			(vec![01u8,0u8],vec![0u8,0]),
+			(vec![255u8,2u8],vec![1u8,0]),
+		]);
+	}
+	#[test]
+	fn fuzz2 () {
+		compare_impl(vec![
+			(vec![0,01u8],vec![42u8,9]),
+			(vec![0,01u8,0u8],vec![0u8,0]),
+			(vec![0,255u8,2u8],vec![1u8,0]),
+		]);
+	}
+	#[test]
+	fn fuzz3 () {
+		compare_impl(vec![
+      (vec![0],vec![196, 255]),
+ /*     (vec![48],vec![138, 255]),
+      (vec![67],vec![0, 0]),
+      (vec![128],vec![255, 0]), */
+      (vec![247],vec![0, 196]),
+      (vec![255],vec![0, 0]),
+		]);
+	}
+	
 }
