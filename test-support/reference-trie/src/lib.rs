@@ -572,3 +572,46 @@ pub fn compare_impl_no_ext(
 
 	assert_eq!(root, root_new);
 }
+
+pub fn compare_impl_no_ext_unordered(
+	data: Vec<(Vec<u8>,Vec<u8>)>,
+	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+	mut hashdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+) {
+  let mut b_map = std::collections::btree_map::BTreeMap::new();
+	let root = {
+		let mut root = Default::default();
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for i in 0..data.len() {
+			t.insert(&data[i].0[..],&data[i].1[..]).unwrap();
+      b_map.insert(data[i].0.clone(),data[i].1.clone());
+		}
+		t.root().clone()
+	};
+	let root_new = {
+		let mut cb = TrieBuilder::new(&mut hashdb);
+		trie_visit_no_ext::<KeccakHasher, ReferenceNodeCodecNoExt, _, _, _, _>(b_map.into_iter(), &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+
+	if root != root_new {
+		{
+			let db : &dyn hash_db::HashDB<_,_> = &memdb;
+			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+/*			for a in t.iter().unwrap() {
+				println!("a:{:?}", a);
+			}*/
+		}
+		{
+			let db : &dyn hash_db::HashDB<_,_> = &hashdb;
+			let t = RefTrieDBNoExt::new(&db, &root_new).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:?}", a);
+			}
+		}
+	}
+
+	assert_eq!(root, root_new);
+}
