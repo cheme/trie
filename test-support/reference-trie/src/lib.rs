@@ -556,9 +556,9 @@ pub fn compare_impl_no_ext(
 			let db : &dyn hash_db::HashDB<_,_> = &memdb;
 			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
 			println!("{:?}", t);
-/*			for a in t.iter().unwrap() {
+			for a in t.iter().unwrap() {
 				println!("a:{:?}", a);
-			}*/
+			}
 		}
 		{
 			let db : &dyn hash_db::HashDB<_,_> = &hashdb;
