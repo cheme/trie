@@ -47,6 +47,7 @@ fn nibble_at(v1: &[u8], ix: usize) -> u8 {
 	}
 }
 
+/*
 // TODO remove for nibbleslice api TODO can be variable size
 fn encoded_nibble(ori: &[u8], is_leaf: bool) -> ElasticArray36<u8> {
 	let l = ori.len();
@@ -59,17 +60,24 @@ fn encoded_nibble(ori: &[u8], is_leaf: bool) -> ElasticArray36<u8> {
 	}
 	r
 }
+*/
 
-enum CacheNode<HO> {
-	None,
-	Hash(ChildReference<HO>),
-}
+type CacheNode<HO> = Option<ChildReference<HO>>;
 
 // (64 * 16) aka 2*byte size of key * nb nibble value, 2 being byte/nible (8/4)
 // TODO test others layout
 // first usize to get nb of added value, second usize last added index
 // second str is in branch value
-struct CacheAccum<H: Hasher,C,V> (Vec<(Vec<CacheNode<<H as Hasher>::Out>>, bool)>,Vec<Option<V>>,PhantomData<(H,C)>);
+struct CacheAccum<H: Hasher,C,V> (Vec<([CacheNode<<H as Hasher>::Out>; NIBBLE_SIZE], bool)>,Vec<Option<V>>,PhantomData<(H,C)>);
+
+fn new_vec_slice_buff<HO>() -> [CacheNode<HO>; NIBBLE_SIZE] {
+	[
+		None, None, None, None,
+		None, None, None, None,
+		None, None, None, None,
+		None, None, None, None,
+	]
+}
 
 /// initially allocated cache
 const INITIAL_DEPTH: usize = 10;
@@ -80,16 +88,17 @@ where
 	C: NodeCodec<H>,
 	V: AsRef<[u8]>,
 	{
-	// TODO switch to static and bench
 	fn new() -> Self {
-		CacheAccum(vec![(vec![CacheNode::None; NIBBLE_SIZE], false); INITIAL_DEPTH],
+		let mut v = Vec::with_capacity(INITIAL_DEPTH);
+		(0..INITIAL_DEPTH).for_each(|_|v.push((new_vec_slice_buff(), false)));
+		CacheAccum(v,
 		std::iter::repeat_with(|| None).take(INITIAL_DEPTH).collect() // vec![None; DEPTH] for non clone
 		, PhantomData)
 	}
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
 		if depth >= self.0.len() {
-			for _i in self.0.len()..depth+1 { 
-				self.0.push((vec![CacheNode::None; NIBBLE_SIZE], false));
+			for _i in self.0.len()..depth + 1 { 
+				self.0.push((new_vec_slice_buff(), false));
 				self.1.push(None);
 			}
 		}
@@ -102,31 +111,10 @@ where
 	}
 
 	fn reset_depth(&mut self, depth:usize) {
-		self.0[depth] = (vec![CacheNode::None; NIBBLE_SIZE], false);
-	}
-
-	fn encode_branch(&mut self, depth:usize) -> Vec<u8>	{
-		let v = self.1[depth].take();
-		C::branch_node(
-			self.0[depth].0.iter().map(|v| 
-				match v {
-					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
-					CacheNode::None => None,
-				}
-			), v.as_ref().map(|v|v.as_ref()))
-	}
-
-	fn encode_branch_no_ext(&mut self, depth:usize, nkey: Option<ElasticArray36<u8>>) -> Vec<u8>	{
-		let v = self.1[depth].take();
-		C::branch_node_nibbled(
-			// warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
-			nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
-			self.0[depth].0.iter().map(|v| 
-				match v {
-					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
-					CacheNode::None => None,
-				}
-			), v.as_ref().map(|v|v.as_ref()))
+		self.0[depth].1 = false;
+		for i in 0..NIBBLE_SIZE {
+			self.0[depth].0[i] = None;
+		}
 	}
 
 	fn flush_val (
@@ -144,7 +132,7 @@ where
 		let hash = cb_ext.process(encoded, false);
 
 		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value as usize, CacheNode::Hash(hash));
+		self.set_node(target_depth, nibble_value as usize, Some(hash));
 	}
 
 	fn flush_branch(
@@ -195,8 +183,8 @@ where
 				};
 				// put hash in parent
 				let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
-				self.set_node(d, nibble as usize, CacheNode::Hash(h));
-		}
+				self.set_node(d, nibble as usize, Some(h));
+			}
 		}
 
 	
@@ -225,8 +213,8 @@ where
 		nkey: Option<ElasticArray36<u8>>,
 		) -> ChildReference<<H as Hasher>::Out> {
 		// enc branch
-		let encoded = self.encode_branch(branch_d);
-
+		let v = self.1[branch_d].take();
+		let encoded = C::branch_node(self.0[branch_d].0.iter(), v.as_ref().map(|v|v.as_ref()));
 		self.reset_depth(branch_d);
 		let branch_hash = cb_ext.process(encoded, is_root && nkey.is_none());
 
@@ -248,29 +236,16 @@ where
 		nkey: Option<ElasticArray36<u8>>,
 		) -> ChildReference<<H as Hasher>::Out> {
 		// enc branch
-		let encoded = self.encode_branch_no_ext(branch_d, nkey);
+		let v = self.1[branch_d].take();
+		let encoded = C::branch_node_nibbled(
+			// warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
+			nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
+			self.0[branch_d].0.iter(), v.as_ref().map(|v|v.as_ref()));
 
 		self.reset_depth(branch_d);
 		cb_ext.process(encoded, is_root)
 	}
 
-}
-
-impl<HO: Clone> Clone for CacheNode<HO> {
-	fn clone(&self) -> Self {
-		match self {
-			CacheNode::None => CacheNode::None,
-			CacheNode::Hash(ChildReference::Hash(h)) => CacheNode::Hash(ChildReference::Hash(h.clone())),
-			CacheNode::Hash(ChildReference::Inline(h, s)) => CacheNode::Hash(ChildReference::Inline(h.clone(), *s)),
-		}
-	}
-}
-
-fn clone_child_ref<HO: Clone>(r: &ChildReference<HO>) -> ChildReference<HO> {
-	match r {
-		ChildReference::Hash(h) => ChildReference::Hash(h.clone()),
-		ChildReference::Inline(h, s) => ChildReference::Inline(h.clone(), *s),
-	}
 }
 
 pub fn trie_visit_no_ext<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 

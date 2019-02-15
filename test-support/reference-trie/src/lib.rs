@@ -35,6 +35,7 @@ use trie_db::{
 	TrieBuilder,
 	TrieRoot,
 };
+use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
 
 pub use trie_db::{Trie, TrieMut, NibbleSlice, NodeCodec, Recorder, Record};
@@ -316,9 +317,9 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 		output
 	}
 
-	fn branch_node<I>(children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
-		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
-	{
+	fn branch_node(
+    children: impl Iterator<Item = impl Borrow<Option<ChildReference<<KeccakHasher as Hasher>::Out>>>>,
+    maybe_value: Option<&[u8]>) -> Vec<u8> {
 		let mut output = vec![0, 0, 0];
 		let have_value = if let Some(value) = maybe_value {
 			value.encode_to(&mut output);
@@ -326,13 +327,13 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 		} else {
 			false
 		};
-		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child {
+		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
 				h.as_ref().encode_to(&mut output);
 				true
 			}
-			Some(ChildReference::Inline(inline_data, len)) => {
-				(&AsRef::<[u8]>::as_ref(&inline_data)[..len]).encode_to(&mut output);
+			&Some(ChildReference::Inline(inline_data, len)) => {
+				inline_data.as_ref()[..len].encode_to(&mut output);
 				true
 			}
 			None => false,
@@ -341,9 +342,10 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodec {
 		output
 	}
 
-	fn branch_node_nibbled<I>(partial: &[u8], children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
-		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
-	{
+	fn branch_node_nibbled(
+    _partial: &[u8],
+    _children: impl Iterator<Item = impl Borrow<Option<ChildReference<<KeccakHasher as Hasher>::Out>>>>,
+    _maybe_value: Option<&[u8]>) -> Vec<u8> {
     unreachable!()
 	}
 
@@ -412,15 +414,16 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodecNoExt {
     unreachable!()
 	}
 
-	fn branch_node<I>(_children: I, _maybe_value: Option<&[u8]>) -> Vec<u8> where
-		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
-	{
+	fn branch_node(
+    _children: impl Iterator<Item = impl Borrow<Option<ChildReference<<KeccakHasher as Hasher>::Out>>>>,
+    _maybe_value: Option<&[u8]>) -> Vec<u8> {
     unreachable!()
 	}
 
-	fn branch_node_nibbled<I>(partial: &[u8], children: I, maybe_value: Option<&[u8]>) -> Vec<u8> where
-		I: IntoIterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>> + Iterator<Item=Option<ChildReference<<KeccakHasher as Hasher>::Out>>>
-	{
+	fn branch_node_nibbled(
+    partial: &[u8],
+    children: impl Iterator<Item = impl Borrow<Option<ChildReference<<KeccakHasher as Hasher>::Out>>>>,
+    maybe_value: Option<&[u8]>) -> Vec<u8> {
 		let mut output = Vec::with_capacity(partial.len() + 4); // TODO choose a good capacity estimation value (here it is only partial)
     for _ in 0..3 {
       output.push(0);
@@ -439,13 +442,13 @@ impl NodeCodec<KeccakHasher> for ReferenceNodeCodecNoExt {
 		} else {
 			false
 		};
-		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child {
+		let prefix = branch_node(have_value, children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
 				h.as_ref().encode_to(&mut output);
 				true
 			}
-			Some(ChildReference::Inline(inline_data, len)) => {
-				(&AsRef::<[u8]>::as_ref(&inline_data)[..len]).encode_to(&mut output);
+			&Some(ChildReference::Inline(inline_data, len)) => {
+				inline_data[..len].encode_to(&mut output);
 				true
 			}
 			None => false,

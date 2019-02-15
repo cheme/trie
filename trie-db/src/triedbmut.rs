@@ -353,8 +353,8 @@ where
 	/// Commit the in-memory changes to disk, freeing their storage and
 	/// updating the state root.
 	pub fn commit(&mut self) {
-    self.0.commit()
-  }
+		self.0.commit()
+	}
 
 }
 
@@ -729,26 +729,26 @@ where
 
 					children[ix as usize] = Some(alloc_storage.into());
 
-          if partial.len() - cp == 0 {
-            InsertAction::Replace(Node::NibbledBranch(
-              existing_key.encoded_leftmost(cp,false),
-              children,
-              Some(value),
-              )
-            )
-          } else {
-            let ix = partial.at(cp);
+					if partial.len() - cp == 0 {
+						InsertAction::Replace(Node::NibbledBranch(
+							existing_key.encoded_leftmost(cp,false),
+							children,
+							Some(value),
+							)
+						)
+					} else {
+						let ix = partial.at(cp);
 						let leaf = self.storage.alloc(Stored::New(Node::Leaf(partial.mid(cp + 1).encoded(true), value)));
 
-					  children[ix as usize] = Some(leaf.into());
-            InsertAction::Replace(Node::NibbledBranch(
-              existing_key.encoded_leftmost(cp,false),
-              children,
-              None,
-              )
-            )
+						children[ix as usize] = Some(leaf.into());
+						InsertAction::Replace(Node::NibbledBranch(
+							existing_key.encoded_leftmost(cp,false),
+							children,
+							None,
+							)
+						)
 
-          }
+					}
 
 				} else {
 					// append after cp == existing_key and partial > cp
