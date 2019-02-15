@@ -61,7 +61,11 @@ fn root_old(c: &mut Criterion) {
 	c.bench_function_over_inputs("root_old",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
 		b.iter(||{
 			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone();
-			reference_trie::ref_trie_root(datac);
+			let inputc = datac
+				.iter()
+				.map(|v|(&v.0, &v.1));
+
+			reference_trie::ref_trie_root(inputc);
 		})
 	,data);
 }
