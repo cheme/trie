@@ -324,7 +324,6 @@ where
 	H: Hasher + 'a,
 	C: NodeCodec<H>;
 
-
 impl<'a, H, C> TrieDBMutNoExt<'a, H, C>
 where
 	H: Hasher,
@@ -340,6 +339,23 @@ where
 	pub fn from_existing(db: &'a mut HashDB<H, DBValue>, root: &'a mut H::Out) -> Result<Self, H::Out, C::Error> {
 		Ok(TrieDBMutNoExt(TrieDBMut::from_existing(db, root)?))
 	}
+
+	/// Get the backing database.
+	pub fn db(&self) -> &HashDB<H, DBValue> {
+		self.0.db()
+	}
+
+	/// Get the backing database mutably.
+	pub fn db_mut(&mut self) -> &mut HashDB<H, DBValue> {
+		self.0.db_mut()
+	}
+
+	/// Commit the in-memory changes to disk, freeing their storage and
+	/// updating the state root.
+	pub fn commit(&mut self) {
+    self.0.commit()
+  }
+
 }
 
 
