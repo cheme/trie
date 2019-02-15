@@ -55,7 +55,7 @@ fn root_old(c: &mut Criterion) {
 		input("./testset0"), // 286 vals
 		input("./testset1"), // 571 vals
 		input("./testset2"), // 5649 vals
-		input("./testset3"), // 11376 vals
+		//input("./testset3"), // 11376 vals
 	];
 
 	c.bench_function_over_inputs("root_old",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
@@ -72,13 +72,19 @@ fn root_new(c: &mut Criterion) {
 		input("./testset0"),
 		input("./testset1"),
 		input("./testset2"),
-		input("./testset3"),
+		//input("./testset3"),
 	];
 
 	c.bench_function_over_inputs("root_new",|b: &mut Bencher, data: &Vec<(Vec<u8>,Vec<u8>)>|
 		b.iter(||{
 			let datac:Vec<(Vec<u8>,Vec<u8>)> = data.clone();
-			reference_trie::calc_root(datac);
+			// this is in `ref_trie_root` added here to make things comparable
+			let inputc = datac
+				.into_iter()
+				.collect::<std::collections::BTreeMap<_, _>>();
+
+
+			reference_trie::calc_root(inputc);
 		})
 	,data);
 }
