@@ -119,8 +119,8 @@ where
 	fn encode_branch_no_ext(&mut self, depth:usize, nkey: Option<ElasticArray36<u8>>) -> Vec<u8>	{
 		let v = self.1[depth].take();
 		C::branch_node_nibbled(
-      // warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
-      nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
+			// warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
+			nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
 			self.0[depth].0.iter().map(|v| 
 				match v {
 					CacheNode::Hash(h) => Some(clone_child_ref(h)), // TODO try to avoid that clone
@@ -149,7 +149,7 @@ where
 
 	fn flush_branch(
 		&mut self,
-    no_ext: bool,
+		no_ext: bool,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize, 
@@ -182,18 +182,18 @@ where
 				let nkey = if slice_size > 0 {
 					Some(NibbleSlice::new_offset(&ref_branch.as_ref()[..],offset)
 						.encoded_leftmost(slice_size, false))
-        } else {
-          None
-        };
+				} else {
+					None
+				};
 	
-        let is_root = d == 0 && is_last && !parent_branch;
-        let h = if no_ext {
-          // enc branch
-          self.alt_no_ext(cb_ext, branch_d, is_root, nkey)
-        } else {
-          self.standard_ext(cb_ext, branch_d, is_root, nkey)
-        };
-			  // put hash in parent
+				let is_root = d == 0 && is_last && !parent_branch;
+				let h = if no_ext {
+					// enc branch
+					self.alt_no_ext(cb_ext, branch_d, is_root, nkey)
+				} else {
+					self.standard_ext(cb_ext, branch_d, is_root, nkey)
+				};
+				// put hash in parent
 				let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
 				self.set_node(d, nibble as usize, CacheNode::Hash(h));
 		}
@@ -202,57 +202,57 @@ where
 	
 		if d > new_depth || is_last {
 			if touched {
-        last_branch_ix = Some(d);
+				last_branch_ix = Some(d);
 			}
 		}
 
 	}
-  if let Some(d) = last_branch_ix {
-    if no_ext {
-      self.alt_no_ext(cb_ext, d, true, None);
-    } else {
-      self.standard_ext(cb_ext, d, true, None);
-    }
-  }
+	if let Some(d) = last_branch_ix {
+		if no_ext {
+			self.alt_no_ext(cb_ext, d, true, None);
+		} else {
+			self.standard_ext(cb_ext, d, true, None);
+		}
+	}
 	}
 
-  #[inline(always)]
-  fn standard_ext(
-    &mut self,
+	#[inline(always)]
+	fn standard_ext(
+		&mut self,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
-    branch_d: usize,
-    is_root: bool,
-    nkey: Option<ElasticArray36<u8>>,
-    ) -> ChildReference<<H as Hasher>::Out> {
-    // enc branch
-    let encoded = self.encode_branch(branch_d);
+		branch_d: usize,
+		is_root: bool,
+		nkey: Option<ElasticArray36<u8>>,
+		) -> ChildReference<<H as Hasher>::Out> {
+		// enc branch
+		let encoded = self.encode_branch(branch_d);
 
-    self.reset_depth(branch_d);
-    let branch_hash = cb_ext.process(encoded, is_root && nkey.is_none());
+		self.reset_depth(branch_d);
+		let branch_hash = cb_ext.process(encoded, is_root && nkey.is_none());
 
 		if let Some(nkey) = nkey {
 			let encoded = C::ext_node(&nkey[..], branch_hash);
 			let h = cb_ext.process(encoded, is_root);
 			h
 		} else {
-      branch_hash
-    }
-  }
+			branch_hash
+		}
+	}
 
-  #[inline(always)]
-  fn alt_no_ext(
-    &mut self,
+	#[inline(always)]
+	fn alt_no_ext(
+		&mut self,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
-    branch_d: usize,
-    is_root: bool,
-    nkey: Option<ElasticArray36<u8>>,
-    ) -> ChildReference<<H as Hasher>::Out> {
-    // enc branch
-    let encoded = self.encode_branch_no_ext(branch_d, nkey);
+		branch_d: usize,
+		is_root: bool,
+		nkey: Option<ElasticArray36<u8>>,
+		) -> ChildReference<<H as Hasher>::Out> {
+		// enc branch
+		let encoded = self.encode_branch_no_ext(branch_d, nkey);
 
-    self.reset_depth(branch_d);
-    cb_ext.process(encoded, is_root)
-  }
+		self.reset_depth(branch_d);
+		cb_ext.process(encoded, is_root)
+	}
 
 }
 
@@ -282,7 +282,7 @@ pub fn trie_visit_no_ext<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 		C: NodeCodec<H>,
 		F: ProcessEncodedNode<<H as Hasher>::Out>,
 	{
-    trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, true)
+		trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, true)
 	}
 
 pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F) 
@@ -294,7 +294,7 @@ pub fn trie_visit<H, C, I, A, B, F>(input: I, cb_ext: &mut F)
 		C: NodeCodec<H>,
 		F: ProcessEncodedNode<<H as Hasher>::Out>,
 	{
-    trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, false)
+		trie_visit_inner::<H, C, I, A, B, F>(input, cb_ext, false)
 	}
 
 // put no_ext as a trait: probably not worth it (fn designed for that)?
@@ -354,7 +354,7 @@ fn trie_visit_inner<H, C, I, A, B, F>(input: I, cb_ext: &mut F, no_ext: bool)
 			depth_queue.flush_val(cb_ext, prev_depth, &prev_val);
 			let ref_branches = prev_val.0;
 			//println!("fbl {} {}", 0, prev_depth);
-		  depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
+			depth_queue.flush_branch(no_ext, cb_ext, ref_branches, 0, prev_depth, true);
 		}
 	} else {
 		// nothing null root corner case
@@ -567,7 +567,7 @@ mod test {
 	}
 	#[test]
 	fn root_extension_tierce_big () {
-    // on more content unhashed would hash
+		// on more content unhashed would hash
 		compare_unhashed(vec![
 			(vec![1u8,2u8,3u8,3u8],vec![8u8;32]),
 			(vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
@@ -630,6 +630,18 @@ mod test {
 			(vec![255],vec![186, 255]),
 		]);
 	}
+	#[test]
+	fn fuzz_noext2_bis () {
+		compare_impl_no_ext(vec![
+			(vec![0xaa], vec![0xa0]),
+			(vec![0xaa, 0xaa], vec![0xaa]),
+			(vec![0xaa, 0xbb], vec![0xab]),
+			(vec![0xbb], vec![0xb0]),
+			(vec![0xbb, 0xbb], vec![0xbb]),
+			(vec![0xbb, 0xcc], vec![0xbc]),
+		]);
+	}
+
 	#[test]
 	fn fuzz_noext3 () {
 		compare_impl_no_ext_unordered(vec![
