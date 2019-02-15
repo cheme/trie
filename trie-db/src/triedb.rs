@@ -443,8 +443,8 @@ impl<'a, H: Hasher, C: NodeCodec<H>> Iterator for TrieDBIterator<'a, H, C> {
 							},
 							OwnedNode::Branch(_) => { self.key_nibbles.pop(); },
 							OwnedNode::NibbledBranch(ref n,_) => {
-								let l = self.key_nibbles.len() + 1;
-								self.key_nibbles.truncate(l - n.len());
+								let l = self.key_nibbles.len();
+								self.key_nibbles.truncate(l - n.len() - 1);
 							},
 							OwnedNode::Empty => {},
 						}
@@ -637,6 +637,25 @@ mod tests {
 		assert_eq!(d.iter().map(|i| i.clone().into_vec()).collect::<Vec<_>>(), t.iter().unwrap().map(|x| x.unwrap().0).collect::<Vec<_>>());
 		assert_eq!(d, t.iter().unwrap().map(|x| x.unwrap().1).collect::<Vec<_>>());
 	}
+
+	#[test]
+	fn iterator_no_ext() {
+		let d = vec![DBValue::from_slice(b"A"), DBValue::from_slice(b"AA"), DBValue::from_slice(b"AB"), DBValue::from_slice(b"B")];
+
+		let mut memdb = MemoryDB::<KeccakHasher, DBValue>::default();
+		let mut root = Default::default();
+		{
+			let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+			for x in &d {
+				t.insert(x, x).unwrap();
+			}
+		}
+
+		let t = RefTrieDBNoExt::new(&memdb, &root).unwrap();
+		assert_eq!(d.iter().map(|i| i.clone().into_vec()).collect::<Vec<_>>(), t.iter().unwrap().map(|x| x.unwrap().0).collect::<Vec<_>>());
+		assert_eq!(d, t.iter().unwrap().map(|x| x.unwrap().1).collect::<Vec<_>>());
+	}
+
 
 	#[test]
 	fn iterator_seek() {
