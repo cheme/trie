@@ -449,15 +449,9 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashed<H> {
 
 #[cfg(test)]
 mod test {
-	use super::*;
-	use env_logger;
-	use standardmap::*;
 	use DBValue;
 	use memory_db::MemoryDB;
-	use hash_db::{Hasher, HashDB};
 	use keccak_hasher::KeccakHasher;
-	use reference_trie::{RefTrieDBMut, RefTrieDB, Trie, TrieMut,
-	ReferenceNodeCodec, ref_trie_root};
 
 	#[test]
 	fn trie_root_empty () {
@@ -507,8 +501,7 @@ mod test {
 		reference_trie::compare_root(data, memdb);
 	}
 	fn compare_unhashed(data: Vec<(Vec<u8>,Vec<u8>)>) {
-		let memdb = MemoryDB::default();
-		reference_trie::compare_unhashed(data, memdb);
+		reference_trie::compare_unhashed(data);
 	}
 
 

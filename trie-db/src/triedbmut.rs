@@ -1439,7 +1439,7 @@ mod tests {
 	use hash_db::{Hasher, HashDB};
 	use keccak_hasher::KeccakHasher;
 	use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMut, TrieMut, NodeCodec,
-		ReferenceNodeCodec, ref_trie_root, RefTrieDB, RefTrieDBNoExt};
+		ReferenceNodeCodec, ref_trie_root};
 
 	fn populate_trie<'db>(
 		db: &'db mut HashDB<KeccakHasher, DBValue>,
@@ -1461,28 +1461,6 @@ mod tests {
 			t.remove(key).unwrap();
 		}
 	}
-
-	fn populate_trie_no_ext<'db>(
-		db: &'db mut HashDB<KeccakHasher, DBValue>,
-		root: &'db mut <KeccakHasher as Hasher>::Out,
-		v: &[(Vec<u8>, Vec<u8>)]
-	) -> RefTrieDBMutNoExt<'db> {
-		let mut t = RefTrieDBMutNoExt::new(db, root);
-		for i in 0..v.len() {
-			let key: &[u8]= &v[i].0;
-			let val: &[u8] = &v[i].1;
-			t.insert(key, val).unwrap();
-		}
-		t
-	}
-
-	fn unpopulate_trie_no_ext<'db>(t: &mut RefTrieDBMutNoExt<'db>, v: &[(Vec<u8>, Vec<u8>)]) {
-		for i in v {
-			let key: &[u8]= &i.0;
-			t.remove(key).unwrap();
-		}
-	}
-
 
 	#[test]
 	fn playpen() {
@@ -1577,8 +1555,8 @@ mod tests {
 			let mut memdb = MemoryDB::default();
 			let mut root = Default::default();
 			let mut t1 = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
-			//t1.insert(&[0x01, 0x23], big_value).unwrap();
-			//t1.insert(&[0x01, 0x34], big_value).unwrap();
+			t1.insert(&[0x01, 0x23], big_value).unwrap();
+			t1.insert(&[0x01, 0x34], big_value).unwrap();
 			let mut t2 = RefTrieDBMutNoExt::new(&mut memdb2, &mut root2);
 
 			t2.insert(&[0x01, 0x23], big_value3).unwrap();
@@ -1587,7 +1565,6 @@ mod tests {
 			t2.remove(&[0x01]).unwrap();
 			// commit on drop
 		}
-		let t2 = RefTrieDBNoExt::new(& memdb2, &root2); 
 		assert_eq!(&root2[..], &reference_trie::calc_root_no_ext(vec![
 		 (vec![0x01u8, 0x23], big_value3.to_vec()),
 		 (vec![0x01u8, 0x34], big_value.to_vec()),
