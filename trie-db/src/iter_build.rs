@@ -366,6 +366,9 @@ pub trait ProcessEncodedNode<HO> {
 	fn process(&mut self, Vec<u8>, bool) -> ChildReference<HO>;
 }
 
+/// Get trie root and insert node in hash db on parsing.
+/// As for all `ProcessEncodedNode` implementation, it 
+/// is only for full trie parsing (not existing trie).
 pub struct TrieBuilder<'a, H, HO, V, DB> {
 	pub db: &'a mut DB,
 	pub root: Option<HO>,
@@ -396,6 +399,7 @@ impl<'a, H: Hasher, V, DB: HashDB<H,V>> ProcessEncodedNode<<H as Hasher>::Out> f
 	}
 }
 
+/// Get trie root hash on parsing
 pub struct TrieRoot<H, HO> {
 	pub root: Option<HO>,
 	_ph: PhantomData<(H)>,
@@ -423,6 +427,44 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRoot<H, <H as Has
 		ChildReference::Hash(hash)
 	}
 }
+
+/// Get trie root hash on parsing
+/// -> this seems to match current implementation
+/// of trie_root but I think it should return the 
+/// full stream of trie (which would not be doable
+/// with current `ProcessEncodedNode` definition
+/// but can be doable by switching to something
+/// similar to `TrieStream` (initially the trait
+/// was a simple FnMut but it make sense to move
+/// to something more refined).
+pub struct TrieRootUnhashed<H> {
+	pub root: Option<Vec<u8>>,
+	_ph: PhantomData<(H)>,
+}
+
+impl<H> Default for TrieRootUnhashed<H> {
+	fn default() -> Self {
+		TrieRootUnhashed { root: None, _ph: PhantomData } 
+	}
+}
+
+impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashed<H> {
+	fn process(&mut self, enc_ext: Vec<u8>, is_root: bool) -> ChildReference<<H as Hasher>::Out> {
+		let len = enc_ext.len();
+		if !is_root && len < <H as Hasher>::LENGTH {
+			let mut h = <<H as Hasher>::Out as Default>::default();
+			h.as_mut()[..len].copy_from_slice(&enc_ext[..len]);
+
+			return ChildReference::Inline(h, len);
+		}
+		let hash = <H as Hasher>::hash(&enc_ext[..]);
+		if is_root {
+			self.root = Some(enc_ext);
+		};
+		ChildReference::Hash(hash)
+	}
+}
+
 
 
 #[cfg(test)]
@@ -484,6 +526,11 @@ mod test {
 		let memdb = MemoryDB::default();
 		reference_trie::compare_root(data, memdb);
 	}
+	fn compare_unhashed(data: Vec<(Vec<u8>,Vec<u8>)>) {
+		let memdb = MemoryDB::default();
+		reference_trie::compare_unhashed(data, memdb);
+	}
+
 
 
 	#[test]
@@ -511,6 +558,25 @@ mod test {
 			(vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
 		]);
 	}
+	#[test]
+	fn root_extension_tierce () {
+		compare_unhashed(vec![
+			(vec![1u8,2u8,3u8,3u8],vec![8u8;2]),
+			(vec![1u8,2u8,3u8,4u8],vec![7u8;2]),
+		]);
+	}
+	#[test]
+	fn root_extension_tierce_big () {
+    // on more content unhashed would hash
+		compare_unhashed(vec![
+			(vec![1u8,2u8,3u8,3u8],vec![8u8;32]),
+			(vec![1u8,2u8,3u8,4u8],vec![7u8;32]),
+			(vec![1u8,6u8,3u8,3u8],vec![8u8;32]),
+			(vec![6u8,2u8,3u8,3u8],vec![8u8;32]),
+			(vec![6u8,2u8,3u8,13u8],vec![8u8;32]),
+		]);
+	}
+
 
 	#[test]
 	fn trie_middle_node2x () {

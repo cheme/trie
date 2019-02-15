@@ -58,6 +58,16 @@ pub fn ref_trie_root<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out where
 	trie_root::trie_root::<KeccakHasher, ReferenceTrieStream, _, _, _>(input)
 }
 
+fn ref_trie_root_unhashed<I, A, B>(input: I) -> Vec<u8> where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	trie_root::unhashed_trie::<KeccakHasher, ReferenceTrieStream, _, _, _>(input)
+}
+
+
+
 const EMPTY_TRIE: u8 = 0;
 const LEAF_NODE_OFFSET: u8 = 1;
 const EXTENSION_NODE_OFFSET: u8 = 128;
@@ -506,6 +516,21 @@ pub fn compare_root(
 
 	assert_eq!(root, root_new);
 }
+
+pub fn compare_unhashed(
+	data: Vec<(Vec<u8>,Vec<u8>)>,
+	mut memdb: impl hash_db::HashDB<KeccakHasher,DBValue>,
+) {
+	let root_new = {
+		let mut cb = trie_db::TrieRootUnhashed::<KeccakHasher>::default();
+		trie_visit::<KeccakHasher, ReferenceNodeCodec, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+	let root = ref_trie_root_unhashed(data);
+
+	assert_eq!(root, root_new);
+}
+
 
 pub fn calc_root<I,A,B>(
 	data: I,
