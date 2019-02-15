@@ -88,6 +88,7 @@ where
 	C: NodeCodec<H>,
 	V: AsRef<[u8]>,
 	{
+
 	fn new() -> Self {
 		let mut v = Vec::with_capacity(INITIAL_DEPTH);
 		(0..INITIAL_DEPTH).for_each(|_|v.push((new_vec_slice_buff(), false)));
@@ -95,6 +96,8 @@ where
 		std::iter::repeat_with(|| None).take(INITIAL_DEPTH).collect() // vec![None; DEPTH] for non clone
 		, PhantomData)
 	}
+
+	#[inline(always)]
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
 		if depth >= self.0.len() {
 			for _i in self.0.len()..depth + 1 { 
@@ -106,16 +109,19 @@ where
 		self.0[depth].1 = true;
 	}
 
+	#[inline(always)]
 	fn touched(&self, depth:usize) -> bool {
 		self.1[depth].is_some() || self.0[depth].1
 	}
 
+	#[inline(always)]
 	fn reset_depth(&mut self, depth:usize) {
 		self.0[depth].1 = false;
 		for i in 0..NIBBLE_SIZE {
 			self.0[depth].0[i] = None;
 		}
 	}
+
 
 	fn flush_val (
 		&mut self, //(64 * 16 size) 
@@ -185,23 +191,23 @@ where
 				let nibble: u8 = nibble_at(&ref_branch.as_ref()[..],d);
 				self.set_node(d, nibble as usize, Some(h));
 			}
-		}
+			}
 
-	
-		if d > new_depth || is_last {
-			if touched {
-				last_branch_ix = Some(d);
+		
+			if d > new_depth || is_last {
+				if touched {
+					last_branch_ix = Some(d);
+				}
+			}
+
+		}
+		if let Some(d) = last_branch_ix {
+			if no_ext {
+				self.alt_no_ext(cb_ext, d, true, None);
+			} else {
+				self.standard_ext(cb_ext, d, true, None);
 			}
 		}
-
-	}
-	if let Some(d) = last_branch_ix {
-		if no_ext {
-			self.alt_no_ext(cb_ext, d, true, None);
-		} else {
-			self.standard_ext(cb_ext, d, true, None);
-		}
-	}
 	}
 
 	#[inline(always)]
@@ -211,7 +217,7 @@ where
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<ElasticArray36<u8>>,
-		) -> ChildReference<<H as Hasher>::Out> {
+	) -> ChildReference<<H as Hasher>::Out> {
 		// enc branch
 		let v = self.1[branch_d].take();
 		let encoded = C::branch_node(self.0[branch_d].0.iter(), v.as_ref().map(|v|v.as_ref()));
