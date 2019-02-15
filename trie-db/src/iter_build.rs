@@ -23,8 +23,8 @@ use node_codec::NodeCodec;
 
 
 fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
-	//for a in 0.. v1.len(), v2.len()) { sorted assertion preventing out of bound TODO fuzz that
-	for a in 0.. v1.len() {
+	// sorted assertion preventing out of bound
+	for a in 0..v1.len() {
 		if v1[a] == v2[a] {
 		} else {
 			if (v1[a] >> 4) ==	(v2[a] >> 4) {
@@ -39,6 +39,7 @@ fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
 
 // warn! start at 0 // TODO change biggest_depth??
 // warn! slow don't loop on that when possible
+#[inline(always)]
 fn nibble_at(v1: &[u8], ix: usize) -> u8 {
 	if ix % 2 == 0 {
 		v1[ix/2] >> 4
@@ -68,8 +69,9 @@ type CacheNode<HO> = Option<ChildReference<HO>>;
 // TODO test others layout
 // first usize to get nb of added value, second usize last added index
 // second str is in branch value
-struct CacheAccum<H: Hasher,C,V> (Vec<([CacheNode<<H as Hasher>::Out>; NIBBLE_SIZE], bool)>,Vec<Option<V>>,PhantomData<(H,C)>);
+struct CacheAccum<H: Hasher,C,V> (Vec<([CacheNode<<H as Hasher>::Out>; NIBBLE_SIZE], bool, Option<V>)>,PhantomData<(H,C)>);
 
+#[inline(always)]
 fn new_vec_slice_buff<HO>() -> [CacheNode<HO>; NIBBLE_SIZE] {
 	[
 		None, None, None, None,
@@ -91,18 +93,15 @@ where
 
 	fn new() -> Self {
 		let mut v = Vec::with_capacity(INITIAL_DEPTH);
-		(0..INITIAL_DEPTH).for_each(|_|v.push((new_vec_slice_buff(), false)));
-		CacheAccum(v,
-		std::iter::repeat_with(|| None).take(INITIAL_DEPTH).collect() // vec![None; DEPTH] for non clone
-		, PhantomData)
+		(0..INITIAL_DEPTH).for_each(|_|v.push((new_vec_slice_buff(), false, None)));
+		CacheAccum(v, PhantomData)
 	}
 
 	#[inline(always)]
 	fn set_node(&mut self, depth:usize, nibble_ix:usize, node: CacheNode<H::Out>) {
 		if depth >= self.0.len() {
 			for _i in self.0.len()..depth + 1 { 
-				self.0.push((new_vec_slice_buff(), false));
-				self.1.push(None);
+				self.0.push((new_vec_slice_buff(), false, None));
 			}
 		}
 		self.0[depth].0[nibble_ix] = node;
@@ -111,7 +110,7 @@ where
 
 	#[inline(always)]
 	fn touched(&self, depth:usize) -> bool {
-		self.1[depth].is_some() || self.0[depth].1
+		self.0[depth].1
 	}
 
 	#[inline(always)]
@@ -122,9 +121,8 @@ where
 		}
 	}
 
-
 	fn flush_val (
-		&mut self, //(64 * 16 size) 
+		&mut self,
 		cb_ext: &mut impl ProcessEncodedNode<<H as Hasher>::Out>,
 		target_depth: usize, 
 		(k2, v2): &(impl AsRef<[u8]>,impl AsRef<[u8]>), 
@@ -219,7 +217,7 @@ where
 		nkey: Option<ElasticArray36<u8>>,
 	) -> ChildReference<<H as Hasher>::Out> {
 		// enc branch
-		let v = self.1[branch_d].take();
+		let v = self.0[branch_d].2.take();
 		let encoded = C::branch_node(self.0[branch_d].0.iter(), v.as_ref().map(|v|v.as_ref()));
 		self.reset_depth(branch_d);
 		let branch_hash = cb_ext.process(encoded, is_root && nkey.is_none());
@@ -242,7 +240,7 @@ where
 		nkey: Option<ElasticArray36<u8>>,
 		) -> ChildReference<<H as Hasher>::Out> {
 		// enc branch
-		let v = self.1[branch_d].take();
+		let v = self.0[branch_d].2.take();
 		let encoded = C::branch_node_nibbled(
 			// warn direct use of default empty nible encoded: NibbleSlice::new_offset(&[],0).encoded(false);
 			nkey.as_ref().map(|v|&v[..]).unwrap_or(&[0]),
@@ -305,7 +303,8 @@ fn trie_visit_inner<H, C, I, A, B, F>(input: I, cb_ext: &mut F, no_ext: bool)
 				//println!("stack {} ", common_depth);
 				// the new key include the previous one : branch value case
 				// just stored value at branch depth
-				depth_queue.1[common_depth] = Some(prev_val.1);
+				depth_queue.0[common_depth].2 = Some(prev_val.1);
+				depth_queue.0[common_depth].1 = true;
 			} else if depth_item >= prev_depth {
 				//println!("fv {}", depth_item);
 				// put prev with next (common branch prev val can be flush)
