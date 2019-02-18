@@ -19,6 +19,7 @@ criterion_group!(benches,
 	nibble_common_prefix,
 	root_old,
 	root_new,
+	nibble_encode,
 );
 criterion_main!(benches);
 
@@ -45,6 +46,26 @@ fn nibble_common_prefix(b: &mut Criterion) {
 		b.iter(&mut ||{
 			for (left, right) in mixed.iter() {
 				let _ = black_box(left.common_prefix(&right));
+			}
+		})
+	});
+}
+
+fn nibble_encode(b: &mut Criterion) {
+	let st = StandardMap {
+		alphabet: Alphabet::Custom(b"abcd".to_vec()),
+		min_key: 32,
+		journal_key: 0,
+		value_mode: ValueMode::Mirror,
+		count: 255,
+	};
+	let (keys, values): (Vec<_>, Vec<_>) = st.make().into_iter().unzip();
+	b.bench_function("nibble_encode", move |b| {
+		let keys: Vec<_> = keys.iter().map(|k|NibbleSlice::new(k)).collect();
+
+		b.iter(&mut ||{
+			for k in keys.iter() {
+				let _ = black_box(k.encoded(false));
 			}
 		})
 	});
