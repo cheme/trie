@@ -219,12 +219,12 @@ impl<'a, H: KeyHasher, T> MemoryDB<H, T> where T: From<&'a [u8]> {
 impl<H, T> MemoryDB<H, T>
 where
 	H: KeyHasher,
+	H::Out: HeapSizeOf,
 	T: HeapSizeOf,
 {
 	/// Returns the size of allocated heap memory
 	pub fn mem_used(&self) -> usize {
-		0//self.data.heap_size_of_children()
-		// TODO Reenable above when HeapSizeOf supports arrays.
+		self.data.heap_size_of_children()
 	}
 }
 
