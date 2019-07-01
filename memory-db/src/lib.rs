@@ -127,7 +127,7 @@ pub struct MemoryDB<H, KF, T>
 	data: HashMap<KF::Key, (T, i32)>,
 	hashed_null_node: H::Out,
 	null_node_data: T,
-	_kf: PhantomData<KF>,
+	kf: KF,
 }
 
 impl<H, KF, T> PartialEq<MemoryDB<H, KF, T>> for MemoryDB<H, KF, T>
@@ -156,18 +156,42 @@ impl<H, KF, T> Eq for MemoryDB<H, KF, T>
 	<KF as KeyFunction<H>>::Key: Eq + MaybeDebug,
 				T: Eq + MaybeDebug,
 {}
- 
-pub trait KeyFunction<H: KeyHasher> {
+
+/// This trait compose a hash with a trie prefix
+/// into a DB key.
+pub trait KeyFunction<H: KeyHasher>: Default + Send + Sync {
+	/// DB key (for `MemoryDB` it will be its
+	/// internal storage key).
 	type Key: Send + Sync + Clone + hash::Hash + Eq;
 
-	fn key(hash: &H::Out, prefix: &[u8]) -> Self::Key;
+
+	/// Build key from hash and prefix, possibly querying
+	/// internal state.
+	fn key(&self, hash: &H::Out, prefix: &[u8]) -> Self::Key;
+
+	/// Variant of `key` where input is owned value.
+	/// Mainly for skipping allocation when using composition.
+	fn rec_key(&self, buf: &mut Self::Key, key: &H::Out, prefix: &[u8]);
+
+
+	/// Utility for `Key` that can be pre-allocated like Vec.
+	/// Return 0 by default.
+	fn estimate_key_size(&self, _hash: &H::Out, _prefix: &[u8]) -> usize { 0 }
+}
+
+fn estimate_prefixed_key_size<H: KeyHasher>(hash: &H::Out, prefix: &[u8]) -> usize {
+	hash.as_ref().len() + prefix.len()
+}
+
+fn rec_prefixed_key<H: KeyHasher>(buf: &mut Vec<u8>, key: &H::Out, prefix: &[u8]) {
+	buf.extend_from_slice(prefix);
+	buf.extend_from_slice(key.as_ref());
 }
 
 /// Make database key from hash and prefix.
 pub fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: &[u8]) -> Vec<u8> {
-	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.len());
-	prefixed_key.extend_from_slice(prefix);
-	prefixed_key.extend_from_slice(key.as_ref());
+	let mut prefixed_key = Vec::with_capacity(estimate_prefixed_key_size::<H>(key, prefix));
+	rec_prefixed_key::<H>(&mut prefixed_key, key, prefix);
 	prefixed_key
 }
 
@@ -178,26 +202,50 @@ pub fn hash_key<H: KeyHasher>(key: &H::Out, _prefix: &[u8]) -> H::Out {
 
 #[derive(Clone,Debug)]
 /// Key function that only uses the hash
-pub struct HashKey<H: KeyHasher>(PhantomData<H>);
+pub struct HashKey<H>(PhantomData<H>);
+
+impl<H> Default for HashKey<H> {
+	fn default() -> Self { HashKey(PhantomData) }
+}
 
 impl<H: KeyHasher> KeyFunction<H> for HashKey<H> {
 	type Key = H::Out;
 
-	fn key(hash: &H::Out, prefix: &[u8]) -> H::Out {
+	fn key(&self, hash: &H::Out, prefix: &[u8]) -> H::Out {
 		hash_key::<H>(hash, prefix)
 	}
+
+	fn rec_key(&self, buf: &mut H::Out, key: &H::Out, prefix: &[u8]) {
+		*buf = hash_key::<H>(key, prefix)
+	}
+
 }
 
 #[derive(Clone,Debug)]
 /// Key function that concatenates prefix and hash.
-pub struct PrefixedKey<H: KeyHasher>(PhantomData<H>);
+pub struct PrefixedKey<H>(PhantomData<H>);
+
+impl<H> Default for PrefixedKey<H> {
+	fn default() -> Self { PrefixedKey(PhantomData) }
+}
+
+
 
 impl<H: KeyHasher> KeyFunction<H> for PrefixedKey<H> {
 	type Key = Vec<u8>;
 
-	fn key(hash: &H::Out, prefix: &[u8]) -> Vec<u8> {
+	fn key(&self, hash: &H::Out, prefix: &[u8]) -> Vec<u8> {
 		prefixed_key::<H>(hash, prefix)
 	}
+
+	fn rec_key(&self, buf: &mut Self::Key, key: &H::Out, prefix: &[u8]) {
+		rec_prefixed_key::<H>(buf, key, prefix)
+	}
+
+	fn estimate_key_size(&self, hash: &H::Out, prefix: &[u8]) -> usize {
+		estimate_prefixed_key_size::<H>(hash, prefix)
+	}
+
 }
 
 impl<'a, H, KF, T> Default for MemoryDB<H, KF, T>
@@ -224,7 +272,7 @@ where
 		if key == &self.hashed_null_node {
 			return None;
 		}
-		let key = KF::key(key, prefix);
+		let key = self.kf.key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) =>
 				if entry.get().1 == 1 {
@@ -253,12 +301,20 @@ where
 			data: HashMap::default(),
 			hashed_null_node: H::hash(null_key),
 			null_node_data,
-			_kf: Default::default(),
+			kf: Default::default(),
 		}
 	}
 
 	pub fn new(data: &'a [u8]) -> Self {
 		Self::from_null_node(data, data.into())
+	}
+
+	pub fn set_key_function(&mut self, kf: KF) {
+		self.kf = kf;
+	}
+
+	pub fn get_key_function(&self) -> &KF {
+		&self.kf
 	}
 
 	/// Clear all data from the database.
@@ -305,7 +361,7 @@ where
 		if key == &self.hashed_null_node {
 			return Some((&self.null_node_data, 1));
 		}
-		self.data.get(&KF::key(key, prefix)).map(|(value, count)| (value, *count))
+		self.data.get(&self.kf.key(key, prefix)).map(|(value, count)| (value, *count))
 	}
 
 	/// Consolidate all the entries of `other` into `self`.
@@ -468,7 +524,7 @@ where
 			return Some(self.null_node_data.clone());
 		}
 
-		let key = KF::key(key, prefix);
+		let key = self.kf.key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
 			_ => None
@@ -480,7 +536,7 @@ where
 			return true;
 		}
 
-		let key = KF::key(key, prefix);
+		let key = self.kf.key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(_, x)) if x > 0 => true,
 			_ => false
@@ -492,7 +548,7 @@ where
 			return;
 		}
 
-		let key = KF::key(&key, prefix);
+		let key = self.kf.key(&key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) => {
 				let &mut (ref mut old_value, ref mut rc) = entry.get_mut();
@@ -522,7 +578,7 @@ where
 			return;
 		}
 
-		let key = KF::key(key, prefix);
+		let key = self.kf.key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) => {
 				let &mut (_, ref mut rc) = entry.get_mut();
