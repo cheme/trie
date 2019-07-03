@@ -75,6 +75,8 @@ where
 	root: &'db H::Out,
 	/// The number of hashes performed so far in operations on this trie.
 	hash_count: usize,
+  /// A keyspace to use with underlying db.
+	keyspace: Option<&'db [u8]>,
 	codec_marker: PhantomData<C>,
 }
 
@@ -89,10 +91,21 @@ where
 		db: &'db dyn HashDBRef<H, DBValue>,
 		root: &'db H::Out,
 	) -> Result<Self, H::Out, C::Error> {
-		if !db.contains(root, nibbleslice::EMPTY_ENCODED) {
+		Self::new_with_keyspace(db, root, None)
+	}
+
+	/// Create a new trie with the backing database `db` and `root` and
+  /// hash db key specific space.
+	/// Returns an error if `root` does not exist
+	pub fn new_with_keyspace(
+		db: &'db dyn HashDBRef<H, DBValue>,
+		root: &'db H::Out,
+		keyspace: Option<&'db [u8]>,
+	) -> Result<Self, H::Out, C::Error> {
+		if !db.contains(root, (nibbleslice::EMPTY_ENCODED, keyspace)) {
 			Err(Box::new(TrieError::InvalidStateRoot(*root)))
 		} else {
-			Ok(TrieDB {db, root, hash_count: 0, codec_marker: PhantomData})
+			Ok(TrieDB {db, root, hash_count: 0, keyspace, codec_marker: PhantomData})
 		}
 	}
 
@@ -102,7 +115,7 @@ where
 	/// Get the data of the root node.
 	pub fn root_data(&self) -> Result<DBValue, H::Out, C::Error> {
 		self.db
-			.get(self.root, nibbleslice::EMPTY_ENCODED)
+			.get(self.root, (nibbleslice::EMPTY_ENCODED, self.keyspace))
 			.ok_or_else(|| Box::new(TrieError::InvalidStateRoot(*self.root)))
 	}
 
@@ -115,7 +128,7 @@ where
 		match (partial_key == nibbleslice::EMPTY_ENCODED, C::try_decode_hash(node)) {
 			(false, Some(key)) => {
 				self.db
-					.get(&key, partial_key)
+					.get(&key, (partial_key, self.keyspace))
 					.map(|v| Cow::Owned(v))
 					.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(key)))
 			}
@@ -667,39 +680,40 @@ mod tests {
                                     slice: ,
                                     value: [
                                         65,
-                                        65
-                                    ]
+                                        65,
+                                    ],
                                 },
                                 Node::Leaf {
                                     index: 2,
                                     slice: ,
                                     value: [
                                         65,
-                                        66
-                                    ]
-                                }
+                                        66,
+                                    ],
+                                },
                             ],
-                            value: None
-                        }
+                            value: None,
+                        },
                     ],
                     value: Some(
                         [
-                            65
-                        ]
-                    )
+                            65,
+                        ],
+                    ),
                 },
                 Node::Leaf {
                     index: 2,
                     slice: ,
                     value: [
-                        66
-                    ]
-                }
+                        66,
+                    ],
+                },
             ],
-            value: None
-        }
-    }
+            value: None,
+        },
+    },
 }");
+	
 	}
 
 	#[test]

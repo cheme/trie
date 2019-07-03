@@ -28,7 +28,8 @@ extern crate hashmap_core;
 extern crate alloc;
 #[cfg(test)] extern crate keccak_hasher;
 
-use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher, AsHashDB, AsPlainDB};
+use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
+	AsHashDB, AsPlainDB, Prefix};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
 #[cfg(feature = "deprecated")]
 #[cfg(feature = "std")]
@@ -84,38 +85,38 @@ impl<T> MaybeDebug for T {}
 /// extern crate keccak_hasher;
 /// extern crate memory_db;
 ///
-/// use hash_db::{Hasher, HashDB};
+/// use hash_db::{Hasher, HashDB, EMPTY_PREFIX};
 /// use keccak_hasher::KeccakHasher;
 /// use memory_db::{MemoryDB, HashKey};
 /// fn main() {
 ///   let mut m = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
 ///   let d = "Hello world!".as_bytes();
 ///
-///   let k = m.insert(&[], d);
-///   assert!(m.contains(&k, &[]));
-///   assert_eq!(m.get(&k, &[]).unwrap(), d);
+///   let k = m.insert(EMPTY_PREFIX, d);
+///   assert!(m.contains(&k, EMPTY_PREFIX));
+///   assert_eq!(m.get(&k, EMPTY_PREFIX).unwrap(), d);
 ///
-///   m.insert(&[], d);
-///   assert!(m.contains(&k, &[]));
+///   m.insert(EMPTY_PREFIX, d);
+///   assert!(m.contains(&k, EMPTY_PREFIX));
 ///
-///   m.remove(&k, &[]);
-///   assert!(m.contains(&k, &[]));
+///   m.remove(&k, EMPTY_PREFIX);
+///   assert!(m.contains(&k, EMPTY_PREFIX));
 ///
-///   m.remove(&k, &[]);
-///   assert!(!m.contains(&k, &[]));
+///   m.remove(&k, EMPTY_PREFIX);
+///   assert!(!m.contains(&k, EMPTY_PREFIX));
 ///
-///   m.remove(&k, &[]);
-///   assert!(!m.contains(&k, &[]));
+///   m.remove(&k, EMPTY_PREFIX);
+///   assert!(!m.contains(&k, EMPTY_PREFIX));
 ///
-///   m.insert(&[], d);
-///   assert!(!m.contains(&k, &[]));
+///   m.insert(EMPTY_PREFIX, d);
+///   assert!(!m.contains(&k, EMPTY_PREFIX));
 
-///   m.insert(&[], d);
-///   assert!(m.contains(&k, &[]));
-///   assert_eq!(m.get(&k, &[]).unwrap(), d);
+///   m.insert(EMPTY_PREFIX, d);
+///   assert!(m.contains(&k, EMPTY_PREFIX));
+///   assert_eq!(m.get(&k, EMPTY_PREFIX).unwrap(), d);
 ///
-///   m.remove(&k, &[]);
-///   assert!(!m.contains(&k, &[]));
+///   m.remove(&k, EMPTY_PREFIX);
+///   assert!(!m.contains(&k, EMPTY_PREFIX));
 /// }
 /// ```
 #[derive(Clone)]
@@ -127,7 +128,7 @@ pub struct MemoryDB<H, KF, T>
 	data: HashMap<KF::Key, (T, i32)>,
 	hashed_null_node: H::Out,
 	null_node_data: T,
-	kf: KF,
+	_kf: PhantomData<KF>,
 }
 
 impl<H, KF, T> PartialEq<MemoryDB<H, KF, T>> for MemoryDB<H, KF, T>
@@ -156,96 +157,53 @@ impl<H, KF, T> Eq for MemoryDB<H, KF, T>
 	<KF as KeyFunction<H>>::Key: Eq + MaybeDebug,
 				T: Eq + MaybeDebug,
 {}
-
-/// This trait compose a hash with a trie prefix
-/// into a DB key.
-pub trait KeyFunction<H: KeyHasher>: Default + Send + Sync {
-	/// DB key (for `MemoryDB` it will be its
-	/// internal storage key).
+ 
+pub trait KeyFunction<H: KeyHasher> {
 	type Key: Send + Sync + Clone + hash::Hash + Eq;
 
-
-	/// Build key from hash and prefix, possibly querying
-	/// internal state.
-	fn key(&self, hash: &H::Out, prefix: &[u8]) -> Self::Key;
-
-	/// Variant of `key` where input is owned value.
-	/// Mainly for skipping allocation when using composition.
-	fn rec_key(&self, buf: &mut Self::Key, key: &H::Out, prefix: &[u8]);
-
-
-	/// Utility for `Key` that can be pre-allocated like Vec.
-	/// Return 0 by default.
-	fn estimate_key_size(&self, _hash: &H::Out, _prefix: &[u8]) -> usize { 0 }
-}
-
-fn estimate_prefixed_key_size<H: KeyHasher>(hash: &H::Out, prefix: &[u8]) -> usize {
-	hash.as_ref().len() + prefix.len()
-}
-
-fn rec_prefixed_key<H: KeyHasher>(buf: &mut Vec<u8>, key: &H::Out, prefix: &[u8]) {
-	buf.extend_from_slice(prefix);
-	buf.extend_from_slice(key.as_ref());
+	fn key(hash: &H::Out, prefix: Prefix) -> Self::Key;
 }
 
 /// Make database key from hash and prefix.
-pub fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: &[u8]) -> Vec<u8> {
-	let mut prefixed_key = Vec::with_capacity(estimate_prefixed_key_size::<H>(key, prefix));
-	rec_prefixed_key::<H>(&mut prefixed_key, key, prefix);
+pub fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
+	let (prefix, prefix_len, o_ks) = match prefix {
+		(prefix, Some(keyspace)) => (prefix, prefix.len() + keyspace.len(), Some(keyspace)),
+		(prefix, None) => (prefix, prefix.len(), None),
+	};
+	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix_len);
+	o_ks.map(|ks| prefixed_key.extend_from_slice(ks));
+	prefixed_key.extend_from_slice(prefix);
+	prefixed_key.extend_from_slice(key.as_ref());
 	prefixed_key
 }
 
 /// Make database key from hash only.
-pub fn hash_key<H: KeyHasher>(key: &H::Out, _prefix: &[u8]) -> H::Out {
+pub fn hash_key<H: KeyHasher>(key: &H::Out, _prefix: Prefix) -> H::Out {
 	key.clone()
 }
 
 #[derive(Clone,Debug)]
 /// Key function that only uses the hash
-pub struct HashKey<H>(PhantomData<H>);
-
-impl<H> Default for HashKey<H> {
-	fn default() -> Self { HashKey(PhantomData) }
-}
+pub struct HashKey<H: KeyHasher>(PhantomData<H>);
 
 impl<H: KeyHasher> KeyFunction<H> for HashKey<H> {
 	type Key = H::Out;
 
-	fn key(&self, hash: &H::Out, prefix: &[u8]) -> H::Out {
+	fn key(hash: &H::Out, prefix: Prefix) -> H::Out {
 		hash_key::<H>(hash, prefix)
 	}
-
-	fn rec_key(&self, buf: &mut H::Out, key: &H::Out, prefix: &[u8]) {
-		*buf = hash_key::<H>(key, prefix)
-	}
-
 }
 
 #[derive(Clone,Debug)]
 /// Key function that concatenates prefix and hash.
-pub struct PrefixedKey<H>(PhantomData<H>);
-
-impl<H> Default for PrefixedKey<H> {
-	fn default() -> Self { PrefixedKey(PhantomData) }
-}
-
-
+pub struct PrefixedKey<H: KeyHasher>(PhantomData<H>);
 
 impl<H: KeyHasher> KeyFunction<H> for PrefixedKey<H> {
 	type Key = Vec<u8>;
 
-	fn key(&self, hash: &H::Out, prefix: &[u8]) -> Vec<u8> {
+	fn key(hash: &H::Out, prefix: Prefix) -> Vec<u8> {
 		prefixed_key::<H>(hash, prefix)
 	}
-
-	fn rec_key(&self, buf: &mut Self::Key, key: &H::Out, prefix: &[u8]) {
-		rec_prefixed_key::<H>(buf, key, prefix)
-	}
-
-	fn estimate_key_size(&self, hash: &H::Out, prefix: &[u8]) -> usize {
-		estimate_prefixed_key_size::<H>(hash, prefix)
-	}
-
 }
 
 impl<'a, H, KF, T> Default for MemoryDB<H, KF, T>
@@ -268,11 +226,11 @@ where
 {
 	/// Remove an element and delete it from storage if reference count reaches zero.
 	/// If the value was purged, return the old value.
-	pub fn remove_and_purge(&mut self, key: &<H as KeyHasher>::Out, prefix: &[u8]) -> Option<T> {
+	pub fn remove_and_purge(&mut self, key: &<H as KeyHasher>::Out, prefix: Prefix) -> Option<T> {
 		if key == &self.hashed_null_node {
 			return None;
 		}
-		let key = self.kf.key(key, prefix);
+		let key = KF::key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) =>
 				if entry.get().1 == 1 {
@@ -301,20 +259,12 @@ where
 			data: HashMap::default(),
 			hashed_null_node: H::hash(null_key),
 			null_node_data,
-			kf: Default::default(),
+			_kf: Default::default(),
 		}
 	}
 
 	pub fn new(data: &'a [u8]) -> Self {
 		Self::from_null_node(data, data.into())
-	}
-
-	pub fn set_key_function(&mut self, kf: KF) {
-		self.kf = kf;
-	}
-
-	pub fn get_key_function(&self) -> &KF {
-		&self.kf
 	}
 
 	/// Clear all data from the database.
@@ -325,17 +275,17 @@ where
 	/// extern crate keccak_hasher;
 	/// extern crate memory_db;
 	///
-	/// use hash_db::{Hasher, HashDB};
+	/// use hash_db::{Hasher, HashDB, EMPTY_PREFIX};
 	/// use keccak_hasher::KeccakHasher;
 	/// use memory_db::{MemoryDB, HashKey};
 	///
 	/// fn main() {
 	///   let mut m = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
 	///   let hello_bytes = "Hello world!".as_bytes();
-	///   let hash = m.insert(&[], hello_bytes);
-	///   assert!(m.contains(&hash, &[]));
+	///   let hash = m.insert(EMPTY_PREFIX, hello_bytes);
+	///   assert!(m.contains(&hash, EMPTY_PREFIX));
 	///   m.clear();
-	///   assert!(!m.contains(&hash, &[]));
+	///   assert!(!m.contains(&hash, EMPTY_PREFIX));
 	/// }
 	/// ```
 	pub fn clear(&mut self) {
@@ -357,11 +307,11 @@ where
 	///
 	/// Even when Some is returned, the data is only guaranteed to be useful
 	/// when the refs > 0.
-	pub fn raw(&self, key: &<H as KeyHasher>::Out, prefix: &[u8]) -> Option<(&T, i32)> {
+	pub fn raw(&self, key: &<H as KeyHasher>::Out, prefix: Prefix) -> Option<(&T, i32)> {
 		if key == &self.hashed_null_node {
 			return Some((&self.null_node_data, 1));
 		}
-		self.data.get(&self.kf.key(key, prefix)).map(|(value, count)| (value, *count))
+		self.data.get(&KF::key(key, prefix)).map(|(value, count)| (value, *count))
 	}
 
 	/// Consolidate all the entries of `other` into `self`.
@@ -519,36 +469,36 @@ where
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
 {
-	fn get(&self, key: &H::Out, prefix: &[u8]) -> Option<T> {
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
 		if key == &self.hashed_null_node {
 			return Some(self.null_node_data.clone());
 		}
 
-		let key = self.kf.key(key, prefix);
+		let key = KF::key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
 			_ => None
 		}
 	}
 
-	fn contains(&self, key: &H::Out, prefix: &[u8]) -> bool {
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
 		if key == &self.hashed_null_node {
 			return true;
 		}
 
-		let key = self.kf.key(key, prefix);
+		let key = KF::key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(_, x)) if x > 0 => true,
 			_ => false
 		}
 	}
 
-	fn emplace(&mut self, key: H::Out, prefix: &[u8], value: T) {
+	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T) {
 		if value == self.null_node_data {
 			return;
 		}
 
-		let key = self.kf.key(&key, prefix);
+		let key = KF::key(&key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) => {
 				let &mut (ref mut old_value, ref mut rc) = entry.get_mut();
@@ -563,7 +513,7 @@ where
 		}
 	}
 
-	fn insert(&mut self, prefix: &[u8], value: &[u8]) -> H::Out {
+	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out {
 		if T::from(value) == self.null_node_data {
 			return self.hashed_null_node.clone();
 		}
@@ -573,12 +523,12 @@ where
 		key
 	}
 
-	fn remove(&mut self, key: &H::Out, prefix: &[u8]) {
+	fn remove(&mut self, key: &H::Out, prefix: Prefix) {
 		if key == &self.hashed_null_node {
 			return;
 		}
 
-		let key = self.kf.key(key, prefix);
+		let key = KF::key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) => {
 				let &mut (_, ref mut rc) = entry.get_mut();
@@ -597,8 +547,8 @@ where
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
 {
-	fn get(&self, key: &H::Out, prefix: &[u8]) -> Option<T> { HashDB::get(self, key, prefix) }
-	fn contains(&self, key: &H::Out, prefix: &[u8]) -> bool { HashDB::contains(self, key, prefix) }
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> { HashDB::get(self, key, prefix) }
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool { HashDB::contains(self, key, prefix) }
 }
 
 impl<H, KF, T> AsPlainDB<H::Out, T> for MemoryDB<H, KF, T>
@@ -625,6 +575,7 @@ where
 #[cfg(test)]
 mod tests {
 	use super::{MemoryDB, HashDB, KeyHasher, HashKey};
+	use hash_db::EMPTY_PREFIX;
 	use keccak_hasher::KeccakHasher;
 
 	#[test]
@@ -633,52 +584,52 @@ mod tests {
 		let hello_key = KeccakHasher::hash(hello_bytes);
 
 		let mut m = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
-		m.remove(&hello_key, &[]);
-		assert_eq!(m.raw(&hello_key, &[]).unwrap().1, -1);
+		m.remove(&hello_key, EMPTY_PREFIX);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX).unwrap().1, -1);
 		m.purge();
-		assert_eq!(m.raw(&hello_key, &[]).unwrap().1, -1);
-		m.insert(&[], hello_bytes);
-		assert_eq!(m.raw(&hello_key, &[]).unwrap().1, 0);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX).unwrap().1, -1);
+		m.insert(EMPTY_PREFIX, hello_bytes);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX).unwrap().1, 0);
 		m.purge();
-		assert_eq!(m.raw(&hello_key, &[]), None);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX), None);
 
 		let mut m = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
-		assert!(m.remove_and_purge(&hello_key, &[]).is_none());
-		assert_eq!(m.raw(&hello_key, &[]).unwrap().1, -1);
-		m.insert(&[], hello_bytes);
-		m.insert(&[], hello_bytes);
-		assert_eq!(m.raw(&hello_key, &[]).unwrap().1, 1);
-		assert_eq!(&*m.remove_and_purge(&hello_key, &[]).unwrap(), hello_bytes);
-		assert_eq!(m.raw(&hello_key, &[]), None);
-		assert!(m.remove_and_purge(&hello_key, &[]).is_none());
+		assert!(m.remove_and_purge(&hello_key, EMPTY_PREFIX).is_none());
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX).unwrap().1, -1);
+		m.insert(EMPTY_PREFIX, hello_bytes);
+		m.insert(EMPTY_PREFIX, hello_bytes);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX).unwrap().1, 1);
+		assert_eq!(&*m.remove_and_purge(&hello_key, EMPTY_PREFIX).unwrap(), hello_bytes);
+		assert_eq!(m.raw(&hello_key, EMPTY_PREFIX), None);
+		assert!(m.remove_and_purge(&hello_key, EMPTY_PREFIX).is_none());
 	}
 
 	#[test]
 	fn consolidate() {
 		let mut main = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
 		let mut other = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
-		let remove_key = other.insert(&[], b"doggo");
-		main.remove(&remove_key, &[]);
+		let remove_key = other.insert(EMPTY_PREFIX, b"doggo");
+		main.remove(&remove_key, EMPTY_PREFIX);
 
-		let insert_key = other.insert(&[], b"arf");
-		main.emplace(insert_key, &[], "arf".as_bytes().to_vec());
+		let insert_key = other.insert(EMPTY_PREFIX, b"arf");
+		main.emplace(insert_key, EMPTY_PREFIX, "arf".as_bytes().to_vec());
 
-		let negative_remove_key = other.insert(&[], b"negative");
-		other.remove(&negative_remove_key, &[]);	// ref cnt: 0
-		other.remove(&negative_remove_key, &[]);	// ref cnt: -1
-		main.remove(&negative_remove_key, &[]);	// ref cnt: -1
+		let negative_remove_key = other.insert(EMPTY_PREFIX, b"negative");
+		other.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: 0
+		other.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: -1
+		main.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: -1
 
 		main.consolidate(other);
 
-		assert_eq!(main.raw(&remove_key, &[]).unwrap(), (&"doggo".as_bytes().to_vec(), 0));
-		assert_eq!(main.raw(&insert_key, &[]).unwrap(), (&"arf".as_bytes().to_vec(), 2));
-		assert_eq!(main.raw(&negative_remove_key, &[]).unwrap(), (&"negative".as_bytes().to_vec(), -2));
+		assert_eq!(main.raw(&remove_key, EMPTY_PREFIX).unwrap(), (&"doggo".as_bytes().to_vec(), 0));
+		assert_eq!(main.raw(&insert_key, EMPTY_PREFIX).unwrap(), (&"arf".as_bytes().to_vec(), 2));
+		assert_eq!(main.raw(&negative_remove_key, EMPTY_PREFIX).unwrap(), (&"negative".as_bytes().to_vec(), -2));
 	}
 
 	#[test]
 	fn default_works() {
 		let mut db = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
 		let hashed_null_node = KeccakHasher::hash(&[0u8][..]);
-		assert_eq!(db.insert(&[], &[0u8][..]), hashed_null_node);
+		assert_eq!(db.insert(EMPTY_PREFIX, &[0u8][..]), hashed_null_node);
 	}
 }

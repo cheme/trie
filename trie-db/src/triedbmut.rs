@@ -20,7 +20,7 @@ use super::node::Node as EncodedNode;
 use node_codec::NodeCodec;
 use super::{DBValue, node::NodeKey};
 
-use hash_db::{HashDB, Hasher};
+use hash_db::{HashDB, Hasher, Prefix};
 use nibbleslice::{self, NibbleSlice, combine_encoded};
 
 use ::core_::marker::PhantomData;
@@ -338,6 +338,8 @@ where
 	/// The number of hash operations this trie has performed.
 	/// Note that none are performed until changes are committed.
 	hash_count: usize,
+	/// A keyspace to use with underlying db.
+	keyspace: Option<&'a [u8]>,
 	marker: PhantomData<C>, // TODO: rpheimer: "we could have the NodeCodec trait take &self to its methods and then we don't need PhantomData. we can just store an instance of C: NodeCodec in the trie struct. If it's a ZST it won't have any additional overhead anyway"
 }
 
@@ -348,6 +350,16 @@ where
 {
 	/// Create a new trie with backing database `db` and empty `root`.
 	pub fn new(db: &'a mut dyn HashDB<H, DBValue>, root: &'a mut H::Out) -> Self {
+		Self::new_with_keyspace(db, root, None)
+	}
+
+	/// Create a new trie with backing database `db` and empty `root`
+	/// at a given db space for key.
+	pub fn new_with_keyspace(
+		db: &'a mut dyn HashDB<H, DBValue>,
+		root: &'a mut H::Out,
+		keyspace: Option<&'a [u8]>,
+	) -> Self {
 		*root = C::hashed_null_node();
 		let root_handle = NodeHandle::Hash(C::hashed_null_node());
 
@@ -358,6 +370,7 @@ where
 			root_handle: root_handle,
 			death_row: HashSet::new(),
 			hash_count: 0,
+			keyspace,
 			marker: PhantomData,
 		}
 	}
@@ -368,7 +381,17 @@ where
 		db: &'a mut dyn HashDB<H, DBValue>,
 		root: &'a mut H::Out,
 	) -> Result<Self, H::Out, C::Error> {
-		if !db.contains(root, nibbleslice::EMPTY_ENCODED) {
+		Self::from_existing_with_keyspace(db, root, None)
+	}
+
+	/// Create a new trie with the backing database `db` and `root.
+	/// Returns an error if `root` does not exist.
+	pub fn from_existing_with_keyspace(
+		db: &'a mut dyn HashDB<H, DBValue>,
+		root: &'a mut H::Out,
+		keyspace: Option<&'a [u8]>,
+	) -> Result<Self, H::Out, C::Error> {
+		if !db.contains(root, (nibbleslice::EMPTY_ENCODED, keyspace)) {
 			return Err(Box::new(TrieError::InvalidStateRoot(*root)));
 		}
 
@@ -380,9 +403,11 @@ where
 			root_handle: root_handle,
 			death_row: HashSet::new(),
 			hash_count: 0,
+			keyspace,
 			marker: PhantomData,
 		})
 	}
+
 	/// Get the backing database.
 	pub fn db(&self) -> &dyn HashDB<H, DBValue> {
 		self.db
@@ -394,7 +419,7 @@ where
 	}
 
 	// cache a node by hash
-	fn cache(&mut self, hash: H::Out, key: &[u8]) -> Result<StorageHandle, H::Out, C::Error> {
+	fn cache(&mut self, hash: H::Out, key: Prefix) -> Result<StorageHandle, H::Out, C::Error> {
 		let node_encoded = self.db.get(&hash, key).ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
 		let node = Node::from_encoded::<C, H>(
 			&node_encoded,
@@ -481,7 +506,10 @@ where
 	fn insert_at(&mut self, handle: NodeHandle<H::Out>, key: &mut Partial, value: DBValue, old_val: &mut Option<DBValue>) -> Result<(StorageHandle, bool), H::Out, C::Error> {
 		let h = match handle {
 			NodeHandle::InMemory(h) => h,
-			NodeHandle::Hash(h) => self.cache(h, &key.encoded_prefix())?,
+			NodeHandle::Hash(h) => {
+				let keyspace = self.keyspace;
+				self.cache(h, (&key.encoded_prefix(), keyspace))?
+			},
 		};
 		let stored = self.storage.destroy(h);
 		let (new_stored, changed) = self.inspect(stored, key, move |trie, stored, key| {
@@ -662,7 +690,8 @@ where
 		let stored = match handle {
 			NodeHandle::InMemory(h) => self.storage.destroy(h),
 			NodeHandle::Hash(h) => {
-				let handle = self.cache(h, &key.encoded_prefix())?;
+				let keyspace = self.keyspace;
+				let handle = self.cache(h, (&key.encoded_prefix(), keyspace))?;
 				self.storage.destroy(handle)
 			}
 		};
@@ -811,7 +840,8 @@ where
 				let stored = match child {
 					NodeHandle::InMemory(h) => self.storage.destroy(h),
 					NodeHandle::Hash(h) => {
-						let handle = self.cache(h, &combine_encoded(&key, &partial))?;
+						let keyspace = self.keyspace;
+						let handle = self.cache(h, (&combine_encoded(&key, &partial), keyspace))?;
 						self.storage.destroy(handle)
 					}
 				};
@@ -875,7 +905,7 @@ where
 		// always kill all the nodes on death row.
 		trace!(target: "trie", "{:?} nodes to remove from db", self.death_row.len());
 		for (hash, prefix) in self.death_row.drain() {
-			self.db.remove(&hash, &prefix);
+			self.db.remove(&hash, (&prefix, self.keyspace));
 		}
 
 		let handle = match self.root_handle() {
@@ -891,7 +921,7 @@ where
 				});
 				trace!(target: "trie", "encoded root node: {:#x?}", &encoded_root[..]);
 
-				*self.root = self.db.insert(nibbleslice::EMPTY_ENCODED, &encoded_root[..]);
+				*self.root = self.db.insert((nibbleslice::EMPTY_ENCODED, self.keyspace), &encoded_root[..]);
 				self.hash_count += 1;
 
 				self.root_handle = NodeHandle::Hash(*self.root);
@@ -924,7 +954,7 @@ where
 							node.into_encoded::<_, C, H>(commit_child)
 						};
 						if encoded.len() >= H::LENGTH {
-							let hash = self.db.insert(&prefix, &encoded[..]);
+							let hash = self.db.insert((&prefix, self.keyspace), &encoded[..]);
 							self.hash_count +=1;
 							ChildReference::Hash(hash)
 						} else {
