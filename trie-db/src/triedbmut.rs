@@ -1183,22 +1183,22 @@ where
 						// only one onward node. use child instead
 						let child = children[a as usize].take()
 							.expect("used_index only set if occupied; qed");
-						let mut kc = key.clone();
-						kc.advance((enc_nibble.1.len() * L::Nibble::NIBBLE_PER_BYTE) - enc_nibble.0);
-						let (st, ost, op) = match kc.left() {
-							(st, (0, _v)) => (st, None, (1, L::Nibble::push_at_left(0, a, 0))),
-							(st, (i, v)) if i == L::Nibble::LAST_NIBBLE_INDEX => {
-								let mut so: ElasticArray36<u8> = st.into();
+						let mut key2 = key.clone();
+						key2.advance((enc_nibble.1.len() * L::Nibble::NIBBLE_PER_BYTE) - enc_nibble.0);
+						let (start, alloc_start, prefix_end) = match key2.left() {
+							(start, (0, _v)) => (start, None, (1, L::Nibble::push_at_left(0, a, 0))),
+							(start, (i, v)) if i == L::Nibble::LAST_NIBBLE_INDEX => {
+								let mut so: ElasticArray36<u8> = start.into();
 								so.push(L::Nibble::pad_left(L::Nibble::LAST_NIBBLE_INDEX, v) | a);
-								(st, Some(so), (0, 0))
+								(start, Some(so), (0, 0))
 							},
-							(st, (ix, v)) => (st, None, (ix, L::Nibble::push_at_left(ix, a, v))),
+							(start, (ix, v)) => (start, None, (ix, L::Nibble::push_at_left(ix, a, v))),
 						};
-						let child_pref = (ost.as_ref().map(|st| &st[..]).unwrap_or(st), op);
+						let child_prefix = (alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start), prefix_end);
 						let stored = match child {
 							NodeHandle::InMemory(h) => self.storage.destroy(h),
 							NodeHandle::Hash(h) => {
-								let handle = self.cache(h, child_pref)?;
+								let handle = self.cache(h, child_prefix)?;
 								self.storage.destroy(handle)
 							}
 						};
@@ -1207,7 +1207,7 @@ where
 							Stored::Cached(node, hash) => {
 								self.death_row.insert((
 									hash,
-									(child_pref.0[..].into(), child_pref.1),
+									(child_prefix.0[..].into(), child_prefix.1),
 								));
 								node
 							},
@@ -1257,25 +1257,28 @@ where
 			Node::Extension(partial, child) => {
 				// We could advance key, but this code can also be called
 				// recursively, so there might be some prefix from branch.
-				let a = partial.1[partial.1.len() - 1] & (255 >> 4);
-				let mut kc = key.clone();
-				kc.advance((partial.1.len() * L::Nibble::NIBBLE_PER_BYTE) - partial.0 - 1);
-				let (st, ost, op) = match kc.left() {
-					(st, (0, _v)) => (st, None, (1, L::Nibble::push_at_left(0, a, 0))),
-					(st, (i, v)) if i == L::Nibble::LAST_NIBBLE_INDEX => {
-						let mut so: ElasticArray36<u8> = st.into();
-						// Complete last byte with `a`.
-						so.push(L::Nibble::pad_left(L::Nibble::LAST_NIBBLE_INDEX, v) | a);
-						(st, Some(so), (0, 0))
+				let last = L::Nibble::at_left(
+					L::Nibble::LAST_NIBBLE_INDEX,
+					partial.1[partial.1.len() - 1],
+				);
+				let mut key2 = key.clone();
+				key2.advance((partial.1.len() * L::Nibble::NIBBLE_PER_BYTE) - partial.0 - 1);
+				let (start, alloc_start, prefix_end) = match key2.left() {
+					(start, (0, _v)) => (start, None, (1, L::Nibble::push_at_left(0, last, 0))),
+					(start, (i, v)) if i == L::Nibble::LAST_NIBBLE_INDEX => {
+						let mut so: ElasticArray36<u8> = start.into();
+						// Complete last byte with `last`.
+						so.push(L::Nibble::pad_left(L::Nibble::LAST_NIBBLE_INDEX, v) | last);
+						(start, Some(so), (0, 0))
 					},
-					(st, (ix, v)) => (st, None, (ix, L::Nibble::push_at_left(ix, a, v))),
+					(start, (ix, v)) => (start, None, (ix, L::Nibble::push_at_left(ix, last, v))),
 				};
-				let child_pref = (ost.as_ref().map(|st| &st[..]).unwrap_or(st), op);
+				let child_prefix = (alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start), prefix_end);
 	
 				let stored = match child {
 					NodeHandle::InMemory(h) => self.storage.destroy(h),
 					NodeHandle::Hash(h) => {
-						let handle = self.cache(h, child_pref)?;
+						let handle = self.cache(h, child_prefix)?;
 						self.storage.destroy(handle)
 					}
 				};
@@ -1291,7 +1294,7 @@ where
 						if let Some(hash) = maybe_hash {
 							// delete the cached child since we are going to replace it.
 							self.death_row.insert(
-								(hash, (child_pref.0[..].into(), child_pref.1)),
+								(hash, (child_prefix.0[..].into(), child_prefix.1)),
 							);
 						}
 						// subpartial
@@ -1309,7 +1312,7 @@ where
 						// combine with node below.
 						if let Some(hash) = maybe_hash {
 							// delete the cached child since we are going to replace it.
-							self.death_row.insert((hash, (child_pref.0[..].into(), child_pref.1)));
+							self.death_row.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
 						}
 						// subpartial oly
 						let mut partial = partial;
@@ -1535,8 +1538,8 @@ where
 fn combine_key<N: NibbleOps>(start: &mut NodeKey, end: (usize, &[u8])) {
 	debug_assert!(start.0 < N::NIBBLE_PER_BYTE);
 	debug_assert!(end.0 < N::NIBBLE_PER_BYTE);
-	let final_ofset = (start.0 + end.0) % N::NIBBLE_PER_BYTE;
-	let _shifted = N::shift_key(start, final_ofset);
+	let final_offset = (start.0 + end.0) % N::NIBBLE_PER_BYTE;
+	let _shifted = N::shift_key(start, final_offset);
 	let st = if end.0 > 0 {
 		let sl = start.1.len();
 		start.1[sl - 1] |= N::pad_right((N::NIBBLE_PER_BYTE - end.0) as u8, end.1[0]);

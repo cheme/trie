@@ -297,7 +297,7 @@ impl<N: NibbleOps> Crumb<N> {
 				| (&Status::At, &OwnedNode::NibbledBranch(..)) => Status::AtChild(0),
 			(&Status::AtChild(x), &OwnedNode::Branch(_))
 				| (&Status::AtChild(x), &OwnedNode::NibbledBranch(..))
-				if x < N::NIBBLE_LENGTH => Status::AtChild(x + 1),
+				if x < (N::NIBBLE_LENGTH - 1) => Status::AtChild(x + 1),
 			_ => Status::Exiting,
 		}
 	}

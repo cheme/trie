@@ -134,10 +134,10 @@ impl<N: NibbleOps> NibbleVec<N> {
 	}
 
 	/// Append a `Partial`. Can be slow (alignement of partial).
-	pub fn append_partial(&mut self, (o_n, sl): Partial) {
-		for i in (1..=o_n.0).rev() {
+	pub fn append_partial(&mut self, (start_byte, sl): Partial) {
+		for i in (1..=start_byte.0).rev() {
 			let ix = N::NIBBLE_PER_BYTE - i as usize;
-			self.push(N::at_left(ix as u8, o_n.1));
+			self.push(N::at_left(ix as u8, start_byte.1));
 		}
 		let pad = self.inner.len() * N::NIBBLE_PER_BYTE - self.len;
 		if pad == 0 {

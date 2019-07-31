@@ -156,20 +156,20 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 	/// Shifts right aligned key to add a given left offset.
 	/// Resulting in possibly padding at both left and right
 	/// (example usage when combining two keys).
-	fn shift_key(key: &mut NodeKey, ofset: usize) -> bool {
+	fn shift_key(key: &mut NodeKey, offset: usize) -> bool {
 		let old_offset = key.0;
-		key.0 = ofset;
-		if old_offset > ofset {
+		key.0 = offset;
+		if old_offset > offset {
 			// shift left
-			let shift = old_offset - ofset;
+			let shift = old_offset - offset;
 			let (s1, s2) = Self::split_shifts(shift);
 			let kl = key.1.len();
 			(0..kl - 1).for_each(|i| key.1[i] = key.1[i] << s2 | key.1[i+1] >> s1);
 			key.1[kl - 1] = key.1[kl - 1] << s2;
 			true
-		} else if old_offset < ofset {
+		} else if old_offset < offset {
 			// shift right
-			let shift = ofset - old_offset;
+			let shift = offset - old_offset;
 			let (s1, s2) = Self::split_shifts(shift);
 			key.1.push(0);
 			(1..key.1.len()).rev().for_each(|i| key.1[i] = key.1[i - 1] << s1 | key.1[i] >> s2);
