@@ -14,7 +14,7 @@ use reference_trie::{
 use trie_db::{TrieMut, DBValue};
 use keccak_hasher::KeccakHasher;
 
-pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>) {
+pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>, usize) {
 	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
 	let mut root = Default::default();
 	{
@@ -24,19 +24,24 @@ pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>) {
 	}
 	}
 	let mut iter_res = Vec::new();
+	let mut error = 0;
 	{
 			let trie = RefTrieDB::new(&memdb, &root).unwrap();
 			let mut iter = trie.iter().unwrap();
-
-			iter.seek(&b"012"[..]).unwrap();
+			let prefix = &b"012"[..];
+			iter.seek(prefix).unwrap();
 
 			for x in iter {
 				let (key, _) = x.unwrap();
-				iter_res.push(key);
+				if key.starts_with(prefix) {
+					iter_res.push(key);
+				} else {
+					error +=1;
+				}
 
 			}
 
 	}
 	
-	(root, iter_res)
+	(root, iter_res, error)
 }
