@@ -605,6 +605,35 @@ mod tests {
 
 
 	#[test]
+	fn debug_that() {
+		let pairs = [
+			(vec![0, 0, 0, 255, 255, 255, 226, 226, 255, 255, 255, 255, 255, 255, 10, 10, 0, 33, 40, 255, 255, 255, 255, 91, 226, 0, 0, 226, 255, 10, 226, 226], vec![1,2]),
+			(vec![0, 0, 0, 255, 255, 255, 226, 226, 255, 255, 255, 255, 255, 255, 10, 10, 0, 33, 40, 255, 255, 255, 255, 91, 226, 0, 0, 226, 255, 226, 255, 0], vec![3,4]),
+		];
+
+		let (memdb, root) = build_trie_db_without_extension(&pairs);
+		let trie = RefTrieDBNoExt::new(&memdb, &root).unwrap();
+		let mut iter = TrieDBNodeIterator::new(&trie).unwrap();
+
+		TrieIterator::seek(&mut iter, &vec![30,31,32][..]).unwrap();
+
+		assert!(iter.next().is_none());
+		/*match iter.next() {
+			Some(Ok((prefix, _, _))) =>
+				assert_eq!(prefix, nibble_vec(hex!(""), 0)),
+			_ => panic!("unexpected item"),
+		}
+
+		match iter.next() {
+			Some(Ok((prefix, _, _))) =>
+				assert_eq!(prefix, nibble_vec(hex!("01"), 2)),
+			_ => panic!("unexpected item"),
+		}
+*/
+	}
+
+
+	#[test]
 	fn seek_works_without_extension() {
 		let pairs = vec![
 			(hex!("01").to_vec(), b"aaaa".to_vec()),

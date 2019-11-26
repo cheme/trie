@@ -7,6 +7,7 @@ use memory_db::{MemoryDB, HashKey, PrefixedKey};
 use reference_trie::{
 	RefTrieDBMutNoExt,
 	RefTrieDBMut,
+	RefTrieDBNoExt,
 	reference_trie_root,
 	calc_root_no_extension,
 	compare_no_extension_insert_remove,
@@ -18,7 +19,7 @@ pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>, usi
 	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
 	let mut root = Default::default();
 	{
-	let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
+	let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
 	for a in 0..data.len() {
 		t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
 	}
@@ -26,7 +27,7 @@ pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>, usi
 	let mut iter_res = Vec::new();
 	let mut error = 0;
 	{
-			let trie = RefTrieDB::new(&memdb, &root).unwrap();
+			let trie = RefTrieDBNoExt::new(&memdb, &root).unwrap();
 			let mut iter = trie.iter().unwrap();
 			let prefix = &b"012"[..];
 			iter.seek(prefix).unwrap();

@@ -577,6 +577,43 @@ mod tests {
 	}
 
 	#[test]
+	fn debug_that() {
+		let pairs = [
+			(vec![0, 0, 0, 255, 255, 255, 226, 226, 255, 255, 255, 255, 255, 255, 10, 10, 0, 33, 40, 255, 255, 255, 255, 91, 226, 0, 0, 226, 255, 10, 226, 226], vec![1,2]),
+			(vec![0, 0, 0, 255, 255, 255, 226, 226, 255, 255, 255, 255, 255, 255, 10, 10, 0, 33, 40, 255, 255, 255, 255, 91, 226, 0, 0, 226, 255, 226, 255, 0], vec![3,4]),
+		];
+		let mut memdb = MemoryDB::<KeccakHasher, PrefixedKey<_>, DBValue>::default();
+		let mut root = Default::default();
+		{
+			let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+			for (x, y) in &pairs {
+				t.insert(x, y).unwrap();
+			}
+		}
+
+		let trie = RefTrieDBNoExt::new(&memdb, &root).unwrap();
+		println!("{:?}", trie);
+		let mut iter = trie.iter().unwrap();
+
+		iter.seek(&vec![30,31,32][..]).unwrap();
+
+		assert!(iter.next().is_none());
+		/*match iter.next() {
+			Some(Ok((prefix, _, _))) =>
+				assert_eq!(prefix, nibble_vec(hex!(""), 0)),
+			_ => panic!("unexpected item"),
+		}
+
+		match iter.next() {
+			Some(Ok((prefix, _, _))) =>
+				assert_eq!(prefix, nibble_vec(hex!("01"), 2)),
+			_ => panic!("unexpected item"),
+		}
+*/
+	}
+
+
+	#[test]
 	fn get_length_with_extension() {
 		let mut memdb = MemoryDB::<KeccakHasher, PrefixedKey<_>, DBValue>::default();
 		let mut root = Default::default();
