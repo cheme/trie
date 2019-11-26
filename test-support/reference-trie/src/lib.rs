@@ -582,11 +582,11 @@ impl<'a> ByteSliceInput<'a> {
 }
 
 impl<'a> Input for ByteSliceInput<'a> {
-	fn remaining_len(&mut self) -> Result<Option<usize>, CodecError> {
+	fn remaining_len(&mut self) -> Result<usize, CodecError> {
 		let remaining = if self.offset <= self.data.len() {
-			Some(self.data.len() - self.offset)
+			self.data.len() - self.offset
 		} else {
-			None
+			0
 		};
 		Ok(remaining)
 	}

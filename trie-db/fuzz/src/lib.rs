@@ -18,11 +18,12 @@ use memory_db::{MemoryDB, HashKey, PrefixedKey};
 use reference_trie::{
 	RefTrieDBMutNoExt,
 	RefTrieDBMut,
+	RefTrieDB,
 	reference_trie_root,
 	calc_root_no_extension,
 	compare_no_extension_insert_remove,
 };
-use trie_db::{TrieMut, DBValue};
+use trie_db::{Trie, TrieMut, DBValue};
 use keccak_hasher::KeccakHasher;
 
 
@@ -172,4 +173,42 @@ pub fn fuzz_that_no_extension_insert_remove(input: &[u8]) {
 
 	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	compare_no_extension_insert_remove(data, memdb);
+}
+
+pub fn fuzz_that_cmp_impl(input: &[u8]) {
+	let data = data_sorted_unique(fuzz_to_data_fix_length(input));
+	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
+	let mut root = Default::default();
+	{
+	let mut t = RefTrieDBMut::new(&mut memdb, &mut root);
+	for a in 0..data.len() {
+		t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+	}
+	}
+	let mut ttt = Vec::new();
+	{
+			let trie = RefTrieDB::new(&memdb, &root).unwrap();
+			let mut iter = trie.iter().unwrap();
+
+			iter.seek(&b"012"[..]).unwrap();
+
+			for x in iter {
+				let (key, _) = x.unwrap();
+				ttt.push(key);
+
+			}
+
+	}
+	
+	let (root2, tt) = reference_trie2::mut_insert(&data);
+
+	assert_eq!(&root[..], &root2[..]);
+	assert_eq!(ttt, tt);
+
+}
+
+#[test]
+fn test_it() {
+	let data: Vec<u8> = vec![0x0,0x0,0x0,0xff,0xff,0xff,0xe2,0xe2,0xff,0xff,0xff,0xff,0xff,0xff,0xa,0xa,0x0,0x21,0x28,0xff,0xff,0xff,0xff,0x5b,0xe2,0x0,0x0,0xe2,0xff,0xa,0xe2,0xe2,0x0,0x0,0x0,0xff,0xff,0xff,0xe2,0xe2,0xff,0xff,0xff,0xff,0xff,0xff,0xa,0xa,0x0,0x21,0x28,0xff,0xff,0xff,0xff,0x5b,0xe2,0x0,0x0,0xe2,0xff,0xe2,0xff,0x0,0x0,0x0,0x0,];
+	fuzz_that_cmp_impl(&data[..]);
 }

@@ -1,0 +1,13 @@
+[package]
+name = "reference-trie2"
+version = "0.0.1"
+authors = ["cheme <emericchevalier.pro@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+reference-trie = "0.15.2"
+memory-db = { version = "0.15.2" }
+trie-db = { version = "0.15.2" }
+keccak-hasher = { version = "0.15.2" }
