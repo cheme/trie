@@ -460,8 +460,8 @@ impl<'a, L: TrieLayout> TrieDBIterator<'a, L> {
 
 	/// The present key. This can only be called on valued node (key is therefore
 	/// aligned to byte).
-	fn key(&self) -> NibbleSlice {
-		self.key_nibbles.as_nibbleslice().expect("a key is aligned to byte;qed")
+	fn key(&self) -> Option<NibbleSlice> {
+		self.key_nibbles.as_nibbleslice()
 	}
 
 }
@@ -507,10 +507,21 @@ impl<'a, L: TrieLayout> Iterator for TrieDBIterator<'a, L> {
 					(Status::At, &OwnedNode::NibbledBranch(_, ref branch))
 						| (Status::At, &OwnedNode::Branch(ref branch)) if branch.has_value() => {
 						let value = branch.get_value().expect("already checked `has_value`");
-						return Some(Ok((self.key().right().1.into(), DBValue::from_slice(value))));
+						let key = self.key();
+						if key.is_none() {
+							return Some(Err(Box::new(TrieError::InvalidStateRoot(Default::default()))))
+						}
+						let key = key.unwrap();
+						return Some(Ok((key.right().1.into(), DBValue::from_slice(value))));
 					},
 					(Status::At, &OwnedNode::Leaf(_, ref v)) => {
-						return Some(Ok((self.key().right().1.into(), v.clone())));
+						let key = self.key();
+						if key.is_none() {
+							return Some(Err(Box::new(TrieError::InvalidStateRoot(Default::default()))))
+						}
+						let key = key.unwrap();
+
+						return Some(Ok((key.right().1.into(), v.clone())));
 					},
 					(Status::At, &OwnedNode::Extension(_, ref d)) => {
 						IterStep::Descend::<TrieHash<L>, CError<L>>(
@@ -931,5 +942,53 @@ mod tests {
 		let lookup = RefLookup { db: t.db(), query: q, hash: root };
 		let query_result = lookup.look_up(NibbleSlice::new(b"A"));
 		assert_eq!(query_result.unwrap().unwrap(), true);
+	}
+
+	#[test]
+	fn test_fuzzer() {
+
+	let data = vec![
+		(vec![48, 49, 50], [0, 0]),
+		(vec![48, 49, 50, 64 ], [48, 49]),
+		(vec![49], [48, 49]),
+	];
+	let mut memdb = MemoryDB::<_, memory_db::HashKey<_>, _>::default();
+	let mut root = Default::default();
+	{
+	let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+	for a in 0..data.len() {
+		println!("k: {:?}, v: {:?}", &data[a].0[..], &data[a].1[..]);
+		t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+	}
+	}
+	let mut iter_res = Vec::new();
+	let mut error = 0;
+	{
+//		use trie_db::TrieIterator;
+			let trie = RefTrieDBNoExt::new(&memdb, &root).unwrap();
+			println!("{:?}", &trie);
+			let mut iter = trie.iter().unwrap();
+			let prefix = &b"012"[..];
+			if let Ok(_) = iter.seek(prefix) {
+			} else {
+				error += 1;
+			}
+
+			for x in iter {
+				println!("iter once");
+				if let Ok((key, _)) = x {
+				if key.starts_with(prefix) {
+					iter_res.push(key);
+				} else {
+					error +=1;
+				}
+				} else {
+					error +=1;
+				}
+
+			}
+
+	}
+
 	}
 }

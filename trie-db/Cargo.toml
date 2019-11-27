@@ -33,7 +33,3 @@ std = [
   "hash-db/std",
   "rand/std",
 ]
-
-[[bench]]
-name = "bench"
-harness = false
