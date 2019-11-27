@@ -30,12 +30,18 @@ pub fn mut_insert(data: &Vec<(Vec<u8>,Vec<u8>)>) -> ([u8; 32], Vec<Vec<u8>>, usi
 			let trie = RefTrieDBNoExt::new(&memdb, &root).unwrap();
 			let mut iter = trie.iter().unwrap();
 			let prefix = &b"012"[..];
-			iter.seek(prefix).unwrap();
+/*			if let Ok(_) = iter.seek(prefix) {
+			} else {
+				error += 1;
+			}*/
 
 			for x in iter {
-				let (key, _) = x.unwrap();
+				if let Ok((key, _)) = x {
 				if key.starts_with(prefix) {
 					iter_res.push(key);
+				} else {
+					error +=1;
+				}
 				} else {
 					error +=1;
 				}

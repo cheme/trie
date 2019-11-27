@@ -129,7 +129,7 @@ impl<'a, L: TrieLayout> TrieDBNodeIterator<'a, L> {
 					NodePlan::Extension { partial: partial_plan, child } => {
 						let slice = partial_plan.build(node_data);
 						if !partial.starts_with(&slice) {
-							if !broken && slice < partial {
+							if !true && slice < partial {
 								crumb.status = Status::Exiting;
 								self.key_nibbles.append_partial(slice.right());
 							}
@@ -174,7 +174,7 @@ impl<'a, L: TrieLayout> TrieDBNodeIterator<'a, L> {
 					NodePlan::NibbledBranch { partial: partial_plan, value: _, children } => {
 						let slice = partial_plan.build(node_data);
 						if !partial.starts_with(&slice) {
-							if !broken && slice < partial {
+							if !true && slice < partial {
 								crumb.status = Status::Exiting;
 								self.key_nibbles.append_partial(slice.right());
 								self.key_nibbles.push((nibble_ops::NIBBLE_LENGTH - 1) as u8);
