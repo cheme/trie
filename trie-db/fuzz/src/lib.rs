@@ -15,14 +15,21 @@
 
 
 use memory_db::{MemoryDB, HashKey, PrefixedKey};
+use hash_db::{EMPTY_PREFIX, HashDB};
 use reference_trie::{
 	RefTrieDBMutNoExt,
+	RefTrieDBNoExt,
 	RefTrieDBMut,
 	reference_trie_root,
 	calc_root_no_extension,
 	compare_no_extension_insert_remove,
+	Recorder,
+	NoExtensionLayout,
 };
-use trie_db::{TrieMut, DBValue};
+use trie_db::{TrieMut, Trie, DBValue,
+	encode_compact,
+	decode_compact,
+};
 use keccak_hasher::KeccakHasher;
 
 
@@ -172,4 +179,44 @@ pub fn fuzz_that_no_extension_insert_remove(input: &[u8]) {
 
 	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	compare_no_extension_insert_remove(data, memdb);
+}
+
+pub fn fuzz_proof_reduction(input: &[u8]) {
+	let data = fuzz_to_data(input);
+	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
+	let mut root = Default::default();
+	{
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for a in 0..data.len() {
+			t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+		}
+	}
+	let mut recorder = Recorder::new();
+	{
+		let t = RefTrieDBNoExt::new(&memdb, &root).unwrap();
+		for a in 0..data.len() {
+			if a % 3 == 0 {
+				t.get_with(&data[a].0[..], &mut recorder).unwrap();
+			}
+		}
+	}
+
+	// create a proof
+	let nodes_proof: Vec<_> = recorder.drain().into_iter().map(|r| r.data).collect();
+
+	let mut partial_db = MemoryDB::<_, memory_db::HashKey<_>, _>::default();
+	for record in nodes_proof.clone().into_iter() {
+		partial_db.insert(EMPTY_PREFIX, &record);
+	}
+
+	let compact_proof = {
+		let trie = RefTrieDBNoExt::new(&partial_db, &root).unwrap();
+		encode_compact::<NoExtensionLayout>(&trie).unwrap()
+	};
+
+	let mut db_build = MemoryDB::<_, memory_db::HashKey<_>, _>::default();
+	let (n_root, _used) = decode_compact::<NoExtensionLayout, _, _>(&mut db_build, &compact_proof).unwrap();
+	assert_eq!(n_root, root);
+	let a = db_build.drain() == partial_db.drain();
+//	assert_eq!(db_build.drain(), partial_db.drain());
 }
