@@ -217,6 +217,17 @@ pub fn fuzz_proof_reduction(input: &[u8]) {
 	let mut db_build = MemoryDB::<_, memory_db::HashKey<_>, _>::default();
 	let (n_root, _used) = decode_compact::<NoExtensionLayout, _, _>(&mut db_build, &compact_proof).unwrap();
 	assert_eq!(n_root, root);
-	let a = db_build.drain() == partial_db.drain();
-//	assert_eq!(db_build.drain(), partial_db.drain());
+	let partial: std::collections::BTreeSet<_> = partial_db.drain().into_iter()
+		.filter_map(|(_k, (v, rc))| if rc > 0 {
+		Some(v)
+	} else {
+		None
+	}).collect();
+	let buidl: std::collections::BTreeSet<_> = db_build.drain().into_iter()
+		.filter_map(|(_k, (v, rc))| if rc > 0 {
+		Some(v)
+	} else {
+		None
+	}).collect();
+	assert_eq!(buidl, partial);
 }
