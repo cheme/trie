@@ -107,7 +107,7 @@ pub use trie_codec::{decode_compact, encode_compact};
 pub use iter_build::TrieRootPrint;
 
 /// Database value
-pub type DBValue = smallvec::SmallVec<[u8; 128]>;
+pub type DBValue = Vec<u8>;
 
 /// Trie Errors.
 ///
@@ -191,7 +191,7 @@ pub trait Query<H: Hasher> {
 
 impl<'a, H: Hasher> Query<H> for &'a mut Recorder<H::Out> {
 	type Item = DBValue;
-	fn decode(self, value: &[u8]) -> DBValue { DBValue::from_slice(value) }
+	fn decode(self, value: &[u8]) -> DBValue { value.to_vec() }
 	fn record(&mut self, hash: &H::Out, data: &[u8], depth: u32) {
 		(&mut **self).record(hash, data, depth);
 	}
@@ -228,7 +228,7 @@ pub trait Trie<L: TrieLayout> {
 		&'a self,
 		key: &'key [u8],
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> where 'a: 'key {
-		self.get_with(key, DBValue::from_slice)
+		self.get_with(key, <[u8]>::to_vec)
 	}
 
 	/// Search for the key with the given query parameter. See the docs of the `Query`
