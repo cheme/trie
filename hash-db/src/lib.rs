@@ -185,3 +185,47 @@ impl<'a, K, V> AsPlainDB<K, V> for &'a mut dyn PlainDB<K, V> {
 	fn as_plain_db(&self) -> &dyn PlainDB<K, V> { &**self }
 	fn as_plain_db_mut<'b>(&'b mut self) -> &'b mut (dyn PlainDB<K, V> + 'b) { &mut **self }
 }
+
+/// Fix hash implementation, it needs to have
+/// same output length as input for rounds of hashing.
+/// TODO consider moving in its own crate.
+pub trait FixHash {
+	type Hasher: Hasher;
+	/// if true, then when processing two leaf we do a finalize round.
+	/// TODO I think only one may be insecure but do not remember
+	/// the rational, also this should be an associated constant
+	/// (TODO group types parameters)
+	///
+	/// Tells if state/iv can be initiated from first element of pair.
+	///
+	/// TODO could it be skipped in any circumstance or the other way
+	/// arount, todo check blake3 permutation
+	///
+	/// Need first hashed implies that we cannot use back a state by
+	/// calling a second hash.
+	/// TODO write a test case for that !!!
+	/// TODO rename to need finalize??
+	/// TODO for keccack we could only hash(hash1 xor hash2)?
+	const NEED_FIRST_HASHED: bool;
+	/// Value of empty hash at some given depth 
+	/// TODO test case it
+	const EMPTY_HASHES: &'static [&'static [u8]];
+
+	// The fix hash type of the `Hasher`. -> is Hasher::Out
+//	type Out: AsRef<[u8]> + AsMut<[u8]> + Default + hash_db::MaybeDebug + PartialEq + Eq
+//		+ Send + Sync + Clone + Copy;
+
+	// The length in bytes of the `Out` output. -> is Hasher::Length
+//	const LENGTH: usize;
+
+	/// Compute the hash 
+	fn new(first: <Self::Hasher as Hasher>::Out) -> Self;
+	/// Compute the hash 
+	fn hash(&mut self, second: &<Self::Hasher as Hasher>::Out);
+	/// Access current state (if NEED_FIRST_HASHED is false).
+	fn current_state(&self) -> &<Self::Hasher as Hasher>::Out;
+	/// Extract hash (if NEED_FIRST_HASHED is true).
+	fn finalize(self) -> <Self::Hasher as Hasher>::Out;
+}
+
+
