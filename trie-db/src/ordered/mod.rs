@@ -135,6 +135,11 @@ fn depth(nb: usize) -> usize {
 	}
 }
 
+fn right_at(value: usize, index: usize) -> bool {
+	value & (1 << index) != 0
+}
+
+
 impl SequenceBinaryTree<usize> {
 	pub fn new(offset: usize, start: usize, number: usize) -> Self {
 		let len = start + number;
@@ -177,15 +182,32 @@ impl SequenceBinaryTree<usize> {
 	}
 
 	fn depth_index(&self, index: usize) -> usize {
-		// if index start with 1 (1 at index depth), check end
+		if self.depth == 0 {
+			// TODO this corner case is bad, should switch depth indexing.
+			// and boolean empty.
+			return 0;
+		} else if self.depth == 1 {
+			// one elt first index too
+			return 0;
+		};
+		let mut depth = self.depth - 2;
+		let mut result = self.depth;
+		// TODO this iteration could be probably optimize with bit logic
+		// but that is probably not big gain.
+		while index & (1 << depth) != 0
+			|| self.end & (1 << depth) != 0
+		{
+			if self.end & (1 << depth) != 0 {
+				result -= 1;
+			}
+			if depth == 0 {
+				break;
+			} else {
+				depth -= 1;
+			}
+		}
 
-		// remove bit from start to end depth
-
-		// apply & on nb element deleted then count number of one and reduce by it
-
-		// else depth
-		// TODO implement start (mirror algo of end)
-		self.depth
+		result
 	}
 
 	fn pop(&mut self, nb: usize) {
@@ -276,7 +298,6 @@ mod test {
 			(16, 5),
 			(17, 6),
 			(32, 6),
-
 		];
 		let mut tree = Tree::default();
 		let mut prev = 0;
@@ -290,4 +311,40 @@ mod test {
 			assert_eq!(tree, tree2);
 		}
 	}
+
+	#[test]
+	fn test_depth_index() {
+		// 8 trie
+		let tree = Tree::new(0, 0, 7);
+		assert_eq!(tree.depth_index(3), 4);
+		assert_eq!(tree.depth_index(4), 4);
+		assert_eq!(tree.depth_index(6), 3);
+		let tree = Tree::new(0, 0, 6);
+		assert_eq!(tree.depth_index(0), 4);
+		assert_eq!(tree.depth_index(3), 4);
+		assert_eq!(tree.depth_index(4), 3);
+		assert_eq!(tree.depth_index(5), 3);
+		let tree = Tree::new(0, 0, 5);
+		assert_eq!(tree.depth_index(3), 4);
+		assert_eq!(tree.depth_index(4), 2);
+		// 16 trie
+		let tree = Tree::new(0, 0, 12);
+		assert_eq!(tree.depth_index(7), 5);
+		assert_eq!(tree.depth_index(8), 4);
+		assert_eq!(tree.depth_index(11), 4);
+		let tree = Tree::new(0, 0, 11);
+		assert_eq!(tree.depth_index(7), 5);
+		assert_eq!(tree.depth_index(8), 4);
+		assert_eq!(tree.depth_index(9), 4);
+		assert_eq!(tree.depth_index(10), 3);
+		let tree = Tree::new(0, 0, 10);
+		assert_eq!(tree.depth_index(7), 5);
+		assert_eq!(tree.depth_index(8), 3);
+		assert_eq!(tree.depth_index(9), 3);
+		let tree = Tree::new(0, 0, 9);
+		assert_eq!(tree.depth_index(7), 5);
+		assert_eq!(tree.depth_index(8), 2);
+		// 32 trie TODO
+	}
+
 }
