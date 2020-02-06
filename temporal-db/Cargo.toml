@@ -1,0 +1,14 @@
+[package]
+name = "temporal-db"
+version = "0.0.1"
+authors = ["Parity Technologies <admin@parity.io>"]
+description = "Trait for key value databases with history."
+license = "Apache-2.0"
+categories = [ "no-std" ]
+repository = "https://github.com/paritytech/trie"
+edition = "2018"
+
+[features]
+default = ["std"]
+std = [
+]
