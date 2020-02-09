@@ -15,7 +15,7 @@
 //! Hasher implementation for the Keccak-256 hash
 
 use hash_db::Hasher;
-use hash_db::FixHash;
+//use hash_db::FixHash;
 use tiny_keccak::Keccak;
 use hash256_std_hasher::Hash256StdHasher;
 
@@ -36,7 +36,7 @@ impl Hasher for KeccakHasher {
 	}
 }
 
-
+/* TODO this is rather bad trait see if delete??
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct FixKeccakHasher([u8;32]);
 impl FixHash for FixKeccakHasher {
@@ -57,7 +57,7 @@ impl FixHash for FixKeccakHasher {
 		unimplemented!()
 	}
 }
-
+*/
 
 #[cfg(test)]
 mod tests {

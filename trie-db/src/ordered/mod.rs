@@ -14,7 +14,7 @@
 
 //! This module contains implementation of trie/tree based on ordered sequential key only.
 
-use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX, Hasher, FixHash};
+use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX, Hasher};
 use super::{Result, DBValue};
 use crate::rstd::marker::PhantomData;
 use crate::rstd::vec::Vec;
@@ -86,7 +86,7 @@ pub mod meta {
 /// A binary trie with guaranties
 /// of content being in a fix range
 /// of sequential values.
-pub struct SequenceBinaryTree<K: key::OrderedKey> {
+pub struct SequenceBinaryTree<K> {
 	// Metadata (needs to be validated)
 
 	/// global offset for index.
@@ -106,10 +106,15 @@ pub struct SequenceBinaryTree<K: key::OrderedKey> {
 	_ph: PhantomData<K>,
 }
 
-pub struct SequenceBinaryTreeDB<'a, K: key::OrderedKey, H: FixHash> {
+pub struct SequenceBinaryTreeDB<'a, K, H: Hasher> {
 	tree: &'a SequenceBinaryTree<K>,
 	db: &'a dyn HashDBRef<H, DBValue>,
-	root: &'a <H::Hasher as Hasher>::Out,
+	root: &'a H::Out,
+}
+
+pub struct SequenceBinaryTreeInMem<'a, K, NK: Ord, H: Hasher> {
+	tree: &'a SequenceBinaryTree<K>,
+	db: &'a crate::rstd::BTreeMap<NK, H::Out>,
 }
 
 impl Default for SequenceBinaryTree<usize> {
@@ -128,17 +133,41 @@ impl Default for SequenceBinaryTree<usize> {
 }
 
 fn depth(nb: usize) -> usize {
-	if nb == 0 {
-		0
-	} else {
-		((0usize.leading_zeros() - (nb - 1).leading_zeros()) as usize) + 1
+	(0usize.leading_zeros() - nb.leading_zeros()) as usize
+/*	if nb == 0 {
+		return 0;
 	}
+
+	((0usize.leading_zeros() - (nb - 1).leading_zeros()) as usize) + 1*/
+}
+
+#[test]
+fn test_depth() {
+/*
+			(0, 0),
+			(1, 1),
+			(2, 2),
+			(3, 2),
+			(4, 3),
+			(5, 3),
+			(7, 3),
+			(8, 4),
+*/	
+	assert_eq!(depth(0), 0);
+	assert_eq!(depth(1), 1);
+	assert_eq!(depth(2), 2);
+	assert_eq!(depth(3), 2);
+	assert_eq!(depth(4), 3);
+	assert_eq!(depth(7), 3);
+	assert_eq!(depth(8), 4);
+	assert_eq!(depth(9), 4);
+	assert_eq!(depth(u16::max_value() as usize - 1), 16);
+	assert_eq!(depth(u16::max_value() as usize), 16);
 }
 
 fn right_at(value: usize, index: usize) -> bool {
 	value & (1 << index) != 0
 }
-
 
 impl SequenceBinaryTree<usize> {
 	pub fn new(offset: usize, start: usize, number: usize) -> Self {
@@ -277,9 +306,209 @@ impl SequenceBinaryTree<usize> {
 // then the value just need to be extract from terminal hash instead. (terminal hash marker
 // and value describe above is still interesting).
 
+
+/// key of node is a sequence of one bit nibbles.
+pub trait KeyNode {
+	fn depth(&self) -> usize;
+	// return nibble at depth (bin tree so return bool)
+	fn nibble_at(&self, depth: usize) -> Option<bool>;
+	// last is leaf
+	fn pop_back(&mut self) -> Option<bool>;
+	fn push_back(&mut self, nibble: bool);
+	fn pop_front(&mut self) -> Option<bool>;
+	fn push_front(&mut self, nibble: bool);
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+// please do not use, only for test of (usize, K)
+struct VecKeyNode(std::collections::VecDeque<bool>);
+#[cfg(test)]
+impl KeyNode for  VecKeyNode {
+	fn depth(&self) -> usize {
+		self.0.len()
+	}
+	fn nibble_at(&self, depth: usize) -> Option<bool> {
+		self.0.get(depth).cloned()
+	}
+	fn pop_back(&mut self) -> Option<bool> {
+		self.0.pop_back()
+	}
+	fn push_back(&mut self, nibble: bool) {
+		self.0.push_back(nibble)
+	}
+	fn pop_front(&mut self) -> Option<bool> {
+		self.0.pop_front()
+	}
+	fn push_front(&mut self, nibble: bool) {
+		self.0.push_front(nibble)
+	}
+}
+
+#[cfg(test)]
+impl From<(usize, usize)> for VecKeyNode {
+	fn from((key, depth): (usize, usize)) -> Self {
+		if depth == 0 {
+			return VecKeyNode(std::collections::VecDeque::new());
+		}
+/*		if depth == 0 {
+			return vec![];
+			return vec![0];
+			return vec![0, 0];
+			...
+		}
+		if depth == 1 {
+			return vec![1];
+			return vec![0, 1];
+			return vec![0, 0, 1];
+		}
+		if depth == 2 {
+			return vec![1, 0];
+			return vec![0, 1, 0];
+		}
+		if depth == 3 {
+			return vec![1, 1];
+			return vec![0, 1, 1];
+		}
+		if depth == 4 {
+			return vec![1, 0, 0];
+		}
+		if depth == 5 {
+			return vec![1, 0, 1];
+		}
+*/
+
+
+		VecKeyNode(
+			(1..=depth).map(|i| right_at(key, depth - i)).collect()
+		)
+	}
+}
+
+#[cfg(test)]
+impl Into<usize> for VecKeyNode {
+	fn into(self) -> usize {
+		let mut result = 0;
+		let depth = self.depth();
+		self.0.into_iter().enumerate().for_each(|(i, b)| if b {
+			result = result | (1 << depth - (i + 1));
+		});
+		result
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UsizeKeyNode {
+	value: usize,
+	depth: usize,
+}
+
+// first is len, second is key
+impl KeyNode for UsizeKeyNode {
+	fn depth(&self) -> usize {
+		self.depth
+	}
+	fn nibble_at(&self, depth: usize) -> Option<bool> {
+		if depth < self.depth {
+			Some(right_at(self.value, self.depth - depth))
+		} else {
+			None
+		}
+	}
+	fn pop_back(&mut self) -> Option<bool> {
+		if self.depth == 0 {
+			return None;
+		}
+		// TODO is pop returned value of any use:
+		// most likely not -> change trait and test
+		let result = self.value & 1;
+		self.depth -= 1;
+		self.value = self.value >> 1;
+		Some(result != 0)
+	}
+	fn push_back(&mut self, nibble: bool) {
+		self.value = self.value << 1;
+		self.value = self.value | 1;
+		self.depth +=1;
+	}
+	fn pop_front(&mut self) -> Option<bool> {
+		if self.depth == 0 {
+			return None;
+		}
+		// TODO is pop returned value of any use:
+		// most likely not -> change trait and test
+		let result = self.value & (1 << (self.depth - 1));
+		self.value = self.value & !(1 << (self.depth - 1));
+		self.depth -= 1;
+		Some(result != 0)
+	}
+	fn push_front(&mut self, nibble: bool) {
+		self.depth += 1;
+		self.value = self.value | (1 << (self.depth - 1));
+	}
+}
+
+impl From<(usize, usize)> for UsizeKeyNode {
+	fn from((value, depth): (usize, usize)) -> Self {
+		UsizeKeyNode { value, depth }
+	}
+}
+
+impl Into<usize> for UsizeKeyNode {
+	fn into(self) -> usize {
+		self.value
+	}
+}
+
+#[test]
+fn key_node_test() {
+	let test = |start: usize, end: bool| {
+		let depth = depth(start);
+		let mut v = VecKeyNode::from((start, depth));
+		let mut u = UsizeKeyNode::from((start, depth));
+		if !end {
+			assert_eq!(u.push_back(true), v.push_back(true));
+		}
+		assert_eq!(u.pop_back(), v.pop_back());
+		assert_eq!(u.push_front(true), v.push_front(true));
+		assert_eq!(u.pop_front(), v.pop_front());
+		if !end {
+			assert_eq!(start, u.into());
+			assert_eq!(start, v.clone().into());
+		}
+		assert_eq!(u.pop_back(), v.pop_back());
+		let u: usize = u.into();
+		assert_eq!(u, v.into());
+	};
+	let t: VecKeyNode = (5, 4).into();
+	let t: Vec<bool> = t.0.into_iter().collect();
+	assert_eq!(t, vec![false, true, false, true]);
+	let t: std::collections::VecDeque<bool> = [false, true, false, true].iter().cloned().collect();
+	assert_eq!(5usize, VecKeyNode(t).into());
+	for i in 0..17 {
+		test(i, false);
+	}
+	test(usize::max_value() - 1, true);
+}
+
+pub trait ProcessNode<H, KN> {
+	fn process(key: KN, child1: H, child2: H) -> H;
+}
+
+// This only include hash, for including hashed value or inline node, just map the process over the
+// input iterator (note that for inline node we need to attach this inline info to the tree so it
+// only make sense for small trie or fix length trie).
+pub fn trie_visit<H, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F)
+	where
+		KN: Into<usize> + From<(usize, usize)>,
+		I: IntoIterator<Item = (usize, H)>,
+		F: ProcessNode<H, KN>,
+{
+}
+
 #[cfg(test)]
 mod test {
-	use keccak_hasher::FixKeccakHasher;
+	//use keccak_hasher::FixKeccakHasher;
 
 	//type Tree = super::SequenceBinaryTree<usize, FixKeccakHasher>;
 	type Tree = super::SequenceBinaryTree<usize>;

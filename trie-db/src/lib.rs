@@ -22,6 +22,7 @@ extern crate alloc;
 mod rstd {
 	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
 	pub use std::collections::VecDeque;
+	pub use std::collections::BTreeMap;
 	pub use std::error::Error;
 }
 

@@ -186,6 +186,10 @@ impl<'a, K, V> AsPlainDB<K, V> for &'a mut dyn PlainDB<K, V> {
 	fn as_plain_db_mut<'b>(&'b mut self) -> &'b mut (dyn PlainDB<K, V> + 'b) { &mut **self }
 }
 
+/*
+
+TODO this is rather shit at this point not delete yet just in case
+
 /// Fix hash implementation, it needs to have
 /// same output length as input for rounds of hashing.
 /// TODO consider moving in its own crate.
@@ -227,5 +231,5 @@ pub trait FixHash {
 	/// Extract hash (if NEED_FIRST_HASHED is true).
 	fn finalize(self) -> <Self::Hasher as Hasher>::Out;
 }
-
+*/
 
