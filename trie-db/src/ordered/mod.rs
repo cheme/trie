@@ -202,6 +202,11 @@ impl SequenceBinaryTree<usize> {
 		}
 	}
 
+	// TODO consider storing that
+	fn nb_elements(&self) -> usize {
+		self.length - self.start - self.end
+	}
+
 	fn push(&mut self, mut nb: usize) {
 		if nb == 0 {
 			return;
@@ -248,6 +253,41 @@ impl SequenceBinaryTree<usize> {
 		}
 	}
 
+	fn iter_depth(&self, from: Option<usize>) -> impl Iterator<Item = usize> {
+		if let Some(from) = from {
+			unimplemented!();
+		}
+		let nb_elements = self.nb_elements();
+		let mut index = 0;
+		let mut depth = self.depth;
+		let length = self.length;
+		let mut end = UsizeKeyNode::from((self.end, self.end_depth));
+		let mut next_skip = length - if end.depth > 0 {
+			1usize << end.depth // two time deletion range
+		} else {
+			0
+		};
+		crate::rstd::iter::from_fn(move || {
+			if index < nb_elements {
+				if index == next_skip {
+					while end.pop_front() == Some(true) {
+						depth -= 1;
+					}
+					while end.nibble_at(0) == Some(false) {
+						end.pop_front();
+					}
+					if end.depth > 0 {
+						next_skip += (1usize << end.depth)
+					}
+				}
+				index += 1;
+				Some(depth)
+			} else {
+				None
+			}
+		})
+	}
+
 	fn pop(&mut self, nb: usize) {
 		unimplemented!("update max depth");
 	}
@@ -261,7 +301,6 @@ impl SequenceBinaryTree<usize> {
 		// 2^x = max_depth_length
 		unimplemented!()
 	}
-
 
 	fn front_depth(index: usize) -> usize {
 		unimplemented!("for index between end and max len");
@@ -419,7 +458,7 @@ impl KeyNode for UsizeKeyNode {
 	}
 	fn nibble_at(&self, depth: usize) -> Option<bool> {
 		if depth < self.depth {
-			Some(right_at(self.value, self.depth - depth))
+			Some(right_at(self.value, self.depth - 1 - depth))
 		} else {
 			None
 		}
@@ -475,6 +514,7 @@ fn key_node_test() {
 		let depth = depth(start);
 		let mut v = VecKeyNode::from((start, depth));
 		let mut u = UsizeKeyNode::from((start, depth));
+		assert_eq!(v.nibble_at(start), u.nibble_at(start));
 		if !end {
 			assert_eq!(u.push_back(true), v.push_back(true));
 		}
@@ -500,19 +540,134 @@ fn key_node_test() {
 	test(usize::max_value() - 1, true);
 //	test(usize::max_value());
 }
-pub trait ProcessNode<H, KN> {
-	fn process(key: KN, child1: H, child2: H) -> H;
+
+/// Small trait for to allow using buffer of type [u8; H::LENGTH * 2].
+pub trait BinaryHasher: Hasher {
+	/// Hash for the empty content (is hash(&[])).
+	const NULL_HASH: &'static [u8];
+	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
 }
+
+/// Test function to use on every binary buffer implementation.
+pub fn test_binary_hasher<H: BinaryHasher>() {
+	let size = <H as Hasher>::LENGTH * 2;
+	let buf = <H as BinaryHasher>::Buffer::default();
+	assert_eq!(buf.as_ref().len(), size);
+	let null_hash = H::hash(&[]);
+	assert_eq!(H::NULL_HASH, null_hash.as_ref());
+
+}
+
+pub trait ProcessNode<HO, KN> {
+	/// Callback for an empty trie, return byte representation
+	/// of the hash for the empty trie.
+	fn process_empty_trie(&mut self) -> &[u8];
+	/// Process two child node to produce the parent one.
+	fn process(&mut self, key: &KN, child1: &[u8], child2: &[u8]) -> HO;
+	/// callback on the calculated root.
+	fn register_root(&mut self, root: &HO);
+}
+
+/// Does only proccess hash on its buffer.
+/// Buffer length need to be right and is unchecked. 
+pub struct HashOnly<'a, H>(&'a mut [u8], PhantomData<H>);
+
+impl<'a, H: BinaryHasher> HashOnly<'a, H> {
+	pub fn buffer() -> H::Buffer {
+		H::Buffer::default()
+	}
+	pub fn new(buff: &'a mut H::Buffer) -> Self {
+		HashOnly(buff.as_mut(), PhantomData)
+	}
+	pub fn new_unchecked(buff: &'a mut [u8]) -> Self {
+		HashOnly(buff, PhantomData)
+	}
+}
+
+impl<'a, H: BinaryHasher, KN> ProcessNode<H::Out, KN> for HashOnly<'a, H> {
+	fn process_empty_trie(&mut self) -> &[u8] {
+		H::NULL_HASH
+	}
+	fn process(&mut self, _key: &KN, child1: &[u8], child2: &[u8]) -> H::Out {
+		// Should use lower level trait than Hasher to avoid copies.
+		self.0[..H::LENGTH].copy_from_slice(child1);
+		self.0[H::LENGTH..].copy_from_slice(child2);
+		H::hash(&self.0[..])
+	}
+	fn register_root(&mut self, _root: &H::Out) { }
+}
+
 
 // This only include hash, for including hashed value or inline node, just map the process over the
 // input iterator (note that for inline node we need to attach this inline info to the tree so it
 // only make sense for small trie or fix length trie).
-pub fn trie_visit<H, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F)
+/// Returns a calculated hash
+pub fn trie_root<HO, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F) -> HO
 	where
-		KN: Into<usize> + From<(usize, usize)>,
-		I: IntoIterator<Item = (usize, H)>,
-		F: ProcessNode<H, KN>,
+		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
+		KN: KeyNode + Into<usize> + From<(usize, usize)>,
+		I: IntoIterator<Item = HO>,
+		F: ProcessNode<HO, KN>,
 {
+	debug_assert!(layout.start == 0, "unimplemented start");
+	let mut iter = input.into_iter().enumerate();
+	debug_assert!({
+		let (r, s) = iter.size_hint();
+		if s == Some(r) {
+			layout.nb_elements() == r
+		} else {
+			true
+		}
+	});
+	let mut child1 = if let Some((_, child)) = iter.next() {
+		child
+	} else {
+		debug_assert!(layout.nb_elements() == 0);
+		let mut result = HO::default();
+		result.as_mut().copy_from_slice(callback.process_empty_trie());
+		return result;
+	};
+
+/*		let tmp = (!0usize << (self.depth - self.end_depth)) | (index >> self.end_depth);
+		if !tmp == 0 {
+			let mut nb_skip = 0;
+			for i in 0..self.end_depth {
+				let ix = self.end_depth - i - 1; // - 1 from the fact that main depth is 1 less due to redundancy of first level (depth in number of change of level)
+				if self.end & (1 << ix) != 0 {
+					// this is a skip
+					nb_skip += 1;
+				} else {
+					// continue only if right (like first if condition)
+					if index & (1 << ix) == 0 {
+						break;
+					}
+				}
+			}
+			self.depth - nb_skip
+		} else {
+			self.depth
+		}*/
+
+	let mut index_mask = !0usize << (layout.depth - layout.end_depth);
+	let mut end_depth = layout.end_depth;
+
+	let mut key: KN = (0, layout.depth).into();
+	debug_assert!(layout.depth_index(0) == layout.depth);
+	let mut parent = None;
+	for (index, child2) in iter {
+		if !(index_mask | index >> end_depth) == 0 {
+		} else {
+			// no change of depth due to end_depth
+			if let Some(parent) = parent.take() {
+//				parent = Some(callback.process(&key, child1.as_ref(), child2.as_ref()));
+			} else {
+				parent = Some(callback.process(&key, child1.as_ref(), child2.as_ref()));
+			}
+		}
+		debug_assert!(layout.depth_index(index) == key.depth());
+	}
+	callback.register_root(&child1);
+	child1
 }
 
 #[cfg(test)]
@@ -585,4 +740,18 @@ mod test {
 		// 32 trie TODO
 	}
 
+	#[test]
+	fn test_depth_iter() {
+		// cases corresponding to test_depth, TODO add more
+//		let cases = [7, 6, 5, 12, 11, 10, 9];
+		for nb in (0usize..16) {
+			let mut n = 0;
+			let tree = Tree::new(0, 0, nb);
+			for (i, d) in tree.iter_depth(None).enumerate() {
+				n += 1;
+				assert_eq!(d, tree.depth_index(i));
+			}
+			assert_eq!(n, nb);
+		}
+	}
 }
