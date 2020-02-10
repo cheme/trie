@@ -785,20 +785,130 @@ mod test {
 
 	#[test]
 	fn test_hash_only() {
-		for l in 0..16 {
+		let mut result = Vec::new();
+		let hashes: Vec<_> = (0..16).map(|i| {
+			let mut hash = <KeccakHasher as Hasher>::Out::default();
+			let v = (i as u64).to_be_bytes();
+			hash.as_mut()[..8].copy_from_slice(&v[..]);
+			hash
+		}).collect();
+
+		let khash = |a: &[u8], b: &[u8]| {
+			let mut v = Vec::new();
+			v.extend_from_slice(a);
+			v.extend_from_slice(b);
+			<KeccakHasher as Hasher>::hash(v.as_ref())
+		};
+		let mut hash = <KeccakHasher as Hasher>::Out::default();
+		hash.as_mut()[..].copy_from_slice(KeccakHasher::NULL_HASH);
+		result.push(hash);
+		result.push(hashes[0].clone());
+		let base2 = khash(hashes[0].as_ref(), hashes[1].as_ref());
+		result.push(base2);
+		result.push(khash(
+			base2.as_ref(),
+			hashes[2].as_ref(),
+		));
+		let base4 = khash(
+			base2.as_ref(),
+			khash(hashes[2].as_ref(), hashes[3].as_ref()).as_ref(),
+		);
+		result.push(base4);
+		result.push(khash(
+			base4.as_ref(),
+			hashes[4].as_ref(),
+		));
+		let base2 = khash(hashes[4].as_ref(), hashes[5].as_ref());
+		result.push(khash(
+			base4.as_ref(),
+			base2.as_ref(),
+		));
+		result.push(khash(
+			base4.as_ref(),
+			khash(
+				base2.as_ref(),
+				hashes[6].as_ref(),
+			).as_ref(),
+		));
+		let base8 = khash(
+			base4.as_ref(),
+			khash(
+				base2.as_ref(),
+				khash(hashes[6].as_ref(), hashes[7].as_ref()).as_ref(),
+			).as_ref(),
+		);
+		result.push(base8);
+		result.push(khash(
+			base8.as_ref(),
+			hashes[8].as_ref(),
+		));
+		let base2 = khash(hashes[8].as_ref(), hashes[9].as_ref());
+		result.push(khash(
+			base8.as_ref(),
+			base2.as_ref(),
+		));
+		result.push(khash(
+			base8.as_ref(),
+			khash(
+				base2.as_ref(),
+				hashes[10].as_ref(),
+			).as_ref(),
+		));
+		let base4 = khash(
+			base2.as_ref(),
+			khash(hashes[10].as_ref(), hashes[11].as_ref()).as_ref(),
+		);
+		result.push(khash(
+			base8.as_ref(),
+			base4.as_ref(),
+		));
+		result.push(khash(
+			base8.as_ref(),
+			khash(
+				base4.as_ref(),
+				hashes[12].as_ref(),
+			).as_ref(),
+		));
+		let base2 = khash(hashes[12].as_ref(), hashes[13].as_ref());
+		result.push(khash(
+			base8.as_ref(),
+			khash(
+				base4.as_ref(),
+				base2.as_ref(),
+			).as_ref(),
+		));
+		result.push(khash(
+			base8.as_ref(),
+			khash(
+				base4.as_ref(),
+				khash(
+					base2.as_ref(),
+					hashes[14].as_ref(),
+				).as_ref(),
+			).as_ref(),
+		));
+		result.push(khash(
+			base8.as_ref(),
+			khash(
+				base4.as_ref(),
+				khash(
+					base2.as_ref(),
+					khash(hashes[14].as_ref(), hashes[15].as_ref()).as_ref(),
+				).as_ref(),
+			).as_ref(),
+		));
+		for l in 0..17 {
 			let tree = Tree::new(0, 0, l);
-			let hashes = (0..l).map(|i| {
+			let mut hash_buf = HashOnly::<KeccakHasher>::buffer();
+			let mut callback = HashOnly::<KeccakHasher>::new(&mut hash_buf);
+			let hashes: Vec<_> = (0..l).map(|i| {
 				let mut hash = <KeccakHasher as Hasher>::Out::default();
 				let v = (i as u64).to_be_bytes();
 				hash.as_mut()[..8].copy_from_slice(&v[..]);
 				hash
-			});
-			let mut hash_buf = HashOnly::<KeccakHasher>::buffer();
-			let mut callback = HashOnly::<KeccakHasher>::new(&mut hash_buf);
+			}).collect();
 			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes, &mut callback);
-			println!("{}: {:?}", l, root.as_ref());
-			//assert_eq!(root.as_ref(), &[0][..]);
+			assert_eq!(root.as_ref(), &result[l][..]);
 		}
-		panic!("disp");
 	}
 }
