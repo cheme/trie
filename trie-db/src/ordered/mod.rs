@@ -172,28 +172,44 @@ fn right_at(value: usize, index: usize) -> bool {
 impl SequenceBinaryTree<usize> {
 	pub fn new(offset: usize, start: usize, number: usize) -> Self {
 		let len = start + number;
-		let length = if len == 0 {
-			0
+		if len == 0 {
+			SequenceBinaryTree {
+				offset,
+				start,
+				start_depth: 0,
+				end: 0,
+				end_depth: 0,
+				depth: 0,
+				length: 0,
+				_ph: PhantomData,
+			}
 		} else {
-			len.next_power_of_two()
-		};
-		let end = length - start - number;
-		let start_depth = depth(start);
-		let end_depth = depth(end);
-		let depth = depth(length - 1);
-		SequenceBinaryTree {
-			offset,
-			start,
-			start_depth,
-			end,
-			end_depth,
-			depth,
-			length,
-			_ph: PhantomData,
+			let length = len.next_power_of_two();
+			let end = length - start - number;
+			let start_depth = depth(start);
+			let end_depth = depth(end);
+			let depth = depth(length - 1);
+			SequenceBinaryTree {
+				offset,
+				start,
+				start_depth,
+				end,
+				end_depth,
+				depth,
+				length,
+				_ph: PhantomData,
+			}
 		}
 	}
 
 	fn push(&mut self, mut nb: usize) {
+		if nb == 0 {
+			return;
+		}
+		if self.length == 0 {
+			*self = Self::new(self.offset, self.start, nb);
+			return;
+		}
 		while nb > self.end {
 			nb -= self.end;
 			self.depth += 1;
@@ -510,16 +526,16 @@ mod test {
 	fn test_max_depth() {
 		let values = [
 			(0, 0),
-			(1, 1),
-			(2, 2),
-			(3, 3),
-			(4, 3),
-			(5, 4),
-			(8, 4),
-			(9, 5),
-			(16, 5),
-			(17, 6),
-			(32, 6),
+			(1, 0),
+			(2, 1),
+			(3, 2),
+			(4, 2),
+			(5, 3),
+			(8, 3),
+			(9, 4),
+			(16, 4),
+			(17, 5),
+			(32, 5),
 		];
 		let mut tree = Tree::default();
 		let mut prev = 0;
