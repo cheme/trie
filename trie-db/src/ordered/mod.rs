@@ -548,6 +548,23 @@ pub trait BinaryHasher: Hasher {
 	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
 }
 
+/// A buffer for binary hasher of size 64.
+pub struct Buffer64([u8; 64]);
+impl AsRef<[u8]> for Buffer64 {
+	fn as_ref(&self) -> &[u8] {
+		&self.0[..]
+	}
+}
+impl AsMut<[u8]> for Buffer64 {
+	fn as_mut(&mut self) -> &mut [u8] {
+		&mut self.0[..]
+	}
+}
+impl Default for Buffer64 {
+	fn default() -> Self {
+		Buffer64([0; 64])
+	}
+}
 /// Test function to use on every binary buffer implementation.
 pub fn test_binary_hasher<H: BinaryHasher>() {
 	let size = <H as Hasher>::LENGTH * 2;
@@ -602,7 +619,7 @@ impl<'a, H: BinaryHasher, KN> ProcessNode<H::Out, KN> for HashOnly<'a, H> {
 // input iterator (note that for inline node we need to attach this inline info to the tree so it
 // only make sense for small trie or fix length trie).
 /// Returns a calculated hash
-pub fn trie_root<HO, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F) -> HO
+pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F) -> HO
 	where
 		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
 		KN: KeyNode + Into<usize> + From<(usize, usize)>,
@@ -610,7 +627,7 @@ pub fn trie_root<HO, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: 
 		F: ProcessNode<HO, KN>,
 {
 	debug_assert!(layout.start == 0, "unimplemented start");
-	let mut iter = input.into_iter().enumerate();
+	let mut iter = input.into_iter().zip(layout.iter_depth(None)).enumerate();
 	debug_assert!({
 		let (r, s) = iter.size_hint();
 		if s == Some(r) {
@@ -619,7 +636,9 @@ pub fn trie_root<HO, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: 
 			true
 		}
 	});
-	let mut child1 = if let Some((_, child)) = iter.next() {
+	let mut depth1 = layout.depth;
+	let mut child1 = if let Some((_, (child, depth))) = iter.next() {
+		debug_assert!(depth == depth1);
 		child
 	} else {
 		debug_assert!(layout.nb_elements() == 0);
@@ -627,51 +646,48 @@ pub fn trie_root<HO, KN, I, A, B, F>(layout: &SequenceBinaryTree<usize>, input: 
 		result.as_mut().copy_from_slice(callback.process_empty_trie());
 		return result;
 	};
-
-/*		let tmp = (!0usize << (self.depth - self.end_depth)) | (index >> self.end_depth);
-		if !tmp == 0 {
-			let mut nb_skip = 0;
-			for i in 0..self.end_depth {
-				let ix = self.end_depth - i - 1; // - 1 from the fact that main depth is 1 less due to redundancy of first level (depth in number of change of level)
-				if self.end & (1 << ix) != 0 {
-					// this is a skip
-					nb_skip += 1;
-				} else {
-					// continue only if right (like first if condition)
-					if index & (1 << ix) == 0 {
-						break;
-					}
-				}
-			}
-			self.depth - nb_skip
-		} else {
-			self.depth
-		}*/
-
-	let mut index_mask = !0usize << (layout.depth - layout.end_depth);
-	let mut end_depth = layout.end_depth;
-
-	let mut key: KN = (0, layout.depth).into();
 	debug_assert!(layout.depth_index(0) == layout.depth);
-	let mut parent = None;
-	for (index, child2) in iter {
-		if !(index_mask | index >> end_depth) == 0 {
+	// use a stack that match 16 element without allocation, that is 4 element depth
+	let mut stack = smallvec::SmallVec::<[(HO, usize);4]>::new();
+	let mut key: KN = (0, depth1).into();
+	loop {
+		let last_stack_depth = stack.last().map(|e|e.1);
+		if Some(depth1) == last_stack_depth {
+			// process over stack
+			let (child2, _depth2) = stack.pop().expect("checked above");
+			key.pop_back();
+			// stacked on at left
+			let parent = callback.process(&key, child2.as_ref(), child1.as_ref());
+			depth1 = key.depth();
+			child1 = parent;
 		} else {
-			// no change of depth due to end_depth
-			if let Some(parent) = parent.take() {
-//				parent = Some(callback.process(&key, child1.as_ref(), child2.as_ref()));
+			if let Some((index, (child2, depth2))) = iter.next() {
+				key = (index, depth2).into();
+				if depth2 == depth1 {
+					key.pop_back();
+					// iter one at right
+					let parent = callback.process(&key, child1.as_ref(), child2.as_ref());
+					depth1 = key.depth();
+					child1 = parent;
+				} else {
+					stack.push((child1, depth1));
+					child1 = child2;
+					depth1 = depth2;
+				}
 			} else {
-				parent = Some(callback.process(&key, child1.as_ref(), child2.as_ref()));
+				break;
 			}
 		}
-		debug_assert!(layout.depth_index(index) == key.depth());
 	}
+	debug_assert!(stack.is_empty());
 	callback.register_root(&child1);
 	child1
 }
 
 #[cfg(test)]
 mod test {
+	use keccak_hasher::KeccakHasher;
+	use super::*;
 	//use keccak_hasher::FixKeccakHasher;
 
 	//type Tree = super::SequenceBinaryTree<usize, FixKeccakHasher>;
@@ -753,5 +769,36 @@ mod test {
 			}
 			assert_eq!(n, nb);
 		}
+	}
+
+	impl BinaryHasher for KeccakHasher {
+		const NULL_HASH: &'static [u8] = &[197, 210, 70, 1, 134, 247, 35, 60, 146,
+			126, 125, 178, 220, 199, 3, 192, 229, 0, 182, 83, 202, 130, 39, 59, 123,
+			250, 216, 4, 93, 133, 164, 112];
+		type Buffer = Buffer64;
+	}
+
+	#[test]
+	fn test_keccack_hasher() {
+		test_binary_hasher::<KeccakHasher>()
+	}
+
+	#[test]
+	fn test_hash_only() {
+		for l in 0..16 {
+			let tree = Tree::new(0, 0, l);
+			let hashes = (0..l).map(|i| {
+				let mut hash = <KeccakHasher as Hasher>::Out::default();
+				let v = (i as u64).to_be_bytes();
+				hash.as_mut()[..8].copy_from_slice(&v[..]);
+				hash
+			});
+			let mut hash_buf = HashOnly::<KeccakHasher>::buffer();
+			let mut callback = HashOnly::<KeccakHasher>::new(&mut hash_buf);
+			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes, &mut callback);
+			println!("{}: {:?}", l, root.as_ref());
+			//assert_eq!(root.as_ref(), &[0][..]);
+		}
+		panic!("disp");
 	}
 }
