@@ -365,6 +365,7 @@ pub trait KeyNode {
 	fn push_back(&mut self, nibble: bool);
 	fn pop_front(&mut self) -> Option<bool>;
 	fn push_front(&mut self, nibble: bool);
+	fn starts_with(&self, other: &Self) -> bool;
 }
 
 #[cfg(test)]
@@ -390,6 +391,12 @@ impl KeyNode for  VecKeyNode {
 	}
 	fn push_front(&mut self, nibble: bool) {
 		self.0.push_front(nibble)
+	}
+	fn starts_with(&self, other: &Self) -> bool {
+		// clone but it is test method only.
+		let mut tr = self.0.clone();
+		tr.truncate(other.0.len());
+		tr == other.0
 	}
 }
 
@@ -494,6 +501,16 @@ impl KeyNode for UsizeKeyNode {
 		self.depth += 1;
 		self.value = self.value | (1 << (self.depth - 1));
 	}
+	fn starts_with(&self, other: &Self) -> bool {
+		if self.depth < other.depth {
+			false
+		} else {
+			let m = !(!0usize >> other.depth << other.depth);
+			let masked1 = self.value | m;
+			let masked2 = other.value | m;
+			masked1 == masked2 
+		}
+	}
 }
 
 impl From<(usize, usize)> for UsizeKeyNode {
@@ -585,14 +602,15 @@ pub trait ProcessNode<HO, KN> {
 	fn register_root(&mut self, root: &HO);
 }
 
+pub trait ProcessNodeProof<HO, KN>: ProcessNode<HO, KN> {
+	fn register_proof_hash(&mut self, hash: &HO);
+}
+
 /// Does only proccess hash on its buffer.
 /// Buffer length need to be right and is unchecked. 
 pub struct HashOnly<'a, H>(&'a mut [u8], PhantomData<H>);
 
 impl<'a, H: BinaryHasher> HashOnly<'a, H> {
-	pub fn buffer() -> H::Buffer {
-		H::Buffer::default()
-	}
 	pub fn new(buff: &'a mut H::Buffer) -> Self {
 		HashOnly(buff.as_mut(), PhantomData)
 	}
@@ -614,6 +632,63 @@ impl<'a, H: BinaryHasher, KN> ProcessNode<H::Out, KN> for HashOnly<'a, H> {
 	fn register_root(&mut self, _root: &H::Out) { }
 }
 
+/// Buffer length need to be right and is unchecked, proof elements are
+/// stored in memory (no streaming). 
+pub struct HashProof<'a, H: Hasher, I, KN>{
+	buffer: &'a mut [u8],
+	// I must guaranty right depth and index in range regarding
+	// to the tree struct!!!
+	to_prove: I,
+	current_key: Option<KN>,
+	pub additional_hash: Vec<H::Out>,
+}
+
+impl<'a, H: BinaryHasher, I, KN> HashProof<'a, H, I, KN> {
+	// TODO write function to build from iter of unchecked usize indexes: map iter
+	// with either depth_at or the depth_iterator skipping undesired elements (second
+	// seems better as it filters out of range.
+	pub fn new(buff: &'a mut H::Buffer, to_prove: I) -> Self {
+		HashProof{
+			buffer: buff.as_mut(),
+			to_prove,
+			current_key: None,
+			additional_hash: Vec::new(),
+		}
+	}
+	pub fn take_additional_hash(&mut self) -> Vec<H::Out> {
+		crate::rstd::mem::replace(&mut self.additional_hash, Vec::new())
+	}
+}
+
+impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Out, KN> for HashProof<'a, H, I, KN> {
+	fn process_empty_trie(&mut self) -> &[u8] {
+		H::NULL_HASH
+	}
+	fn process(&mut self, key: &KN, child1: &[u8], child2: &[u8]) -> H::Out {
+		if self.current_key.is_none() {
+			self.current_key = self.to_prove.next();
+		}
+		if let Some(current_key) = self.current_key.as_ref() {
+			// this operation can be optimized (most of the time this is just testing next previous nibble)
+			// but that would make a complicated design.
+			if current_key.starts_with(key) {
+				let mut to_push = H::Out::default();
+				if let Some(at) = current_key.nibble_at(key.depth()) {
+					if at {
+						to_push.as_mut().copy_from_slice(child1);
+					} else {
+						to_push.as_mut().copy_from_slice(child2);
+					}
+					self.additional_hash.push(to_push);
+				}
+			}
+		}
+		self.buffer[..H::LENGTH].copy_from_slice(child1);
+		self.buffer[H::LENGTH..].copy_from_slice(child2);
+		H::hash(&self.buffer[..])
+	}
+	fn register_root(&mut self, _root: &H::Out) { }
+}
 
 // This only include hash, for including hashed value or inline node, just map the process over the
 // input iterator (note that for inline node we need to attach this inline info to the tree so it
@@ -682,6 +757,65 @@ pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, cal
 	debug_assert!(stack.is_empty());
 	callback.register_root(&child1);
 	child1
+}
+
+/// Returns a calculated hash
+pub fn trie_root_from_proof<HO, KN, I, I2, F>(
+	layout: &SequenceBinaryTree<usize>,
+	input: I,
+	additional_hash: I2,
+	callback: &mut F,
+	allow_additionals_hashes: bool,
+) -> Option<HO>
+	where
+		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
+		KN: KeyNode + Into<usize> + From<(usize, usize)>,
+		I: IntoIterator<Item = (KN, HO)>,
+		I2: IntoIterator<Item = HO>,
+		F: ProcessNode<HO, KN>,
+{
+	if layout.nb_elements() == 0 {
+		let mut result = HO::default();
+		result.as_mut().copy_from_slice(callback.process_empty_trie());
+		return Some(result);
+	}
+
+	let mut items = input.into_iter();
+	let mut additional_hash = additional_hash.into_iter();
+	// TODO only for on item proof at this point
+	if let Some((mut key, mut child1)) = items.next() {
+		while let Some(right) = key.pop_back() {
+			if let Some(other) = additional_hash.next() {
+				if right {
+					child1 = callback.process(&key, other.as_ref(), child1.as_ref());
+				} else {
+					child1 = callback.process(&key, child1.as_ref(), other.as_ref());
+				}
+			} else {
+				return None;
+			}
+		}
+		if !allow_additionals_hashes & additional_hash.next().is_some() {
+			return None;
+		} else {
+			callback.register_root(&child1);
+			return Some(child1);
+		}
+	} else {
+		// no item case
+		if let Some(h) = additional_hash.next() {
+			// this check may be a bad idea in case we want to use
+			// multiple proof
+			if !allow_additionals_hashes & additional_hash.next().is_some() {
+				return None;
+			} else {
+				callback.register_root(&h);
+				return Some(h);
+			}
+		} else {
+			return None;
+		}
+	}
 }
 
 #[cfg(test)]
@@ -783,15 +917,18 @@ mod test {
 		test_binary_hasher::<KeccakHasher>()
 	}
 
-	#[test]
-	fn test_hash_only() {
-		let mut result = Vec::new();
-		let hashes: Vec<_> = (0..16).map(|i| {
+	fn hashes(l: usize) -> Vec<[u8;32]> {
+		(0..l).map(|i| {
 			let mut hash = <KeccakHasher as Hasher>::Out::default();
 			let v = (i as u64).to_be_bytes();
 			hash.as_mut()[..8].copy_from_slice(&v[..]);
 			hash
-		}).collect();
+		}).collect()
+	}
+
+	fn base16_roots() -> Vec<[u8;32]> {
+		let hashes = hashes(16);
+		let mut result = Vec::<[u8;32]>::new();
 
 		let khash = |a: &[u8], b: &[u8]| {
 			let mut v = Vec::new();
@@ -897,18 +1034,50 @@ mod test {
 				).as_ref(),
 			).as_ref(),
 		));
+		result
+	}
+
+	#[test]
+	fn test_hash_only() {
+		let result = base16_roots();
 		for l in 0..17 {
 			let tree = Tree::new(0, 0, l);
-			let mut hash_buf = HashOnly::<KeccakHasher>::buffer();
+			let mut hash_buf = <KeccakHasher as BinaryHasher>::Buffer::default();
 			let mut callback = HashOnly::<KeccakHasher>::new(&mut hash_buf);
-			let hashes: Vec<_> = (0..l).map(|i| {
-				let mut hash = <KeccakHasher as Hasher>::Out::default();
-				let v = (i as u64).to_be_bytes();
-				hash.as_mut()[..8].copy_from_slice(&v[..]);
-				hash
-			}).collect();
+			let hashes: Vec<_> = hashes(l);
 			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes, &mut callback);
 			assert_eq!(root.as_ref(), &result[l][..]);
+		}
+	}
+
+	#[test]
+	fn test_one_element_proof() {
+		let result = base16_roots();
+		for l in 0..17 {
+			let tree = Tree::new(0, 0, l);
+			let mut hash_buf = <KeccakHasher as BinaryHasher>::Buffer::default();
+			let mut hash_buf2 = <KeccakHasher as BinaryHasher>::Buffer::default();
+			let mut callback_read_proof = HashOnly::<KeccakHasher>::new(&mut hash_buf2);
+			let hashes: Vec<_> = hashes(l);
+			for p in 0..l {
+				let to_prove = vec![UsizeKeyNode::from((p, tree.depth_index(p)))];
+				let mut callback = HashProof::<KeccakHasher, _, _>::new(&mut hash_buf, to_prove.into_iter());
+				let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone(), &mut callback);
+				assert_eq!(root.as_ref(), &result[l][..]);
+				let additional_hash = callback.take_additional_hash();
+				let proof_items = vec![(UsizeKeyNode::from((p, tree.depth_index(p))),hashes[p].clone())];
+				let root = trie_root_from_proof::<_, UsizeKeyNode, _, _, _>(
+					&tree,
+					proof_items,
+					additional_hash.into_iter(),
+					&mut callback_read_proof,
+					false,
+				);
+				let additional_hash = callback.additional_hash;
+				println!("{}, {}", l, p);
+				assert!(root.is_some());
+				assert_eq!(root.unwrap().as_ref(), &result[l][..]);
+			}
 		}
 	}
 }
