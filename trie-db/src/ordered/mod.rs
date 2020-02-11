@@ -253,6 +253,30 @@ impl SequenceBinaryTree<usize> {
 		}
 	}
 
+	/// resolve the tree path for a given index.
+	fn path_node_key<KN: KeyNode + From<(usize, usize)>>(&self, index: usize) -> KN {
+		let tmp = (!0usize << (self.depth - self.end_depth)) | (index >> self.end_depth);
+		if !tmp == 0 {
+			let mut result: KN = (index, self.depth).into();
+			for i in 0..self.end_depth {
+				let ix = self.end_depth - i - 1; // - 1 from the fact that main depth is 1 less due to redundancy of first level (depth in number of change of level)
+				if self.end & (1 << ix) != 0 {
+					// this is a skip
+					let ix = result.depth() - ix - 1;
+					result.remove_at(ix);
+				} else {
+					// continue only if right (like first if condition)
+					if index & (1 << ix) == 0 {
+						break;
+					}
+				}
+			}
+			result
+		} else {
+			(index, self.depth).into()
+		}
+	}
+
 	fn iter_depth(&self, from: Option<usize>) -> impl Iterator<Item = usize> {
 		if let Some(from) = from {
 			unimplemented!();
@@ -277,11 +301,52 @@ impl SequenceBinaryTree<usize> {
 						end.pop_front();
 					}
 					if end.depth > 0 {
-						next_skip += (1usize << end.depth)
+						next_skip += 1usize << end.depth
 					}
 				}
 				index += 1;
 				Some(depth)
+			} else {
+				None
+			}
+		})
+	}
+	fn iter_path_node_key<KN>(&self, from: Option<usize>) -> impl Iterator<Item = KN>
+		where
+			KN: KeyNode + From<(usize, usize)> + Clone,
+	{
+		if let Some(from) = from {
+			unimplemented!();
+		}
+		let nb_elements = self.nb_elements();
+		// TODO index should not be use but key.value, this is double counting things
+		let mut index = 0;
+		let length = self.length;
+		let mut end = KN::from((self.end, self.end_depth));
+		let mut next_skip = length - if end.depth() > 0 {
+			1usize << end.depth() // two time deletion range
+		} else {
+			0
+		};
+		let mut key: KN = (0, self.depth).into();
+		crate::rstd::iter::from_fn(move || {
+			if index < nb_elements {
+				if index == next_skip {
+					while end.pop_front() == Some(true) {
+						let ix = key.depth() - end.depth() - 1;
+						key.remove_at(ix);
+					}
+					while end.nibble_at(0) == Some(false) {
+						end.pop_front();
+					}
+					if end.depth() > 0 {
+						next_skip += 1usize << end.depth()
+					}
+				}
+				let result = key.clone();
+				key.increment_no_increase();
+				index += 1;
+				Some(result)
 			} else {
 				None
 			}
@@ -365,6 +430,8 @@ pub trait KeyNode {
 	fn push_back(&mut self, nibble: bool);
 	fn pop_front(&mut self) -> Option<bool>;
 	fn push_front(&mut self, nibble: bool);
+	fn remove_at(&mut self, depth: usize);
+	fn increment_no_increase(&mut self);
 	fn starts_with(&self, other: &Self) -> bool;
 }
 
@@ -374,6 +441,21 @@ pub trait KeyNode {
 struct VecKeyNode(std::collections::VecDeque<bool>);
 #[cfg(test)]
 impl KeyNode for  VecKeyNode {
+	fn increment_no_increase(&mut self) {
+		for i in (0..self.0.len()).rev() {
+			match self.0.get_mut(i) {
+				Some(v) => {
+					if !*v {
+						*v = true;
+						break;
+					}
+				},
+				None => {
+					unreachable!("should only be call when guaranties to not increase depth");
+				},
+			}
+		}
+	}
 	fn depth(&self) -> usize {
 		self.0.len()
 	}
@@ -391,6 +473,9 @@ impl KeyNode for  VecKeyNode {
 	}
 	fn push_front(&mut self, nibble: bool) {
 		self.0.push_front(nibble)
+	}
+	fn remove_at(&mut self, index: usize) {
+		self.0.remove(index);
 	}
 	fn starts_with(&self, other: &Self) -> bool {
 		// clone but it is test method only.
@@ -463,6 +548,9 @@ impl KeyNode for UsizeKeyNode {
 	fn depth(&self) -> usize {
 		self.depth
 	}
+	fn increment_no_increase(&mut self) {
+		self.value += 1;
+	}
 	fn nibble_at(&self, depth: usize) -> Option<bool> {
 		if depth < self.depth {
 			Some(right_at(self.value, self.depth - 1 - depth))
@@ -501,20 +589,38 @@ impl KeyNode for UsizeKeyNode {
 		self.depth += 1;
 		self.value = self.value | (1 << (self.depth - 1));
 	}
+
+	fn remove_at(&mut self, index: usize) {
+		if index >= self.depth {
+			return;
+		}
+		if index == 0 {
+			self.pop_front();
+			return;
+		}
+		if index == self.depth - 1 {
+			self.pop_back();
+			return;
+		}
+		let right = self.value & !(!0usize << self.depth - index);
+		self.value = self.value & (!0usize << self.depth - index);
+		self.value = self.value >> 1;
+		self.depth -= 1;
+		self.value = self.value | right;
+	}
+
 	fn starts_with(&self, other: &Self) -> bool {
 		if self.depth < other.depth {
 			false
 		} else {
-			let m = !(!0usize >> other.depth << other.depth);
-			let masked1 = self.value | m;
-			let masked2 = other.value | m;
-			masked1 == masked2 
+			self.value >> (self.depth - other.depth) == other.value 
 		}
 	}
 }
 
 impl From<(usize, usize)> for UsizeKeyNode {
 	fn from((value, depth): (usize, usize)) -> Self {
+		// let value = value & !((!0) << depth);
 		UsizeKeyNode { value, depth }
 	}
 }
@@ -697,12 +803,12 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Ou
 pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, callback: &mut F) -> HO
 	where
 		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
-		KN: KeyNode + Into<usize> + From<(usize, usize)>,
+		KN: KeyNode + Into<usize> + From<(usize, usize)> + Clone,
 		I: IntoIterator<Item = HO>,
 		F: ProcessNode<HO, KN>,
 {
 	debug_assert!(layout.start == 0, "unimplemented start");
-	let mut iter = input.into_iter().zip(layout.iter_depth(None)).enumerate();
+	let mut iter = input.into_iter().zip(layout.iter_path_node_key::<KN>(None)).enumerate();
 	debug_assert!({
 		let (r, s) = iter.size_hint();
 		if s == Some(r) {
@@ -712,8 +818,8 @@ pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, cal
 		}
 	});
 	let mut depth1 = layout.depth;
-	let mut child1 = if let Some((_, (child, depth))) = iter.next() {
-		debug_assert!(depth == depth1);
+	let mut child1 = if let Some((_, (child, key))) = iter.next() {
+		debug_assert!(key.depth() == depth1);
 		child
 	} else {
 		debug_assert!(layout.nb_elements() == 0);
@@ -736,9 +842,9 @@ pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, cal
 			depth1 = key.depth();
 			child1 = parent;
 		} else {
-			if let Some((index, (child2, depth2))) = iter.next() {
-				key = (index, depth2).into();
-				if depth2 == depth1 {
+			if let Some((index, (child2, key2))) = iter.next() {
+				key = key2;
+				if key.depth() == depth1 {
 					key.pop_back();
 					// iter one at right
 					let parent = callback.process(&key, child1.as_ref(), child2.as_ref());
@@ -747,7 +853,7 @@ pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, cal
 				} else {
 					stack.push((child1, depth1));
 					child1 = child2;
-					depth1 = depth2;
+					depth1 = key.depth();
 				}
 			} else {
 				break;
@@ -897,9 +1003,15 @@ mod test {
 		for nb in (0usize..16) {
 			let mut n = 0;
 			let tree = Tree::new(0, 0, nb);
-			for (i, d) in tree.iter_depth(None).enumerate() {
+			for (i, (d, k)) in tree.iter_depth(None)
+				.zip(tree.iter_path_node_key::<UsizeKeyNode>(None))
+				.enumerate() {
 				n += 1;
 				assert_eq!(d, tree.depth_index(i));
+				assert_eq!(d, k.depth);
+				let k2: UsizeKeyNode = tree.path_node_key(i);
+				assert_eq!(k.depth, k2.depth);
+				assert_eq!(k.value, k2.value);
 			}
 			assert_eq!(n, nb);
 		}
@@ -1060,12 +1172,12 @@ mod test {
 			let mut callback_read_proof = HashOnly::<KeccakHasher>::new(&mut hash_buf2);
 			let hashes: Vec<_> = hashes(l);
 			for p in 0..l {
-				let to_prove = vec![UsizeKeyNode::from((p, tree.depth_index(p)))];
+				let to_prove = vec![tree.path_node_key::<UsizeKeyNode>(p)];
 				let mut callback = HashProof::<KeccakHasher, _, _>::new(&mut hash_buf, to_prove.into_iter());
 				let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone(), &mut callback);
 				assert_eq!(root.as_ref(), &result[l][..]);
 				let additional_hash = callback.take_additional_hash();
-				let proof_items = vec![(UsizeKeyNode::from((p, tree.depth_index(p))),hashes[p].clone())];
+				let proof_items = vec![(tree.path_node_key::<UsizeKeyNode>(p), hashes[p].clone())];
 				let root = trie_root_from_proof::<_, UsizeKeyNode, _, _, _>(
 					&tree,
 					proof_items,
