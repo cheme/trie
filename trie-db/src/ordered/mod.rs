@@ -771,9 +771,15 @@ pub struct HashProof<'a, H: Hasher, I, KN>{
 	// to the tree struct!!!
 	to_prove: I,
 	current_key: Option<KN>,
+	// if we touch next key, then we stack current key
+	// and get next one. if no next we do not stack.
 	next_key: Option<KN>,
-	common_depth: Option<usize>, // None could be replace by usize::max_value
-	stack_depth: smallvec::SmallVec<[usize;4]>,
+	// going up a join key means droping current in favor of stack,
+	// if stack empty move forward instead.
+	join_key: Option<usize>,
+	/// before touching first do not apply join key.
+	touch_first: bool,
+	stack: smallvec::SmallVec<[KN;4]>,
 	additional_hash: Vec<H::Out>,
 }
 
@@ -787,48 +793,22 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> HashProof<'a, H, 
 			to_prove,
 			current_key: None,
 			next_key: None,
-			common_depth: None,
-			stack_depth: smallvec::SmallVec::new(),
+			join_key: None,
+			stack: smallvec::SmallVec::new(),
 			additional_hash: Vec::new(),
+			touch_first: false,
 		};
-		result.advance_key();
+		result.current_key = result.to_prove.next();
+		result.next_key = result.to_prove.next();
+		result.update_join_key();
 		result
+	}
+	fn update_join_key(&mut self) {
+		self.join_key = self.current_key.as_ref()
+			.and_then(|c| self.next_key.as_ref().map(|n| n.common_depth(c)));
 	}
 	pub fn take_additional_hash(&mut self) -> Vec<H::Out> {
 		crate::rstd::mem::replace(&mut self.additional_hash, Vec::new())
-	}
-
-	fn advance_key(&mut self) {
-		if let Some(new) = self.to_prove.next() {
-			if self.current_key.is_none() {
-				self.current_key = Some(new);
-				debug_assert!(self.next_key.is_none());
-				debug_assert!(self.common_depth == None);
-				if let Some(new) = self.to_prove.next() {
-					self.common_depth = Some(new.common_depth(
-						self.current_key.as_ref().expect("initialized above")
-					));
-					self.next_key = Some(new);
-				}
-				return;
-			}
-			if let Some(next_key) = self.next_key.take() {
-				self.common_depth = Some(next_key.common_depth(&new));
-				self.current_key = Some(next_key);
-				self.next_key = Some(new);
-				return;
-			}
-			unreachable!()
-		}
-		if let Some(next_key) = self.next_key.take() {
-			self.common_depth = None;
-			self.current_key = Some(next_key);
-			return;
-		}
-		if let Some(_current_key) = self.current_key.take() {
-			self.common_depth = None;
-			return;
-		}
 	}
 }
 
@@ -837,43 +817,72 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Ou
 		H::NULL_HASH
 	}
 	fn process(&mut self, key: &KN, child1: &[u8], child2: &[u8]) -> H::Out {
-		if let Some(current_key) = self.current_key.as_ref() {
-			let mut advance_key = false;
-			// this operation can be optimized (most of the time this is just testing next previous nibble)
-			// but that would make a complicated design.
-			if current_key.starts_with(key) {
-				if self.common_depth == Some(key.depth()) {
-					// direct sibling (due to next condition)
-					advance_key = true;
-				} else if key.depth() == 0 || self.common_depth == Some(key.depth() - 1) {
-					advance_key = true;
-				
-					if let Some(at) = current_key.nibble_at(key.depth()) {
-						if at {
-							if self.stack_depth.last().map(|d| *d == key.depth()).unwrap_or(false) {
-								self.stack_depth.pop();
-							} else {
-								let mut to_push = H::Out::default();
-								to_push.as_mut().copy_from_slice(child1);
-								self.additional_hash.push(to_push);
-							}
-						} else {
-							let mut to_push = H::Out::default();
-							to_push.as_mut().copy_from_slice(child2);
-							self.additional_hash.push(to_push);
-						}
-					}
-				} else {
-					debug_assert!(if let Some(c) = self.common_depth.as_ref() { *c < key.depth() } else { true });
-				}
+		let mut do_register_left = false;
+		let mut do_register_right = false;
+		if !self.touch_first {
+			self.touch_first = self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false);
+		}
+		if self.touch_first {
+		if Some(key.depth()) == self.join_key {
+			if let Some(s) = self.stack.pop() {
+				self.current_key = Some(s);
+			} else {
+				self.current_key = self.next_key.take();
+				self.next_key = self.to_prove.next();
 			}
-			if advance_key {
-				if key.depth() > 0 {
-					self.stack_depth.push(key.depth() - 1);
-					self.advance_key();
+			self.update_join_key();
+		} else if self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false) {
+			debug_assert!(
+				!self.next_key.as_ref().map(|n| n.starts_with(key)).unwrap_or(false)
+			);
+			if self.current_key.as_ref().expect("start_with_current").nibble_at(key.depth()).expect("starts with") {
+				do_register_left = true;
+			} else {
+				do_register_right = true;
+			}
+		} else if self.next_key.as_ref().map(|n| n.starts_with(key)).unwrap_or(false) {
+			debug_assert!(
+				!self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false)
+			);
+			if self.next_key.as_ref().expect("start_with_current").nibble_at(key.depth()).expect("starts with") {
+				do_register_left = true;
+			} else {
+				do_register_right = true;
+			}
+			if let Some(n) = self.to_prove.next() {
+				self.stack.push(self.current_key.take().expect("current exists if next does"));
+				self.current_key = self.next_key.take();
+				self.next_key = Some(n);
+				self.update_join_key();
+				if Some(key.depth()) == self.join_key {
+					// sibling TODO avoid rollback reg by doing test differently
+					do_register_left = false;
+					do_register_right = false;
+					if let Some(s) = self.stack.pop() {
+						self.current_key = Some(s);
+					} else {
+						self.current_key = self.next_key.take();
+						self.next_key = self.to_prove.next();
+					}
+					self.update_join_key();
 				}
+			} else {
+				// keep this interval, will fuse at join key
 			}
 		}
+	
+		if do_register_left {
+			let mut to_push = H::Out::default();
+			to_push.as_mut().copy_from_slice(child1);
+			self.additional_hash.push(to_push);
+		}
+		if do_register_right {
+			let mut to_push = H::Out::default();
+			to_push.as_mut().copy_from_slice(child2);
+			self.additional_hash.push(to_push);
+		}
+		}
+
 		self.buffer[..H::LENGTH].copy_from_slice(child1);
 		self.buffer[H::LENGTH..].copy_from_slice(child2);
 		H::hash(&self.buffer[..])
@@ -960,7 +969,7 @@ pub fn trie_root_from_proof<HO, KN, I, I2, F>(
 ) -> Option<HO>
 	where
 		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
-		KN: KeyNode + Into<usize> + From<(usize, usize)>,
+		KN: KeyNode + Into<usize> + From<(usize, usize)> + Clone,
 		I: IntoIterator<Item = (KN, HO)>,
 		I2: IntoIterator<Item = HO>,
 		F: ProcessNode<HO, KN>,
@@ -997,54 +1006,80 @@ pub fn trie_root_from_proof<HO, KN, I, I2, F>(
 	};
 	let mut common_depth = calc_common_depth(&current, &next);
 	let mut stack = smallvec::SmallVec::<[(KN, HO);4]>::new();
-	// TODO only for on item proof at this point
+
 	while let Some((mut key, mut child1)) = current.take() {
 		
-
-		if common_depth == Some(key.depth() - 1) {
-			key.pop_back();
-			let (_, next_hash) = next.expect("common depth is some");
-			// sibling
-			child1 = callback.process(&key, child1.as_ref(), next_hash.as_ref());
-			next = Some((key, child1));
-		} else {
-			while key.depth() != 0 && common_depth != Some(key.depth() - 1) {
-				if let Some(right) = key.pop_back() {
-					if right && stack.last().map(|l| l.0.depth() == key.depth()).unwrap_or(false) {		
-						let (_, other) = stack.pop().expect("checked in above condition");
+		while key.depth() != 0 && common_depth != Some(key.depth() - 1) {
+			if let Some(right) = key.pop_back() {
+				if let Some(other) = additional_hash.next() {
+					if right {
 						child1 = callback.process(&key, other.as_ref(), child1.as_ref());
-					} else if let Some(other) = additional_hash.next() {
-						if right {
-							child1 = callback.process(&key, other.as_ref(), child1.as_ref());
-						} else {
-							child1 = callback.process(&key, child1.as_ref(), other.as_ref());
-						}
 					} else {
-						return None;
+						child1 = callback.process(&key, child1.as_ref(), other.as_ref());
 					}
+				} else {
+					return None;
 				}
-			}
-			if let Some(true) = key.pop_back() {
-				let (st_key, st_hash) = stack.pop().expect("stacked before");
-				debug_assert!(st_key.depth() == key.depth()); // TODO remove key from stack
-				let child1 = callback.process(&key, st_hash.as_ref(), child1.as_ref());
-				stack.push((key, child1));
-			} else { // Some(left)
-				stack.push((key, child1));
+			} else {
+				return None;
 			}
 		}
-		current = next;
-		next = items.next();
-		common_depth = calc_common_depth(&current, &next);
+
+		// exit condition
+		if key.depth() == 0 && common_depth != Some(0) {
+			if !allow_additionals_hashes && additional_hash.next().is_some() {
+				return None;
+			} else {
+				callback.register_root(&child1);
+				return Some(child1);
+			}
+		}
+		// common depth reached
+		if let Some(right) = key.pop_back() {
+			if right {
+				if let Some((k, h)) = stack.pop() {
+					debug_assert!(key.depth() == k.depth() && key.starts_with(&k));
+					child1 = callback.process(&k, h.as_ref(), child1.as_ref());
+					current = Some((k, child1));
+					common_depth = calc_common_depth(&current, &next);
+				} else {
+					return None;
+				}
+			} else {
+				if next.is_some() {
+					stack.push((key, child1));
+					current = next.take();
+					if let Some(n) = items.next() {
+						next = Some(n);
+						common_depth = calc_common_depth(&current, &next);
+/*
+						if let Some((key, child1)) = current.as_ref() {
+							if common_depth == Some(key.depth() - 1) {
+								// sibling
+								let next = next.take().expect("init just before");
+								let mut key = key.clone();
+								key.pop_back();
+								let child1 = callback.process(&key, child1.as_ref(), next.1.as_ref());
+								current = Some((key, child1));
+								let next = items.next();
+								common_depth = calc_common_depth(&current, &next);
+							}
+						}*/
+					}
+				} else {
+					return None;
+				}
+			}
+		}
 	}
-	if let Some((k, root)) = stack.pop() {
+	/*if let Some((k, root)) = stack.pop() {
 		if k.depth() != 0 || (!allow_additionals_hashes && additional_hash.next().is_some()) {
 			return None;
 		} else {
 			callback.register_root(&root);
 			return Some(root);
 		}
-	}
+	}*/
 	None
 }
 
@@ -1321,11 +1356,12 @@ mod test {
 	fn test_multiple_elements_proof() {
 		let result = base16_roots();
 		let tests = [
-			(4, &[1, 2][..]),
+			//(4, &[1, 2][..]),
 			(4, &[1, 2, 3][..]),
 			(13, &[1, 2, 3][..]),
 			(13, &[2, 3, 4][..]),
 			(13, &[2, 5][..]),
+			(13, &[2, 5, 11][..]),
 			(13, &[2, 11][..]),
 			(13, &[11, 12][..]),
 			(13, &[10, 12][..]),
