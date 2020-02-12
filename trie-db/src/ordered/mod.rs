@@ -433,6 +433,7 @@ pub trait KeyNode {
 	fn remove_at(&mut self, depth: usize);
 	fn increment_no_increase(&mut self);
 	fn starts_with(&self, other: &Self) -> bool;
+	fn common_depth(&self, other: &Self) -> usize;
 }
 
 #[cfg(test)]
@@ -482,6 +483,18 @@ impl KeyNode for  VecKeyNode {
 		let mut tr = self.0.clone();
 		tr.truncate(other.0.len());
 		tr == other.0
+	}
+	fn common_depth(&self, other: &Self) -> usize {
+		let bound = crate::rstd::cmp::min(self.0.len(), other.0.len());
+		let mut depth = 0;
+		for i in 0..bound {
+			if self.0[i] == other.0[i] {
+				depth += 1;
+			} else {
+				break;
+			}
+		}
+		depth
 	}
 }
 
@@ -616,6 +629,18 @@ impl KeyNode for UsizeKeyNode {
 			self.value >> (self.depth - other.depth) == other.value 
 		}
 	}
+	fn common_depth(&self, other: &Self) -> usize {
+		let (big, small) = if self.depth < other.depth {
+			(other, self)
+		} else {
+			(self, other)
+		};
+		// end is not common
+		let big_v = big.value >> (big.depth - small.depth);
+		let diff = big_v ^ small.value;
+
+		small.depth - (0usize.leading_zeros() - diff.leading_zeros()) as usize
+	}
 }
 
 impl From<(usize, usize)> for UsizeKeyNode {
@@ -746,23 +771,64 @@ pub struct HashProof<'a, H: Hasher, I, KN>{
 	// to the tree struct!!!
 	to_prove: I,
 	current_key: Option<KN>,
-	pub additional_hash: Vec<H::Out>,
+	next_key: Option<KN>,
+	common_depth: Option<usize>, // None could be replace by usize::max_value
+	stack_depth: smallvec::SmallVec<[usize;4]>,
+	additional_hash: Vec<H::Out>,
 }
 
-impl<'a, H: BinaryHasher, I, KN> HashProof<'a, H, I, KN> {
+impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> HashProof<'a, H, I, KN> {
 	// TODO write function to build from iter of unchecked usize indexes: map iter
 	// with either depth_at or the depth_iterator skipping undesired elements (second
 	// seems better as it filters out of range.
 	pub fn new(buff: &'a mut H::Buffer, to_prove: I) -> Self {
-		HashProof{
+		let mut result = HashProof {
 			buffer: buff.as_mut(),
 			to_prove,
 			current_key: None,
+			next_key: None,
+			common_depth: None,
+			stack_depth: smallvec::SmallVec::new(),
 			additional_hash: Vec::new(),
-		}
+		};
+		result.advance_key();
+		result
 	}
 	pub fn take_additional_hash(&mut self) -> Vec<H::Out> {
 		crate::rstd::mem::replace(&mut self.additional_hash, Vec::new())
+	}
+
+	fn advance_key(&mut self) {
+		if let Some(new) = self.to_prove.next() {
+			if self.current_key.is_none() {
+				self.current_key = Some(new);
+				debug_assert!(self.next_key.is_none());
+				debug_assert!(self.common_depth == None);
+				if let Some(new) = self.to_prove.next() {
+					self.common_depth = Some(new.common_depth(
+						self.current_key.as_ref().expect("initialized above")
+					));
+					self.next_key = Some(new);
+				}
+				return;
+			}
+			if let Some(next_key) = self.next_key.take() {
+				self.common_depth = Some(next_key.common_depth(&new));
+				self.current_key = Some(next_key);
+				self.next_key = Some(new);
+				return;
+			}
+			unreachable!()
+		}
+		if let Some(next_key) = self.next_key.take() {
+			self.common_depth = None;
+			self.current_key = Some(next_key);
+			return;
+		}
+		if let Some(_current_key) = self.current_key.take() {
+			self.common_depth = None;
+			return;
+		}
 	}
 }
 
@@ -771,21 +837,40 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Ou
 		H::NULL_HASH
 	}
 	fn process(&mut self, key: &KN, child1: &[u8], child2: &[u8]) -> H::Out {
-		if self.current_key.is_none() {
-			self.current_key = self.to_prove.next();
-		}
 		if let Some(current_key) = self.current_key.as_ref() {
+			let mut advance_key = false;
 			// this operation can be optimized (most of the time this is just testing next previous nibble)
 			// but that would make a complicated design.
 			if current_key.starts_with(key) {
-				let mut to_push = H::Out::default();
-				if let Some(at) = current_key.nibble_at(key.depth()) {
-					if at {
-						to_push.as_mut().copy_from_slice(child1);
-					} else {
-						to_push.as_mut().copy_from_slice(child2);
+				if self.common_depth == Some(key.depth()) {
+					// direct sibling (due to next condition)
+					advance_key = true;
+				} else if key.depth() == 0 || self.common_depth == Some(key.depth() - 1) {
+					advance_key = true;
+				
+					if let Some(at) = current_key.nibble_at(key.depth()) {
+						if at {
+							if self.stack_depth.last().map(|d| *d == key.depth()).unwrap_or(false) {
+								self.stack_depth.pop();
+							} else {
+								let mut to_push = H::Out::default();
+								to_push.as_mut().copy_from_slice(child1);
+								self.additional_hash.push(to_push);
+							}
+						} else {
+							let mut to_push = H::Out::default();
+							to_push.as_mut().copy_from_slice(child2);
+							self.additional_hash.push(to_push);
+						}
 					}
-					self.additional_hash.push(to_push);
+				} else {
+					debug_assert!(if let Some(c) = self.common_depth.as_ref() { *c < key.depth() } else { true });
+				}
+			}
+			if advance_key {
+				if key.depth() > 0 {
+					self.stack_depth.push(key.depth() - 1);
+					self.advance_key();
 				}
 			}
 		}
@@ -881,47 +966,86 @@ pub fn trie_root_from_proof<HO, KN, I, I2, F>(
 		F: ProcessNode<HO, KN>,
 {
 	if layout.nb_elements() == 0 {
-		let mut result = HO::default();
-		result.as_mut().copy_from_slice(callback.process_empty_trie());
-		return Some(result);
+		if !allow_additionals_hashes && additional_hash.into_iter().next().is_some() {
+			return None;
+		} else {
+			let mut result = HO::default();
+			result.as_mut().copy_from_slice(callback.process_empty_trie());
+			return Some(result);
+		}
 	}
 
 	let mut items = input.into_iter();
 	let mut additional_hash = additional_hash.into_iter();
-	// TODO only for on item proof at this point
-	if let Some((mut key, mut child1)) = items.next() {
-		while let Some(right) = key.pop_back() {
-			if let Some(other) = additional_hash.next() {
-				if right {
-					child1 = callback.process(&key, other.as_ref(), child1.as_ref());
-				} else {
-					child1 = callback.process(&key, child1.as_ref(), other.as_ref());
-				}
-			} else {
-				return None;
-			}
-		}
-		if !allow_additionals_hashes & additional_hash.next().is_some() {
-			return None;
-		} else {
-			callback.register_root(&child1);
-			return Some(child1);
-		}
-	} else {
-		// no item case
+	let mut current = items.next();
+	if current.is_none() {
+		// no item case root is directly in additional
 		if let Some(h) = additional_hash.next() {
 			// this check may be a bad idea in case we want to use
 			// multiple proof
-			if !allow_additionals_hashes & additional_hash.next().is_some() {
+			if !allow_additionals_hashes && additional_hash.next().is_some() {
 				return None;
 			} else {
 				callback.register_root(&h);
 				return Some(h);
 			}
+		} 
+	}
+	let mut next = items.next();
+	let calc_common_depth = |current: &Option<(KN, HO)>, next: &Option<(KN, HO)>| {
+		current.as_ref().and_then(|c| next.as_ref().map(|n| c.0.common_depth(&n.0)))
+	};
+	let mut common_depth = calc_common_depth(&current, &next);
+	let mut stack = smallvec::SmallVec::<[(KN, HO);4]>::new();
+	// TODO only for on item proof at this point
+	while let Some((mut key, mut child1)) = current.take() {
+		
+
+		if common_depth == Some(key.depth() - 1) {
+			key.pop_back();
+			let (_, next_hash) = next.expect("common depth is some");
+			// sibling
+			child1 = callback.process(&key, child1.as_ref(), next_hash.as_ref());
+			next = Some((key, child1));
 		} else {
+			while key.depth() != 0 && common_depth != Some(key.depth() - 1) {
+				if let Some(right) = key.pop_back() {
+					if right && stack.last().map(|l| l.0.depth() == key.depth()).unwrap_or(false) {		
+						let (_, other) = stack.pop().expect("checked in above condition");
+						child1 = callback.process(&key, other.as_ref(), child1.as_ref());
+					} else if let Some(other) = additional_hash.next() {
+						if right {
+							child1 = callback.process(&key, other.as_ref(), child1.as_ref());
+						} else {
+							child1 = callback.process(&key, child1.as_ref(), other.as_ref());
+						}
+					} else {
+						return None;
+					}
+				}
+			}
+			if let Some(true) = key.pop_back() {
+				let (st_key, st_hash) = stack.pop().expect("stacked before");
+				debug_assert!(st_key.depth() == key.depth()); // TODO remove key from stack
+				let child1 = callback.process(&key, st_hash.as_ref(), child1.as_ref());
+				stack.push((key, child1));
+			} else { // Some(left)
+				stack.push((key, child1));
+			}
+		}
+		current = next;
+		next = items.next();
+		common_depth = calc_common_depth(&current, &next);
+	}
+	if let Some((k, root)) = stack.pop() {
+		if k.depth() != 0 || (!allow_additionals_hashes && additional_hash.next().is_some()) {
 			return None;
+		} else {
+			callback.register_root(&root);
+			return Some(root);
 		}
 	}
+	None
 }
 
 #[cfg(test)]
@@ -1190,6 +1314,53 @@ mod test {
 				assert!(root.is_some());
 				assert_eq!(root.unwrap().as_ref(), &result[l][..]);
 			}
+		}
+	}
+
+	#[test]
+	fn test_multiple_elements_proof() {
+		let result = base16_roots();
+		let tests = [
+			(4, &[1, 2][..]),
+			(4, &[1, 2, 3][..]),
+			(13, &[1, 2, 3][..]),
+			(13, &[2, 3, 4][..]),
+			(13, &[2, 5][..]),
+			(13, &[2, 11][..]),
+			(13, &[11, 12][..]),
+			(13, &[10, 12][..]),
+			(13, &[2, 11, 12][..]),
+		];
+		for (l, ps) in tests.iter() {
+			let l = *l;
+			let ps = *ps;
+			let tree = Tree::new(0, 0, l);
+			let mut hash_buf = <KeccakHasher as BinaryHasher>::Buffer::default();
+			let mut hash_buf2 = <KeccakHasher as BinaryHasher>::Buffer::default();
+			let mut callback_read_proof = HashOnly::<KeccakHasher>::new(&mut hash_buf2);
+			let hashes: Vec<_> = hashes(l);
+			let mut to_prove = Vec::new();
+			let mut proof_items = Vec::new();
+			for p in ps {
+				let p = *p;
+				to_prove.push(tree.path_node_key::<UsizeKeyNode>(p));
+				proof_items.push((tree.path_node_key::<UsizeKeyNode>(p), hashes[p].clone()));
+			}
+			let mut callback = HashProof::<KeccakHasher, _, _>::new(&mut hash_buf, to_prove.into_iter());
+			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone(), &mut callback);
+			assert_eq!(root.as_ref(), &result[l][..]);
+			let additional_hash = callback.take_additional_hash();
+			let root = trie_root_from_proof::<_, UsizeKeyNode, _, _, _>(
+				&tree,
+				proof_items,
+				additional_hash.into_iter(),
+				&mut callback_read_proof,
+				false,
+			);
+			let additional_hash = callback.additional_hash;
+			println!("{}, {:?}", l, ps);
+			assert!(root.is_some());
+			assert_eq!(root.unwrap().as_ref(), &result[l][..]);
 		}
 	}
 }
