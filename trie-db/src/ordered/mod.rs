@@ -770,42 +770,157 @@ pub struct HashProof<'a, H: Hasher, I, KN>{
 	// I must guaranty right depth and index in range regarding
 	// to the tree struct!!!
 	to_prove: I,
+	state: MultiProofState<KN>,
+	additional_hash: Vec<H::Out>,
+}
+
+// We need some read ahead to manage state.
+struct MultiProofState<KN> {
 	current_key: Option<KN>,
-	// if we touch next key, then we stack current key
-	// and get next one. if no next we do not stack.
-	next_key: Option<KN>,
+	next_key1: Option<KN>,
+	next_key2: Option<KN>,
 	// going up a join key means droping current in favor of stack,
 	// if stack empty move forward instead.
-	join_key: Option<usize>,
-	/// before touching first do not apply join key.
-	touch_first: bool,
-	stack: smallvec::SmallVec<[KN;4]>,
-	additional_hash: Vec<H::Out>,
+	join1: Option<usize>,
+	join2: Option<usize>,
+	stack: smallvec::SmallVec<[(KN, usize);4]>,
+}
+
+enum MultiProofResult {
+	RegisterLeft,
+	RegisterRight,
+	DoNothing,
+}
+
+impl<KN: KeyNode> MultiProofState<KN> {
+	fn new(next_keys: &mut impl Iterator<Item = KN>) -> Self {
+		let mut result = MultiProofState {
+			current_key: None,
+			next_key1: None,
+			next_key2: None,
+			join1: None,
+			join2: None,
+			stack: Default::default(),
+		};
+		result.current_key = next_keys.next();
+		result.next_key1 = next_keys.next();
+		result.next_key2 = next_keys.next();
+		result.refresh_join1();
+		result.refresh_join2();
+		result
+	}
+	fn refresh_join1(&mut self) {
+		self.join1 = self.current_key.as_ref()
+			.and_then(|c| self.next_key1.as_ref().map(|n| n.common_depth(c)));
+	}
+	fn refresh_join2(&mut self) {
+		self.join2 = self.next_key1.as_ref()
+			.and_then(|n1| self.next_key2.as_ref().map(|n2| n2.common_depth(n1)));
+	}
+
+	fn new_key(&mut self, key: &KN, next_keys: &mut impl Iterator<Item = KN>) -> MultiProofResult {
+		let depth = key.depth();
+		let start_with_current = self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false);
+		if start_with_current {
+			// join management
+			if Some(depth) == self.join1 {
+				if let Some(join2) = self.join2 {
+					let stack_join = self.stack.last().map(|s| s.1);
+					if stack_join.map(|sj| join2 > sj).unwrap_or(true) {
+						// move fw, keep current.
+						// next_1 is dropped.
+						self.next_key1 = self.next_key2.take();
+						self.refresh_join1();
+						self.next_key2 = next_keys.next();
+						self.refresh_join2();
+						return MultiProofResult::DoNothing;
+					}
+				}
+				// from stack
+				if let Some((stack_hash, _stack_join)) = self.stack.pop() {
+					// current is dropped.
+					self.current_key = Some(stack_hash);
+					// TODO check if stack depth == this new depth (should be?).
+					self.refresh_join1();
+				} else {
+					// fuse last interval
+					self.join1 = None;
+					self.join2 = None;
+					self.next_key1 = None;
+					self.next_key2 = None;
+				}
+				return MultiProofResult::DoNothing;
+			} else {
+				// no matching join1 depth exclude sibling case.
+				if self.current_key.as_ref()
+					.expect("start_with_current").nibble_at(key.depth()).expect("starts with") {
+					return MultiProofResult::RegisterLeft;
+				} else {
+					return MultiProofResult::RegisterRight;
+				}
+			}
+		}
+		
+		let start_with_next = self.next_key1.as_ref().map(|n| n.starts_with(key)).unwrap_or(false);
+		// next interval management 
+		if start_with_next {
+			let mut sibling = false;
+			if let Some(join2) = self.join2 {
+				if join2 == depth {
+					// next is sibling, skip it and do not register.
+					// next2 is dropped
+					self.next_key2 = next_keys.next();
+					self.refresh_join2();
+					sibling = true;
+				}
+			}
+
+			let right = self.next_key1.as_ref()
+				.expect("start_with_current").nibble_at(key.depth()).expect("starts with");
+			if let Some(join1) = self.join1 {
+				if let Some(join2) = self.join2 {
+					if join2 > join1 {
+						// shift and stack
+						self.stack.push((self.current_key.take().expect("no next without current"), join1));
+						self.current_key = self.next_key1.take();
+						self.next_key1 = self.next_key2.take();
+						self.next_key2 = next_keys.next();
+						self.refresh_join1(); // TODO could also use join2 for join1 would be fastest
+						self.refresh_join2();
+					} else {
+						// keep interval
+					}
+				} else {
+					// no next_key2, keep interval
+				}
+			} else {
+				unreachable!("next is defined (start_with_next)");
+			}
+			if !sibling {
+				// TODO could skip right resolution in sibling case
+				if right {
+					return MultiProofResult::RegisterLeft;
+				} else {
+					return MultiProofResult::RegisterRight;
+				}
+			}
+		}
+		MultiProofResult::DoNothing
+	}
 }
 
 impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> HashProof<'a, H, I, KN> {
 	// TODO write function to build from iter of unchecked usize indexes: map iter
 	// with either depth_at or the depth_iterator skipping undesired elements (second
 	// seems better as it filters out of range.
-	pub fn new(buff: &'a mut H::Buffer, to_prove: I) -> Self {
-		let mut result = HashProof {
+	pub fn new(buff: &'a mut H::Buffer, mut to_prove: I) -> Self {
+		let state = MultiProofState::new(&mut to_prove);
+		HashProof {
 			buffer: buff.as_mut(),
 			to_prove,
-			current_key: None,
-			next_key: None,
-			join_key: None,
-			stack: smallvec::SmallVec::new(),
+			state,
 			additional_hash: Vec::new(),
-			touch_first: false,
-		};
-		result.current_key = result.to_prove.next();
-		result.next_key = result.to_prove.next();
-		result.update_join_key();
-		result
-	}
-	fn update_join_key(&mut self) {
-		self.join_key = self.current_key.as_ref()
-			.and_then(|c| self.next_key.as_ref().map(|n| n.common_depth(c)));
+		}
 	}
 	pub fn take_additional_hash(&mut self) -> Vec<H::Out> {
 		crate::rstd::mem::replace(&mut self.additional_hash, Vec::new())
@@ -817,70 +932,18 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Ou
 		H::NULL_HASH
 	}
 	fn process(&mut self, key: &KN, child1: &[u8], child2: &[u8]) -> H::Out {
-		let mut do_register_left = false;
-		let mut do_register_right = false;
-		if !self.touch_first {
-			self.touch_first = self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false);
-		}
-		if self.touch_first {
-		if Some(key.depth()) == self.join_key {
-			if let Some(s) = self.stack.pop() {
-				self.current_key = Some(s);
-			} else {
-				self.current_key = self.next_key.take();
-				self.next_key = self.to_prove.next();
-			}
-			self.update_join_key();
-		} else if self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false) {
-			debug_assert!(
-				!self.next_key.as_ref().map(|n| n.starts_with(key)).unwrap_or(false)
-			);
-			if self.current_key.as_ref().expect("start_with_current").nibble_at(key.depth()).expect("starts with") {
-				do_register_left = true;
-			} else {
-				do_register_right = true;
-			}
-		} else if self.next_key.as_ref().map(|n| n.starts_with(key)).unwrap_or(false) {
-			debug_assert!(
-				!self.current_key.as_ref().map(|c| c.starts_with(key)).unwrap_or(false)
-			);
-			if self.next_key.as_ref().expect("start_with_current").nibble_at(key.depth()).expect("starts with") {
-				do_register_left = true;
-			} else {
-				do_register_right = true;
-			}
-			if let Some(n) = self.to_prove.next() {
-				self.stack.push(self.current_key.take().expect("current exists if next does"));
-				self.current_key = self.next_key.take();
-				self.next_key = Some(n);
-				self.update_join_key();
-				if Some(key.depth()) == self.join_key {
-					// sibling TODO avoid rollback reg by doing test differently
-					do_register_left = false;
-					do_register_right = false;
-					if let Some(s) = self.stack.pop() {
-						self.current_key = Some(s);
-					} else {
-						self.current_key = self.next_key.take();
-						self.next_key = self.to_prove.next();
-					}
-					self.update_join_key();
-				}
-			} else {
-				// keep this interval, will fuse at join key
-			}
-		}
-	
-		if do_register_left {
-			let mut to_push = H::Out::default();
-			to_push.as_mut().copy_from_slice(child1);
-			self.additional_hash.push(to_push);
-		}
-		if do_register_right {
-			let mut to_push = H::Out::default();
-			to_push.as_mut().copy_from_slice(child2);
-			self.additional_hash.push(to_push);
-		}
+		match self.state.new_key(key, &mut self.to_prove) {
+			MultiProofResult::DoNothing => (),
+			MultiProofResult::RegisterLeft => {
+				let mut to_push = H::Out::default();
+				to_push.as_mut().copy_from_slice(child1);
+				self.additional_hash.push(to_push);
+			},
+			MultiProofResult::RegisterRight => {
+				let mut to_push = H::Out::default();
+				to_push.as_mut().copy_from_slice(child2);
+				self.additional_hash.push(to_push);
+			},
 		}
 
 		self.buffer[..H::LENGTH].copy_from_slice(child1);
@@ -1356,7 +1419,7 @@ mod test {
 	fn test_multiple_elements_proof() {
 		let result = base16_roots();
 		let tests = [
-			//(4, &[1, 2][..]),
+			(4, &[1, 2][..]),
 			(4, &[1, 2, 3][..]),
 			(13, &[1, 2, 3][..]),
 			(13, &[2, 3, 4][..]),
