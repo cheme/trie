@@ -1049,101 +1049,62 @@ pub fn trie_root_from_proof<HO, KN, I, I2, F>(
 
 	let mut items = input.into_iter();
 	let mut additional_hash = additional_hash.into_iter();
-	let mut current = items.next();
-	if current.is_none() {
+	let mut current;
+	if let Some(c) = items.next() {
+		current = c;
+	} else {
+		// TODO check if we even can produce such proof.
 		// no item case root is directly in additional
 		if let Some(h) = additional_hash.next() {
-			// this check may be a bad idea in case we want to use
-			// multiple proof
-			if !allow_additionals_hashes && additional_hash.next().is_some() {
-				return None;
-			} else {
+			if allow_additionals_hashes || additional_hash.next().is_none() {
 				callback.register_root(&h);
 				return Some(h);
 			}
-		} 
+		}
+		return None;
 	}
 	let mut next = items.next();
-	let calc_common_depth = |current: &Option<(KN, HO)>, next: &Option<(KN, HO)>| {
-		current.as_ref().and_then(|c| next.as_ref().map(|n| c.0.common_depth(&n.0)))
+	let calc_common_depth = |current: &(KN, HO), next: &Option<(KN, HO)>| {
+		next.as_ref().map(|n| current.0.common_depth(&n.0))
 	};
 	let mut common_depth = calc_common_depth(&current, &next);
-	let mut stack = smallvec::SmallVec::<[(KN, HO);4]>::new();
+	let mut stack = smallvec::SmallVec::<[((KN, HO), usize);4]>::new();
 
-	while let Some((mut key, mut child1)) = current.take() {
-		
-		while key.depth() != 0 && common_depth != Some(key.depth() - 1) {
-			if let Some(right) = key.pop_back() {
-				if let Some(other) = additional_hash.next() {
-					if right {
-						child1 = callback.process(&key, other.as_ref(), child1.as_ref());
-					} else {
-						child1 = callback.process(&key, child1.as_ref(), other.as_ref());
-					}
-				} else {
-					return None;
-				}
-			} else {
-				return None;
-			}
+	while let Some(right) = current.0.pop_back() {
+		let depth = current.0.depth();
+		if Some(depth) == stack.last().as_ref().map(|s| s.1) {
+			let ((stack_key, stack_hash), _stack_depth) = stack.pop().expect("tested in condition");
+			debug_assert!(right == true);
+			debug_assert!(stack_key.starts_with(&current.0) && current.0.starts_with(&stack_key));
+			current.1 = callback.process(&current.0, stack_hash.as_ref(), current.1.as_ref());
+			continue;
 		}
-
-		// exit condition
-		if key.depth() == 0 && common_depth != Some(0) {
-			if !allow_additionals_hashes && additional_hash.next().is_some() {
-				return None;
-			} else {
-				callback.register_root(&child1);
-				return Some(child1);
-			}
+		if Some(depth) == common_depth {
+			let (key_next, hash_next) = next.take().expect("common depth is some");
+			stack.push((current, depth)); // TODO process sibling without stack? or all on stack
+			current = (key_next, hash_next);
+			next = items.next();
+			common_depth = calc_common_depth(&current, &next);
+			continue;
 		}
-		// common depth reached
-		if let Some(right) = key.pop_back() {
+		if let Some(other) = additional_hash.next() {
 			if right {
-				if let Some((k, h)) = stack.pop() {
-					debug_assert!(key.depth() == k.depth() && key.starts_with(&k));
-					child1 = callback.process(&k, h.as_ref(), child1.as_ref());
-					current = Some((k, child1));
-					common_depth = calc_common_depth(&current, &next);
-				} else {
-					return None;
-				}
+				current.1 = callback.process(&current.0, other.as_ref(), current.1.as_ref());
 			} else {
-				if next.is_some() {
-					stack.push((key, child1));
-					current = next.take();
-					if let Some(n) = items.next() {
-						next = Some(n);
-						common_depth = calc_common_depth(&current, &next);
-/*
-						if let Some((key, child1)) = current.as_ref() {
-							if common_depth == Some(key.depth() - 1) {
-								// sibling
-								let next = next.take().expect("init just before");
-								let mut key = key.clone();
-								key.pop_back();
-								let child1 = callback.process(&key, child1.as_ref(), next.1.as_ref());
-								current = Some((key, child1));
-								let next = items.next();
-								common_depth = calc_common_depth(&current, &next);
-							}
-						}*/
-					}
-				} else {
-					return None;
-				}
+				current.1 = callback.process(&current.0, current.1.as_ref(), other.as_ref());
 			}
+		} else {
+			return None;
 		}
 	}
-	/*if let Some((k, root)) = stack.pop() {
-		if k.depth() != 0 || (!allow_additionals_hashes && additional_hash.next().is_some()) {
-			return None;
-		} else {
-			callback.register_root(&root);
-			return Some(root);
-		}
-	}*/
-	None
+
+	debug_assert!(current.0.depth() == 0);
+	if  !allow_additionals_hashes && additional_hash.next().is_some() {
+		None
+	} else {
+		callback.register_root(&current.1);
+		Some(current.1)
+	}
 }
 
 #[cfg(test)]
