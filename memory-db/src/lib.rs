@@ -19,8 +19,9 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
-	AsHashDB, AsPlainDB, Prefix};
+use ordered_trie::{SequenceBinaryTree, BinaryHasher, HashOnly};
+use hash_db::{HashDB, HashDBComplex, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
+	AsHashDB, AsPlainDB, Prefix, ComplexLayout};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
 #[cfg(feature = "deprecated")]
 #[cfg(feature = "std")]
@@ -599,6 +600,60 @@ where
 		}
 	}
 }
+
+impl<H, KF, T> HashDBComplex<H, T> for MemoryDB<H, KF, T>
+where
+	H: KeyHasher,
+	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
+	KF: Send + Sync + KeyFunction<H>,
+{
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
+		<Self as HashDB>::get(key, prefix)
+	}
+
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
+		<Self as HashDB>::contains(key, prefix)
+	}
+
+	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T) {
+		<Self as HashDB>::emplace(key, prefix, value)
+	}
+
+	fn insert_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+		&mut self,
+		prefix: Prefix,
+		value: &[u8],
+		layout: ComplexLayout<H::Out, I>,
+	) -> H::Out {
+		if T::from(value) == self.null_node_data {
+			return self.hashed_null_node.clone();
+		}
+
+		let seq_trie = SequenceBinaryTree::new(0, 0, layout.nb_children);
+		let key = if layout.additional_hashes.len() == 0 {
+			// full node
+			let mut hash_buf = <H as BinaryHasher>::Buffer::default();
+			let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
+			let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
+	
+			let iter = layout.children.filter_map(|is_defined, range| TDOO see iter imple in layout
+			ordered_trie::trie_root(&seq_trie, iter, &mut callback_read_proof)
+		} else {
+			// proof node
+			unimplemented!();
+		};
+
+		HashDB::emplace(self, key, prefix, value.into());
+		key
+	}
+
+	fn remove(&mut self, key: &H::Out, prefix: Prefix) {
+		<Self as HashDB>::remove(key, prefix)
+	}
+}
+
+
+
 
 impl<H, KF, T> HashDBRef<H, T> for MemoryDB<H, KF, T>
 where

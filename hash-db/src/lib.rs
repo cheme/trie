@@ -32,6 +32,10 @@ pub trait MaybeDebug {}
 #[cfg(not(feature = "std"))]
 impl<T> MaybeDebug for T {}
 
+#[cfg(feature = "std")]
+use std::ops::Range;
+#[cfg(not(feature = "std"))]
+use core::ops::Range;
 
 /// A trie node prefix, it is the nibble path from the trie root
 /// to the trie node.
@@ -62,6 +66,22 @@ pub trait Hasher: Sync + Send {
 
 	/// Compute the hash of the provided slice of bytes returning the `Out` type of the `Hasher`.
 	fn hash(x: &[u8]) -> Self::Out;
+}
+
+/// Small trait for to allow using buffer of type [u8; H::LENGTH * 2].
+pub trait BinaryHasher: Hasher {
+	/// Hash for the empty content (is hash(&[])).
+	const NULL_HASH: &'static [u8];
+	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
+}
+
+pub trait HasherComplex: BinaryHasher {
+
+	/// Alternate hash with complex proof allowed
+	fn hash_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+		x: &[u8],
+		l: ComplexLayout<<Self as Hasher>::Out, I>,
+	) -> Self::Out;
 }
 
 /// Trait modelling a plain datastore whose key is a fixed type.
@@ -120,6 +140,75 @@ pub trait HashDB<H: Hasher, T>: Send + Sync + AsHashDB<H, T> {
 	/// are counted and the equivalent number of `remove()`s must be performed before the data
 	/// is considered dead.
 	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out;
+
+	/// Like `insert()`, except you provide the key and the data is all moved.
+	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T);
+
+	/// Remove a datum previously inserted. Insertions can be "owed" such that the same number of
+	/// `insert()`s may happen without the data being eventually being inserted into the DB.
+	/// It can be "owed" more than once.
+	fn remove(&mut self, key: &H::Out, prefix: Prefix);
+}
+
+/// Describes how to hash a node given its layout
+pub struct ComplexLayout<'a, HO, I> {
+	pub nb_children: usize,
+	// can be calculated from decoded node from the
+	// children bitmap and the children range
+	pub children: I, // impl iterator < (is_defined, range) >
+	// TODO switch to iter??
+	pub additional_hashes: &'a [HO],
+}
+
+impl<'a, HO: Default, I> ComplexLayout<'a, HO, I> {
+	pub fn iter_values(&mut self, node: &[u8]) -> ComplexLayoutIterValues<'a, HO, I> {
+		ComplexLayoutIterValues(self, Default::default, node)
+	}
+}
+
+pub struct ComplexLayoutIterValues<'a, HO, I>(&'a mut ComplexLayout<'a, HO, I>, HO, &'a[u8]);
+
+impl<'a, HO: AsMut<[u8]>, I> Iterator<Item = &HO> for ComplexLayoutIterValues<'a, HO, I> {
+	
+    fn next(&mut self) -> Option<Self::Item> {
+			if let Some((is_defined, range) = self.0.children.next() {
+				assert!(is_defined);
+				// inline got padded with 0
+				self.1.as_mut() // TODO fill with 0
+				self.1.as_mut()[range.len()].copy_from_slice(data[range]);
+				Some
+
+			} else {
+				None
+			}
+			
+		}
+    fn size_hint(&self) -> (usize, Option<usize>) {
+			// warning we unsafely presume the complexe layout
+			// is only defined values.
+			(self.0.nb_children, Some(self.0.nb_children))
+		}
+}
+
+/// Same as HashDB but can modify the value upon storage, and apply
+/// `HasherComplex`.
+pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
+	/// Look up a given hash into the bytes that hash to it, returning None if the
+	/// hash is not known.
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T>;
+
+	/// Check for the existence of a hash-key.
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool;
+
+	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
+	/// are counted and the equivalent number of `remove()`s must be performed before the data
+	/// is considered dead.
+	fn insert_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+		&mut self,
+		prefix: Prefix,
+		value: &[u8],
+		layout: ComplexLayout<H::Out, I>,
+	) -> H::Out;
 
 	/// Like `insert()`, except you provide the key and the data is all moved.
 	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T);

@@ -12,12 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This module contains implementation of trie/tree based on ordered sequential key only.
+#![cfg_attr(not(feature = "std"), no_std)]
 
-use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX, Hasher};
-use super::{Result, DBValue};
+//! This crate contains implementation of trie/tree based on ordered sequential key only.
+//!
+//! Targetted use case is a stack or a fifo.
+
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(feature = "std")]
+mod rstd {
+	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
+	pub use std::collections::VecDeque;
+	pub use std::collections::BTreeMap;
+	pub use std::error::Error;
+}
+
+#[cfg(not(feature = "std"))]
+mod rstd {
+	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
+	pub use alloc::{boxed, rc, vec};
+	pub use alloc::collections::VecDeque;
+	pub trait Error {}
+	impl<T> Error for T {}
+}
+
+#[cfg(feature = "std")]
+use self::rstd::{fmt, Error};
+
+use hash_db::MaybeDebug;
+use self::rstd::{boxed::Box, vec::Vec};
+
+
+use hash_db::{HashDBRef, Hasher, BinaryHasher};
 use crate::rstd::marker::PhantomData;
 use crate::rstd::vec::Vec;
+
+
+pub type DBValue = Vec<u8>;
+
 pub mod key {
 	/// Base type for key, TODO
 	/// implementing on usize for now,
@@ -687,13 +721,6 @@ fn key_node_test() {
 	}
 	test(usize::max_value() - 1, true);
 //	test(usize::max_value());
-}
-
-/// Small trait for to allow using buffer of type [u8; H::LENGTH * 2].
-pub trait BinaryHasher: Hasher {
-	/// Hash for the empty content (is hash(&[])).
-	const NULL_HASH: &'static [u8];
-	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
 }
 
 /// A buffer for binary hasher of size 64.

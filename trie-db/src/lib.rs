@@ -57,7 +57,6 @@ mod lookup;
 mod nibble;
 mod node_codec;
 mod trie_codec;
-pub mod ordered;
 
 pub use hash_db::{HashDB, HashDBRef, Hasher};
 pub use self::triedb::{TrieDB, TrieDBIterator};
