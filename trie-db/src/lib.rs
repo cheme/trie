@@ -24,11 +24,13 @@ mod rstd {
 	pub use std::collections::VecDeque;
 	pub use std::collections::BTreeMap;
 	pub use std::error::Error;
+	pub use std::iter::Empty as EmptyIter;
 }
 
 #[cfg(not(feature = "std"))]
 mod rstd {
 	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
+	pub use core::iter::Empty as EmptyIter;
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
 	pub trait Error {}
@@ -393,6 +395,7 @@ pub trait TrieLayout {
 	/// no partial in branch, if false the trie will only
 	/// use branch and node with partials in both.
 	const USE_EXTENSION: bool;
+	const COMPLEX_HASH: bool;
 	/// Hasher to use for this trie.
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).

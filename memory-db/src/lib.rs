@@ -621,44 +621,41 @@ where
 		<Self as HashDB<H, T>>::emplace(self, key, prefix, value)
 	}
 
+	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out {
+		<Self as HashDB<H, T>>::insert(self, prefix, value)
+	}
+
 	fn insert_complex<
-		I: Iterator<Item = (bool, Range<usize>)>,
+		I: Iterator<Item = Option<H::Out>>,
 		I2: Iterator<Item = H::Out>,
 	> (
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
-		layout: ComplexLayout<I, I2>,
+		nb_children: usize,
+		children: I,
+		nb_additional_hashes: usize,
+		additional_hashes: I2,
 	) -> H::Out {
 		if T::from(value) == self.null_node_data {
 			return self.hashed_null_node.clone();
 		}
 
-		let seq_trie = SequenceBinaryTree::new(0, 0, layout.nb_children);
+		let seq_trie = SequenceBinaryTree::new(0, 0, nb_children);
 
 		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
 		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
-		let ComplexLayout {
-			nb_children,
-			children,
-			nb_additional_hashes,
-			additional_hashes,
-		} = layout;
 		let key = if nb_additional_hashes == 0 {
 			// full node
-			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
-				.map(|(is_defined, v)| {
-					debug_assert!(is_defined);
-					v
-				});
+			let iter = children.filter_map(|v| v);
 			ordered_trie::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
 		} else {
 			// proof node
 			let iter_key = seq_trie.iter_depth(None).enumerate().map(Into::<UsizeKeyNode>::into);
-			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
+			let iter = children
 				.zip(iter_key)
-				.filter_map(|((is_defined, hash), key)| if is_defined {
-					Some((key, hash))
+				.filter_map(|(value, key)| if let Some(value) = value {
+					Some((key, value))
 				} else {
 					None
 				});
