@@ -41,11 +41,11 @@ mod rstd {
 #[cfg(feature = "std")]
 use self::rstd::{fmt, Error};
 
-use hash_db::MaybeDebug;
+use hash_db::{MaybeDebug, AsHashDB, Prefix};
 use self::rstd::{boxed::Box, vec::Vec};
 
 
-use hash_db::{HashDBRef, Hasher, BinaryHasher};
+use hash_db::{HashDBRef, Hasher};
 use crate::rstd::marker::PhantomData;
 
 
@@ -1366,7 +1366,7 @@ mod test {
 			let mut hash_buf = <KeccakHasher as BinaryHasher>::Buffer::default();
 			let mut callback = HashOnly::<KeccakHasher>::new(&mut hash_buf);
 			let hashes: Vec<_> = hashes(l);
-			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes, &mut callback);
+			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.into_iter(), &mut callback);
 			assert_eq!(root.as_ref(), &result[l][..]);
 		}
 	}
@@ -1383,7 +1383,7 @@ mod test {
 			for p in 0..l {
 				let to_prove = vec![tree.path_node_key::<UsizeKeyNode>(p)];
 				let mut callback = HashProof::<KeccakHasher, _, _>::new(&mut hash_buf, to_prove.into_iter());
-				let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone(), &mut callback);
+				let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone().into_iter(), &mut callback);
 				assert_eq!(root.as_ref(), &result[l][..]);
 				let additional_hash = callback.take_additional_hash();
 				let proof_items = vec![(tree.path_node_key::<UsizeKeyNode>(p), hashes[p].clone())];
@@ -1433,7 +1433,7 @@ mod test {
 				proof_items.push((tree.path_node_key::<UsizeKeyNode>(p), hashes[p].clone()));
 			}
 			let mut callback = HashProof::<KeccakHasher, _, _>::new(&mut hash_buf, to_prove.into_iter());
-			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone(), &mut callback);
+			let root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone().into_iter(), &mut callback);
 			assert_eq!(root.as_ref(), &result[l][..]);
 			let additional_hash = callback.take_additional_hash();
 			let root = trie_root_from_proof::<_, UsizeKeyNode, _, _, _>(
@@ -1450,3 +1450,111 @@ mod test {
 		}
 	}
 }
+
+/// Small trait for to allow using buffer of type [u8; H::LENGTH * 2].
+pub trait BinaryHasher: Hasher {
+	/// Hash for the empty content (is hash(&[])).
+	const NULL_HASH: &'static [u8];
+	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
+}
+
+pub trait HasherComplex: BinaryHasher {
+
+	/// Alternate hash with complex proof allowed
+	fn hash_complex<
+		I: Iterator<Item = Option<<Self as Hasher>::Out>>,
+		I2: Iterator<Item = <Self as Hasher>::Out>,
+	>(
+		x: &[u8],
+		nb_children: usize,
+		children: I,
+		additional_hashes: I2,
+		proof: bool,
+	) -> Option<Self::Out>;
+}
+
+impl<H: BinaryHasher> HasherComplex for H {
+	fn hash_complex<
+		I: Iterator<Item = Option<<Self as Hasher>::Out>>,
+		I2: Iterator<Item = <Self as Hasher>::Out>,
+	>(
+		x: &[u8],
+		nb_children: usize,
+		children: I,
+		additional_hashes: I2,
+		proof: bool,
+	) -> Option<H::Out> {
+		let seq_trie = SequenceBinaryTree::new(0, 0, nb_children);
+
+		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
+		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
+		let hash = if !proof {
+			// full node
+			let iter = children.filter_map(|v| v); // TODO assert all some?
+			crate::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
+		} else {
+			// proof node
+			let iter_key = seq_trie.iter_depth(None).enumerate().map(Into::<UsizeKeyNode>::into);
+			let iter = children
+				.zip(iter_key)
+				.filter_map(|(value, key)| if let Some(value) = value {
+					Some((key, value))
+				} else {
+					None
+				});
+			if let Some(hash) = crate::trie_root_from_proof(
+				&seq_trie,
+				iter,
+				additional_hashes,
+				&mut callback_read_proof,
+				false,
+			) {
+				hash
+			} else {
+				return None;
+			}
+		};
+		// TODO really need a real hash trait
+		let mut buf = Vec::with_capacity(x.len() + hash.as_ref().len());
+		buf.extend_from_slice(x);
+		buf.extend_from_slice(hash.as_ref());
+		Some(H::hash(buf.as_slice()))
+	}
+}
+
+/// Same as HashDB but can modify the value upon storage, and apply
+/// `HasherComplex`.
+pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
+	/// Look up a given hash into the bytes that hash to it, returning None if the
+	/// hash is not known.
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T>;
+
+	/// Check for the existence of a hash-key.
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool;
+
+	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out;
+	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
+	/// are counted and the equivalent number of `remove()`s must be performed before the data
+	/// is considered dead.
+	fn insert_complex<
+		I: Iterator<Item = Option<H::Out>>,
+		I2: Iterator<Item = H::Out>,
+	>(
+		&mut self,
+		prefix: Prefix,
+		value: &[u8],
+		nb_children: usize,
+		children: I,
+		additional_hashes: I2,
+		proof: bool,
+	) -> H::Out;
+
+	/// Like `insert()`, except you provide the key and the data is all moved.
+	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T);
+
+	/// Remove a datum previously inserted. Insertions can be "owed" such that the same number of
+	/// `insert()`s may happen without the data being eventually being inserted into the DB.
+	/// It can be "owed" more than once.
+	fn remove(&mut self, key: &H::Out, prefix: Prefix);
+}
+

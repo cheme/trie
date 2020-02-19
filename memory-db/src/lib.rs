@@ -19,9 +19,9 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-use ordered_trie::{SequenceBinaryTree, HashOnly, UsizeKeyNode};
-use hash_db::{HashDB, HashDBComplex, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
-	AsHashDB, AsPlainDB, Prefix, ComplexLayout, BinaryHasher, HasherComplex, ComplexLayoutIterValues};
+use ordered_trie::{SequenceBinaryTree, HashOnly, UsizeKeyNode, HashDBComplex, HasherComplex, BinaryHasher};
+use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
+	AsHashDB, AsPlainDB, Prefix, ComplexLayout, ComplexLayoutIterValues};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
 #[cfg(feature = "deprecated")]
 #[cfg(feature = "std")]
@@ -645,33 +645,18 @@ where
 
 		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
 		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
-		let key = if !proof {
-			// full node
-			let iter = children.filter_map(|v| v); // TODO assert all some?
-			ordered_trie::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
+		let key = if let Some(key) = H::hash_complex(
+			value,
+			nb_children,
+			children,
+			additional_hashes,
+			proof,
+		) {
+			key
 		} else {
-			// proof node
-			let iter_key = seq_trie.iter_depth(None).enumerate().map(Into::<UsizeKeyNode>::into);
-			let iter = children
-				.zip(iter_key)
-				.filter_map(|(value, key)| if let Some(value) = value {
-					Some((key, value))
-				} else {
-					None
-				});
-			if let Some(ok) = ordered_trie::trie_root_from_proof(
-				&seq_trie,
-				iter,
-				additional_hashes,
-				&mut callback_read_proof,
-				false,
-			) {
-				ok
-			} else {
-				// invalid proof TODO do dedicated method that can return
-				// error??
-				return self.hashed_null_node.clone();
-			}
+			// invalid proof TODO do dedicated method that can return
+			// error??
+			return self.hashed_null_node.clone();
 		};
 
 		HashDB::emplace(self, key, prefix, value.into());

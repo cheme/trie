@@ -17,7 +17,8 @@
 //! implementation.
 //! See `trie_visit` function.
 
-use hash_db::{Hasher, HashDB, Prefix, HashDBComplex, ComplexLayout, HasherComplex};
+use hash_db::{Hasher, HashDB, Prefix, ComplexLayout};
+use ordered_trie::{HashDBComplex, HasherComplex};
 use crate::rstd::{cmp::max, marker::PhantomData, vec::Vec, EmptyIter};
 use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
@@ -475,6 +476,60 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRoot<H, <H as Has
 		ChildReference::Hash(hash)
 	}
 }
+
+/// Calculate the trie root of the trie.
+pub struct TrieRootComplex<H, HO> {
+	/// The resulting root.
+	pub root: Option<HO>,
+	_ph: PhantomData<H>,
+}
+
+impl<H, HO> Default for TrieRootComplex<H, HO> {
+	fn default() -> Self {
+		TrieRootComplex { root: None, _ph: PhantomData }
+	}
+}
+
+impl<H: HasherComplex> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootComplex<H, <H as Hasher>::Out> {
+	fn process(
+		&mut self,
+		_: Prefix,
+		encoded_node: Vec<u8>,
+		is_root: bool,
+		complex_hash: Option<(impl Iterator<Item = impl Borrow<Option<ChildReference<H::Out>>>>, usize)>,
+	) -> ChildReference<<H as Hasher>::Out> {
+		let len = encoded_node.len();
+		if !is_root && len < <H as Hasher>::LENGTH {
+			let mut h = <<H as Hasher>::Out as Default>::default();
+			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
+
+			return ChildReference::Inline(h, len);
+		}
+		let hash = if let Some((children, nb_children)) = complex_hash {
+			let iter = children
+				.filter_map(|v| match v.borrow().as_ref() {
+					Some(ChildReference::Hash(v)) => Some(Some(v.clone())),
+					Some(ChildReference::Inline(v, _l)) => Some(Some(v.clone())),
+					None => None,
+				});
+			<H as HasherComplex>::hash_complex(
+				&encoded_node[..],
+				nb_children,
+				iter,
+				EmptyIter::default(),
+				false,
+			).expect("only proof fails: TODO two primitives")
+		} else {
+			<H as Hasher>::hash(&encoded_node[..])
+		};
+	
+		if is_root {
+			self.root = Some(hash.clone());
+		};
+		ChildReference::Hash(hash)
+	}
+}
+
 
 /// Get the trie root node encoding.
 pub struct TrieRootUnhashed<H> {

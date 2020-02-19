@@ -68,25 +68,6 @@ pub trait Hasher: Sync + Send {
 	fn hash(x: &[u8]) -> Self::Out;
 }
 
-/// Small trait for to allow using buffer of type [u8; H::LENGTH * 2].
-pub trait BinaryHasher: Hasher {
-	/// Hash for the empty content (is hash(&[])).
-	const NULL_HASH: &'static [u8];
-	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
-}
-
-pub trait HasherComplex: BinaryHasher {
-
-	/// Alternate hash with complex proof allowed
-	fn hash_complex<
-		I: Iterator<Item = (bool, Range<usize>)>,
-		I2: Iterator<Item = <Self as Hasher>::Out>,
-	>(
-		x: &[u8],
-		l: ComplexLayout<I, I2>,
-	) -> Self::Out;
-}
-
 /// Trait modelling a plain datastore whose key is a fixed type.
 /// The caller should ensure that a key only corresponds to
 /// one value.
@@ -222,42 +203,6 @@ impl<'a, HO: AsMut<[u8]> + Clone, I: Iterator<Item = (bool, Range<usize>)>> Iter
 		// is only defined values.
 			(self.nb_children, Some(self.nb_children))
 	}
-}
-
-/// Same as HashDB but can modify the value upon storage, and apply
-/// `HasherComplex`.
-pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
-	/// Look up a given hash into the bytes that hash to it, returning None if the
-	/// hash is not known.
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T>;
-
-	/// Check for the existence of a hash-key.
-	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool;
-
-	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out;
-	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
-	/// are counted and the equivalent number of `remove()`s must be performed before the data
-	/// is considered dead.
-	fn insert_complex<
-		I: Iterator<Item = Option<H::Out>>,
-		I2: Iterator<Item = H::Out>,
-	>(
-		&mut self,
-		prefix: Prefix,
-		value: &[u8],
-		nb_children: usize,
-		children: I,
-		additional_hashes: I2,
-		proof: bool,
-	) -> H::Out;
-
-	/// Like `insert()`, except you provide the key and the data is all moved.
-	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T);
-
-	/// Remove a datum previously inserted. Insertions can be "owed" such that the same number of
-	/// `insert()`s may happen without the data being eventually being inserted into the DB.
-	/// It can be "owed" more than once.
-	fn remove(&mut self, key: &H::Out, prefix: Prefix);
 }
 
 /// Trait for immutable reference of HashDB.

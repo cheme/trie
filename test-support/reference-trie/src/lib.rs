@@ -49,7 +49,7 @@ pub struct ExtensionLayout;
 
 impl TrieLayout for ExtensionLayout {
 	const USE_EXTENSION: bool = true;
-	const COMPLEX_HASH: bool = true;
+	const COMPLEX_HASH: bool = false;
 	type Hash = KeccakHasher;
 	type Codec = ReferenceNodeCodec<KeccakHasher>;
 }
@@ -62,7 +62,7 @@ pub struct GenericNoExtensionLayout<H>(PhantomData<H>);
 
 impl<H: Hasher> TrieLayout for GenericNoExtensionLayout<H> {
 	const USE_EXTENSION: bool = false;
-	const COMPLEX_HASH: bool = true;
+	const COMPLEX_HASH: bool = false;
 	type Hash = H;
 	type Codec = ReferenceNodeCodecNoExt<H>;
 }
