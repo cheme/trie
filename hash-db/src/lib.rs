@@ -247,8 +247,8 @@ pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
 		value: &[u8],
 		nb_children: usize,
 		children: I,
-		nb_additional_hashes: usize,
 		additional_hashes: I2,
+		proof: bool,
 	) -> H::Out;
 
 	/// Like `insert()`, except you provide the key and the data is all moved.

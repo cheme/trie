@@ -201,16 +201,16 @@ impl<T, V> CacheAccum<T, V>
 			self.0[last].0.as_ref().iter(),
 			v.as_ref().map(|v| v.as_ref()),
 		);
-		self.reset_depth(branch_d);
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
 		let branch_hash = if T::COMPLEX_HASH {
-			let len = self.0[last].0.len();
+			let len = self.0[last].0.as_ref().iter().filter(|v| v.is_some()).count();
 			let children = self.0[last].0.as_ref().iter();
 			callback.process(pr.left(), encoded, is_root && nkey.is_none(), Some((children, len)))
 		} else {
 			let iter: Option<(EmptyIter<Option<_>>, _)> = None;
 			callback.process(pr.left(), encoded, is_root && nkey.is_none(), iter)
 		};
+		self.reset_depth(branch_d);
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
@@ -243,20 +243,21 @@ impl<T, V> CacheAccum<T, V>
 			pr.right_range_iter(nkeyix.1),
 			nkeyix.1,
 			self.0[last].0.as_ref().iter(), v.as_ref().map(|v| v.as_ref()));
-		self.reset_depth(branch_d);
 		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.0).unwrap_or(0);
 		let pr = NibbleSlice::new_offset(
 			&key_branch,
 			branch_d - ext_length,
 		);
-		if T::COMPLEX_HASH {
-			let len = self.0[last].0.len();
+		let result = if T::COMPLEX_HASH {
+			let len = self.0[last].0.as_ref().iter().filter(|v| v.is_some()).count();
 			let children = self.0[last].0.as_ref().iter();
 			callback.process(pr.left(), encoded, is_root, Some((children, len)))
 		} else {
 			let iter: Option<(EmptyIter<Option<_>>, _)> = None;
 			callback.process(pr.left(), encoded, is_root, iter)
-		}
+		};
+		self.reset_depth(branch_d);
+		result
 	}
 
 }
@@ -426,8 +427,8 @@ impl<'a, H: HasherComplex, V, DB: HashDBComplex<H, V>> ProcessEncodedNode<<H as 
 				&encoded_node[..],
 				nb_children,
 				iter,
-				0,
 				EmptyIter::default(),
+				false,
 			)
 		} else {
 			self.db.insert(prefix, &encoded_node[..])

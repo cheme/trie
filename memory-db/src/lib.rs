@@ -634,8 +634,8 @@ where
 		value: &[u8],
 		nb_children: usize,
 		children: I,
-		nb_additional_hashes: usize,
 		additional_hashes: I2,
+		proof: bool,
 	) -> H::Out {
 		if T::from(value) == self.null_node_data {
 			return self.hashed_null_node.clone();
@@ -645,9 +645,9 @@ where
 
 		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
 		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
-		let key = if nb_additional_hashes == 0 {
+		let key = if !proof {
 			// full node
-			let iter = children.filter_map(|v| v);
+			let iter = children.filter_map(|v| v); // TODO assert all some?
 			ordered_trie::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
 		} else {
 			// proof node
