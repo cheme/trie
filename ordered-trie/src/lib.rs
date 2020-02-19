@@ -47,7 +47,6 @@ use self::rstd::{boxed::Box, vec::Vec};
 
 use hash_db::{HashDBRef, Hasher, BinaryHasher};
 use crate::rstd::marker::PhantomData;
-use crate::rstd::vec::Vec;
 
 
 pub type DBValue = Vec<u8>;
@@ -288,7 +287,7 @@ impl SequenceBinaryTree<usize> {
 	}
 
 	/// resolve the tree path for a given index.
-	fn path_node_key<KN: KeyNode + From<(usize, usize)>>(&self, index: usize) -> KN {
+	pub fn path_node_key<KN: KeyNode + From<(usize, usize)>>(&self, index: usize) -> KN {
 		let tmp = (!0usize << (self.depth - self.end_depth)) | (index >> self.end_depth);
 		if !tmp == 0 {
 			let mut result: KN = (index, self.depth).into();
@@ -311,7 +310,7 @@ impl SequenceBinaryTree<usize> {
 		}
 	}
 
-	fn iter_depth(&self, from: Option<usize>) -> impl Iterator<Item = usize> {
+	pub fn iter_depth(&self, from: Option<usize>) -> impl Iterator<Item = usize> {
 		if let Some(from) = from {
 			unimplemented!();
 		}
@@ -585,7 +584,7 @@ impl Into<usize> for VecKeyNode {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct UsizeKeyNode {
+pub struct UsizeKeyNode {
 	value: usize,
 	depth: usize,
 }
@@ -988,7 +987,7 @@ pub fn trie_root<HO, KN, I, F>(layout: &SequenceBinaryTree<usize>, input: I, cal
 	where
 		HO: Default + AsRef<[u8]> + AsMut<[u8]>,
 		KN: KeyNode + Into<usize> + From<(usize, usize)> + Clone,
-		I: IntoIterator<Item = HO>,
+		I: Iterator<Item = HO>,
 		F: ProcessNode<HO, KN>,
 {
 	debug_assert!(layout.start == 0, "unimplemented start");

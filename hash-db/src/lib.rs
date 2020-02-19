@@ -78,9 +78,12 @@ pub trait BinaryHasher: Hasher {
 pub trait HasherComplex: BinaryHasher {
 
 	/// Alternate hash with complex proof allowed
-	fn hash_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+	fn hash_complex<
+		I: Iterator<Item = (bool, Range<usize>)>,
+		I2: Iterator<Item = <Self as Hasher>::Out>,
+	>(
 		x: &[u8],
-		l: ComplexLayout<<Self as Hasher>::Out, I>,
+		l: ComplexLayout<I, I2>,
 	) -> Self::Out;
 }
 
@@ -151,44 +154,93 @@ pub trait HashDB<H: Hasher, T>: Send + Sync + AsHashDB<H, T> {
 }
 
 /// Describes how to hash a node given its layout
-pub struct ComplexLayout<'a, HO, I> {
+pub struct ComplexLayout<I, I2> {
 	pub nb_children: usize,
 	// can be calculated from decoded node from the
 	// children bitmap and the children range
 	pub children: I, // impl iterator < (is_defined, range) >
+	pub nb_additional_hashes: usize,
 	// TODO switch to iter??
-	pub additional_hashes: &'a [HO],
+	pub additional_hashes: I2,
 }
 
-impl<'a, HO: Default, I> ComplexLayout<'a, HO, I> {
-	pub fn iter_values(&mut self, node: &[u8]) -> ComplexLayoutIterValues<'a, HO, I> {
-		ComplexLayoutIterValues(self, Default::default, node)
+pub struct ComplexLayoutIterValues<'a, HO, I> {
+	nb_children: usize, 
+	children: I, 
+	buf: HO,
+	node: &'a [u8],
+}
+
+impl<'a, HO: Default, I> ComplexLayoutIterValues<'a, HO, I> {
+	pub fn new(nb_children: usize, children: I, node: &'a[u8]) -> Self {
+		ComplexLayoutIterValues {
+			nb_children,
+			children,
+			buf: Default::default(),
+			node,
+		}
 	}
 }
 
-pub struct ComplexLayoutIterValues<'a, HO, I>(&'a mut ComplexLayout<'a, HO, I>, HO, &'a[u8]);
+impl<'a, HO: AsMut<[u8]> + Clone, I: Iterator<Item = (bool, Range<usize>)>> Iterator for ComplexLayoutIterValues<'a, HO, I> {
+	type Item = (bool, HO);
 
-impl<'a, HO: AsMut<[u8]>, I> Iterator<Item = &HO> for ComplexLayoutIterValues<'a, HO, I> {
-	
-    fn next(&mut self) -> Option<Self::Item> {
-			if let Some((is_defined, range) = self.0.children.next() {
-				assert!(is_defined);
-				// inline got padded with 0
-				self.1.as_mut() // TODO fill with 0
-				self.1.as_mut()[range.len()].copy_from_slice(data[range]);
-				Some
-
-			} else {
-				None
+	fn next(&mut self) -> Option<Self::Item> {
+		if let Some((is_defined, range)) = self.children.next() {
+			let dest = self.buf.as_mut();
+			let range_len = range.len();
+			dest[..range_len].copy_from_slice(&self.node[range]);
+			for i in range_len..dest.len() {
+				dest[i] = 0;
 			}
-			
+			// TODO the input iterator is HO but could really be &HO, would need some
+			// change on trie_root to.
+			Some((is_defined, self.buf.clone()))
+		} else {
+			None
 		}
-    fn size_hint(&self) -> (usize, Option<usize>) {
-			// warning we unsafely presume the complexe layout
-			// is only defined values.
-			(self.0.nb_children, Some(self.0.nb_children))
-		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		// warning we unsafely presume the complexe layout
+		// is only defined values.
+			(self.nb_children, Some(self.nb_children))
+	}
 }
+
+pub struct ComplexLayoutIterValues2<'a, HO, I> {
+	nb_children: usize,
+	children: I,
+	buf: HO,
+	node: &'a [u8],
+	ix: usize,
+}
+
+impl<'a, HO: AsMut<[u8]> + Clone, I: Iterator<Item = (bool, Range<usize>)>> Iterator for ComplexLayoutIterValues2<'a, HO, I> {
+	type Item = (usize, HO);
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if let Some((is_defined, range)) = self.children.next() {
+			assert!(is_defined);
+			let dest = self.buf.as_mut();
+			let range_len = range.len();
+			dest[..range_len].copy_from_slice(&self.node[range]);
+			for i in range_len..dest.len() {
+				dest[i] = 0;
+			}
+			let ix = self.ix;
+			self.ix += 1;
+			Some((ix, self.buf.clone()))
+		} else {
+			None
+		}
+	}
+
+	fn size_hint(&self) -> (usize, Option<usize>) {
+		(0, Some(self.nb_children))
+	}
+}
+
 
 /// Same as HashDB but can modify the value upon storage, and apply
 /// `HasherComplex`.
@@ -203,11 +255,14 @@ pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
 	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
 	/// are counted and the equivalent number of `remove()`s must be performed before the data
 	/// is considered dead.
-	fn insert_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+	fn insert_complex<
+		I: Iterator<Item = (bool, Range<usize>)>,
+		I2: Iterator<Item = H::Out>,
+	>(
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
-		layout: ComplexLayout<H::Out, I>,
+		layout: ComplexLayout<I, I2>,
 	) -> H::Out;
 
 	/// Like `insert()`, except you provide the key and the data is all moved.

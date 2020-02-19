@@ -19,9 +19,9 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-use ordered_trie::{SequenceBinaryTree, BinaryHasher, HashOnly};
+use ordered_trie::{SequenceBinaryTree, HashOnly, UsizeKeyNode};
 use hash_db::{HashDB, HashDBComplex, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
-	AsHashDB, AsPlainDB, Prefix, ComplexLayout};
+	AsHashDB, AsPlainDB, Prefix, ComplexLayout, BinaryHasher, HasherComplex, ComplexLayoutIterValues};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
 #[cfg(feature = "deprecated")]
 #[cfg(feature = "std")]
@@ -35,6 +35,7 @@ use std::{
 	marker::PhantomData,
 	cmp::Eq,
 	borrow::Borrow,
+	ops::Range,
 };
 
 #[cfg(not(feature = "std"))]
@@ -50,6 +51,7 @@ use core::{
 	marker::PhantomData,
 	cmp::Eq,
 	borrow::Borrow,
+	ops::Range,
 };
 
 #[cfg(not(feature = "std"))]
@@ -603,44 +605,76 @@ where
 
 impl<H, KF, T> HashDBComplex<H, T> for MemoryDB<H, KF, T>
 where
-	H: KeyHasher,
+	H: HasherComplex,
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
 {
 	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
-		<Self as HashDB>::get(key, prefix)
+		<Self as HashDB<H, T>>::get(self, key, prefix)
 	}
 
 	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
-		<Self as HashDB>::contains(key, prefix)
+		<Self as HashDB<H, T>>::contains(self, key, prefix)
 	}
 
 	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T) {
-		<Self as HashDB>::emplace(key, prefix, value)
+		<Self as HashDB<H, T>>::emplace(self, key, prefix, value)
 	}
 
-	fn insert_complex<I: Iterator<Item = (bool, Range<usize>)>>(
+	fn insert_complex<
+		I: Iterator<Item = (bool, Range<usize>)>,
+		I2: Iterator<Item = H::Out>,
+	> (
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
-		layout: ComplexLayout<H::Out, I>,
+		layout: ComplexLayout<I, I2>,
 	) -> H::Out {
 		if T::from(value) == self.null_node_data {
 			return self.hashed_null_node.clone();
 		}
 
 		let seq_trie = SequenceBinaryTree::new(0, 0, layout.nb_children);
-		let key = if layout.additional_hashes.len() == 0 {
+
+		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
+		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
+		let ComplexLayout {
+			nb_children,
+			children,
+			nb_additional_hashes,
+			additional_hashes,
+		} = layout;
+		let key = if nb_additional_hashes == 0 {
 			// full node
-			let mut hash_buf = <H as BinaryHasher>::Buffer::default();
-			let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
-			let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
-	
-			let iter = layout.children.filter_map(|is_defined, range| TDOO see iter imple in layout
-			ordered_trie::trie_root(&seq_trie, iter, &mut callback_read_proof)
+			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
+				.map(|(is_defined, v)| {
+					debug_assert!(is_defined);
+					v
+				});
+			ordered_trie::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
 		} else {
 			// proof node
-			unimplemented!();
+			let iter_key = seq_trie.iter_depth(None).enumerate().map(Into::<UsizeKeyNode>::into);
+			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
+				.zip(iter_key)
+				.filter_map(|((is_defined, hash), key)| if is_defined {
+					Some((key, hash))
+				} else {
+					None
+				});
+			if let Some(ok) = ordered_trie::trie_root_from_proof(
+				&seq_trie,
+				iter,
+				additional_hashes,
+				&mut callback_read_proof,
+				false,
+			) {
+				ok
+			} else {
+				// invalid proof TODO do dedicated method that can return
+				// error??
+				return self.hashed_null_node.clone();
+			}
 		};
 
 		HashDB::emplace(self, key, prefix, value.into());
@@ -648,7 +682,7 @@ where
 	}
 
 	fn remove(&mut self, key: &H::Out, prefix: Prefix) {
-		<Self as HashDB>::remove(key, prefix)
+		<Self as HashDB<H, T>>::remove(self, key, prefix)
 	}
 }
 

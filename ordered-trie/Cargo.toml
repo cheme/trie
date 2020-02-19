@@ -9,6 +9,7 @@ edition = "2018"
 
 [dependencies]
 hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
+smallvec = "1.0.0"
 
 [features]
 default = ["std"]
