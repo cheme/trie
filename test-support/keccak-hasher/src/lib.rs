@@ -36,6 +36,18 @@ impl Hasher for KeccakHasher {
 	}
 }
 
+impl ordered_trie::BinaryHasher for KeccakHasher {
+	const NULL_HASH: &'static [u8] = &[197, 210, 70, 1, 134, 247, 35, 60, 146,
+		126, 125, 178, 220, 199, 3, 192, 229, 0, 182, 83, 202, 130, 39, 59, 123,
+		250, 216, 4, 93, 133, 164, 112];
+	type Buffer = ordered_trie::Buffer64;
+}
+
+#[test]
+fn test_keccack_hasher() {
+	ordered_trie::test_binary_hasher::<KeccakHasher>()
+}
+
 /* TODO this is rather bad trait see if delete??
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct FixKeccakHasher([u8;32]);
