@@ -51,7 +51,7 @@ pub struct ExtensionLayout;
 
 impl TrieLayout for ExtensionLayout {
 	const USE_EXTENSION: bool = true;
-	const COMPLEX_HASH: bool = false;
+	const COMPLEX_HASH: bool = true;
 	type Hash = KeccakHasher;
 	type Codec = ReferenceNodeCodec<KeccakHasher>;
 }
@@ -64,7 +64,7 @@ pub struct GenericNoExtensionLayout<H>(PhantomData<H>);
 
 impl<H: BinaryHasher> TrieLayout for GenericNoExtensionLayout<H> {
 	const USE_EXTENSION: bool = false;
-	const COMPLEX_HASH: bool = false;
+	const COMPLEX_HASH: bool = true;
 	type Hash = H;
 	type Codec = ReferenceNodeCodecNoExt<H>;
 }
@@ -121,13 +121,13 @@ pub fn reference_trie_root<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out w
 	trie_root::trie_root::<KeccakHasher, ReferenceTrieStream, _, _, _>(input)
 }
 
-fn reference_trie_root_unhashed<I, A, B>(input: I) -> Vec<u8> where
+/*fn reference_trie_root_unhashed<I, A, B>(input: I) -> Vec<u8> where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	trie_root::unhashed_trie::<KeccakHasher, ReferenceTrieStream, _, _, _>(input)
-}
+}*/
 
 pub fn reference_trie_root_no_extension<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out where
 	I: IntoIterator<Item = (A, B)>,
@@ -137,14 +137,13 @@ pub fn reference_trie_root_no_extension<I, A, B>(input: I) -> <KeccakHasher as H
 	trie_root::trie_root_no_extension::<KeccakHasher, ReferenceTrieStreamNoExt, _, _, _>(input)
 }
 
-fn reference_trie_root_unhashed_no_extension<I, A, B>(input: I) -> Vec<u8> where
+/*fn reference_trie_root_unhashed_no_extension<I, A, B>(input: I) -> Vec<u8> where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	trie_root::unhashed_trie_no_extension::<KeccakHasher, ReferenceTrieStreamNoExt, _, _, _>(input)
-}
-
+}*/
 
 fn data_sorted_unique<I, A: Ord, B>(input: I) -> Vec<(A, B)>
 	where
@@ -173,6 +172,26 @@ pub fn reference_trie_root_no_extension_iter_build<I, A, B>(input: I) -> <Keccak
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	let mut cb = trie_db::TrieRootComplex::<KeccakHasher, _>::default();
+	trie_visit::<NoExtensionLayout, _, _, _, _>(data_sorted_unique(input), &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
+fn reference_trie_root_unhashed_iter_build<I, A, B>(input: I) -> Vec<u8> where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
+	trie_visit::<ExtensionLayout, _, _, _, _>(data_sorted_unique(input), &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
+fn reference_trie_root_unhashed_no_extension_iter_build<I, A, B>(input: I) -> Vec<u8> where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
 	trie_visit::<NoExtensionLayout, _, _, _, _>(data_sorted_unique(input), &mut cb);
 	cb.root.unwrap_or(Default::default())
 }
@@ -1060,7 +1079,7 @@ pub fn compare_unhashed(
 		trie_visit::<ExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
-	let root = reference_trie_root_unhashed(data);
+	let root = reference_trie_root_unhashed_iter_build(data);
 
 	assert_eq!(root, root_new);
 }
@@ -1075,7 +1094,7 @@ pub fn compare_unhashed_no_extension(
 		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
-	let root = reference_trie_root_unhashed_no_extension(data);
+	let root = reference_trie_root_unhashed_no_extension_iter_build(data);
 
 	assert_eq!(root, root_new);
 }
