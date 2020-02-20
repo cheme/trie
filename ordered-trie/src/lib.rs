@@ -41,7 +41,7 @@ mod rstd {
 #[cfg(feature = "std")]
 use self::rstd::{fmt, Error};
 
-use hash_db::{MaybeDebug, AsHashDB, Prefix};
+use hash_db::{MaybeDebug, AsHashDB, Prefix, HashDB};
 use self::rstd::{boxed::Box, vec::Vec};
 
 
@@ -1490,7 +1490,7 @@ impl<H: BinaryHasher> HasherComplex for H {
 		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
 		let hash = if !proof {
 			// full node
-			let iter = children.filter_map(|v| v); // TODO assert all some?
+			let iter = children.filter_map(|v| v); // TODO assert same number as count
 			crate::trie_root::<_, UsizeKeyNode, _, _>(&seq_trie, iter, &mut callback_read_proof)
 		} else {
 			// proof node
@@ -1524,15 +1524,7 @@ impl<H: BinaryHasher> HasherComplex for H {
 
 /// Same as HashDB but can modify the value upon storage, and apply
 /// `HasherComplex`.
-pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
-	/// Look up a given hash into the bytes that hash to it, returning None if the
-	/// hash is not known.
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T>;
-
-	/// Check for the existence of a hash-key.
-	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool;
-
-	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out;
+pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + HashDB<H, T> {
 	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
 	/// are counted and the equivalent number of `remove()`s must be performed before the data
 	/// is considered dead.
@@ -1548,13 +1540,4 @@ pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + AsHashDB<H, T> {
 		additional_hashes: I2,
 		proof: bool,
 	) -> H::Out;
-
-	/// Like `insert()`, except you provide the key and the data is all moved.
-	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T);
-
-	/// Remove a datum previously inserted. Insertions can be "owed" such that the same number of
-	/// `insert()`s may happen without the data being eventually being inserted into the DB.
-	/// It can be "owed" more than once.
-	fn remove(&mut self, key: &H::Out, prefix: Prefix);
 }
-

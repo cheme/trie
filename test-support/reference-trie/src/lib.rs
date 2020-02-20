@@ -20,7 +20,6 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use parity_scale_codec::{Decode, Input, Output, Encode, Compact, Error as CodecError};
 use trie_root::Hasher;
-use ordered_trie::HasherComplex;
 
 use trie_db::{
 	node::{NibbleSlicePlan, NodePlan, NodeHandlePlan},
@@ -30,12 +29,13 @@ use trie_db::{
 	TrieBuilderComplex,
 	TrieRootComplex,
 	Partial,
+	BinaryHasher,
 };
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
 
 pub use trie_db::{
-	decode_compact, encode_compact,
+	decode_compact, encode_compact, HashDBComplexDyn,
 	nibble_ops, NibbleSlice, NibbleVec, NodeCodec, proof, Record, Recorder,
 	Trie, TrieConfiguration, TrieDB, TrieDBIterator, TrieDBMut, TrieDBNodeIterator, TrieError,
 	TrieIterator, TrieLayout, TrieMut,
@@ -50,7 +50,7 @@ pub struct ExtensionLayout;
 
 impl TrieLayout for ExtensionLayout {
 	const USE_EXTENSION: bool = true;
-	const COMPLEX_HASH: bool = false;
+	const COMPLEX_HASH: bool = true;
 	type Hash = KeccakHasher;
 	type Codec = ReferenceNodeCodec<KeccakHasher>;
 }
@@ -61,14 +61,14 @@ impl TrieConfiguration for ExtensionLayout { }
 /// generic hasher.
 pub struct GenericNoExtensionLayout<H>(PhantomData<H>);
 
-impl<H: Hasher> TrieLayout for GenericNoExtensionLayout<H> {
+impl<H: BinaryHasher> TrieLayout for GenericNoExtensionLayout<H> {
 	const USE_EXTENSION: bool = false;
-	const COMPLEX_HASH: bool = false;
+	const COMPLEX_HASH: bool = true;
 	type Hash = H;
 	type Codec = ReferenceNodeCodecNoExt<H>;
 }
 
-impl<H: Hasher> TrieConfiguration for GenericNoExtensionLayout<H> { }
+impl<H: BinaryHasher> TrieConfiguration for GenericNoExtensionLayout<H> { }
 
 /// Trie layout without extension nodes.
 pub type NoExtensionLayout = GenericNoExtensionLayout<keccak_hasher::KeccakHasher>;
@@ -950,7 +950,7 @@ pub fn compare_implementations<X : hash_db::HashDB<KeccakHasher, DBValue> + orde
 /// Compare trie builder and trie root implementations.
 pub fn compare_root(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
-	mut memdb: impl hash_db::HashDB<KeccakHasher, DBValue>,
+	mut memdb: impl ordered_trie::HashDBComplex<KeccakHasher, DBValue>,
 ) {
 	let root_new = {
 		let mut cb = TrieRootComplex::<KeccakHasher, _>::default();
@@ -1152,7 +1152,7 @@ pub fn compare_implementations_no_extension_unordered(
 /// its input test data.
 pub fn compare_no_extension_insert_remove(
 	data: Vec<(bool, Vec<u8>, Vec<u8>)>,
-	mut memdb: impl hash_db::HashDB<KeccakHasher, DBValue>,
+	mut memdb: impl ordered_trie::HashDBComplex<KeccakHasher, DBValue>,
 ) {
 	let mut data2 = std::collections::BTreeMap::new();
 	let mut root = Default::default();

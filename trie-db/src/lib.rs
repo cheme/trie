@@ -70,11 +70,12 @@ pub use self::fatdbmut::FatDBMut;
 pub use self::recorder::{Recorder, Record};
 pub use self::lookup::Lookup;
 pub use self::nibble::{NibbleSlice, NibbleVec, nibble_ops};
-pub use crate::node_codec::{NodeCodec, Partial};
+pub use crate::node_codec::{NodeCodec, Partial, HashDBComplexDyn};
 pub use crate::iter_build::{trie_visit, ProcessEncodedNode,
 	 TrieBuilder, TrieRoot, TrieRootUnhashed, TrieRootComplex, TrieBuilderComplex};
 pub use crate::iterator::TrieDBNodeIterator;
 pub use crate::trie_codec::{decode_compact, encode_compact};
+pub use ordered_trie::BinaryHasher;
 
 #[cfg(feature = "std")]
 pub use crate::iter_build::TrieRootPrint;
@@ -360,7 +361,7 @@ where
 	/// Create new mutable instance of Trie.
 	pub fn create(
 		&self,
-		db: &'db mut dyn HashDB<L::Hash, DBValue>,
+		db: &'db mut dyn HashDBComplexDyn<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
 	) -> Box<dyn TrieMut<L> + 'db> {
 		match self.spec {
@@ -373,7 +374,7 @@ where
 	/// Create new mutable instance of trie and check for errors.
 	pub fn from_existing(
 		&self,
-		db: &'db mut dyn HashDB<L::Hash, DBValue>,
+		db: &'db mut dyn HashDBComplexDyn<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
 	) -> Result<Box<dyn TrieMut<L> + 'db>, TrieHash<L>, CError<L>> {
 		match self.spec {
@@ -397,7 +398,7 @@ pub trait TrieLayout {
 	const USE_EXTENSION: bool;
 	const COMPLEX_HASH: bool;
 	/// Hasher to use for this trie.
-	type Hash: Hasher;
+	type Hash: BinaryHasher;
 	/// Codec to use (needs to match hasher and nibble ops).
 	type Codec: NodeCodec<HashOut=<Self::Hash as Hasher>::Out>;
 }

@@ -19,7 +19,7 @@ use crate::MaybeDebug;
 use crate::node::{Node, NodePlan};
 use crate::ChildReference;
 
-use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec};
+use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec, EmptyIter};
 
 
 /// Representation of a nible slice (right aligned).
@@ -82,4 +82,72 @@ pub trait NodeCodec: Sized {
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>
 	) -> Vec<u8>;
+}
+
+use ordered_trie::{HashDBComplex, HasherComplex};
+use hash_db::{HashDB, Prefix, HashDBRef, Hasher};
+
+pub trait HashDBComplexDyn<H: Hasher, T>: Send + Sync + HashDB<H, T> {
+	/// Insert a datum item into the DB and return the datum's hash for a later lookup. Insertions
+	/// are counted and the equivalent number of `remove()`s must be performed before the data
+	/// is considered dead.
+	///
+	/// TODO warn semantic of children differs from HashDBComplex (in HashDBComplex it is the
+	/// children of the binary hasher, here it is the children of the patricia merkle trie).
+	fn insert_complex(
+		&mut self,
+		prefix: Prefix,
+		value: &[u8],
+		children: &[Option<ChildReference<H::Out>>],
+	) -> H::Out;
+}
+
+impl<H: HasherComplex, T, C: HashDBComplex<H, T>> HashDBComplexDyn<H, T> for C {
+	fn insert_complex(
+		&mut self,
+		prefix: Prefix,
+		value: &[u8],
+		children: &[Option<ChildReference<H::Out>>],
+	) -> H::Out {
+
+		// TODO factor this with iter_build
+		let nb_children = children.iter().filter(|v| v.is_some()).count();
+		let children = children.iter().filter_map(|v| match v.borrow().as_ref() {
+			// TODO get rid of this clone (hasher do not require it: it is
+			// copied over the buffer anyway.
+			Some(ChildReference::Hash(v)) => Some(Some(v.clone())),
+			Some(ChildReference::Inline(v, _l)) => Some(Some(v.clone())),
+			None => None,
+		});
+
+		<C as HashDBComplex<H, T>>::insert_complex(
+			self,
+			prefix,
+			value,
+			nb_children,
+			children,
+			EmptyIter::default(),
+			false,
+		)
+	}
+}
+
+impl<'a, H: Hasher, T> HashDBRef<H, T> for &'a dyn HashDBComplexDyn<H, T> {
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
+		self.as_hash_db().get(key, prefix)
+	}
+
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
+		self.as_hash_db().contains(key, prefix)
+	}
+}
+
+impl<'a, H: Hasher, T> HashDBRef<H, T> for &'a mut dyn HashDBComplexDyn<H, T> {
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
+		self.as_hash_db().get(key, prefix)
+	}
+
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
+		self.as_hash_db().contains(key, prefix)
+	}
 }

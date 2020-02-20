@@ -19,6 +19,7 @@ use super::{Result, TrieError, TrieMut, TrieLayout, TrieHash, CError};
 use super::lookup::Lookup;
 use super::node::{NodeHandle as EncodedNodeHandle, Node as EncodedNode, decode_hash};
 
+use crate::node_codec::HashDBComplexDyn;
 use hash_db::{HashDB, Hasher, Prefix, EMPTY_PREFIX};
 use hashbrown::HashSet;
 
@@ -124,7 +125,7 @@ where
 	fn inline_or_hash<C, H>(
 		parent_hash: H::Out,
 		child: EncodedNodeHandle,
-		db: &dyn HashDB<H, DBValue>,
+		db: &dyn HashDBComplexDyn<H, DBValue>,
 		storage: &mut NodeStorage<H::Out>
 	) -> Result<NodeHandle<H::Out>, H::Out, C::Error>
 	where
@@ -149,7 +150,7 @@ where
 	fn from_encoded<'a, 'b, C, H>(
 		node_hash: H::Out,
 		data: &'a[u8],
-		db: &dyn HashDB<H, DBValue>,
+		db: &dyn HashDBComplexDyn<H, DBValue>,
 		storage: &'b mut NodeStorage<H::Out>,
 	) -> Result<Self, H::Out, C::Error>
 		where
@@ -384,7 +385,7 @@ impl<'a, H> Index<&'a StorageHandle> for NodeStorage<H> {
 	}
 }
 
-/// A `Trie` implementation using a generic `HashDB` backing database.
+/// A `Trie` implementation using a generic `HashDBComplexDyn` backing database.
 ///
 /// Use it as a `TrieMut` trait object. You can use `db()` to get the backing database object.
 /// Note that changes are not committed to the database until `commit` is called.
@@ -416,7 +417,7 @@ where
 	L: TrieLayout,
 {
 	storage: NodeStorage<TrieHash<L>>,
-	db: &'a mut dyn HashDB<L::Hash, DBValue>,
+	db: &'a mut dyn HashDBComplexDyn<L::Hash, DBValue>,
 	root: &'a mut TrieHash<L>,
 	root_handle: NodeHandle<TrieHash<L>>,
 	death_row: HashSet<(TrieHash<L>, (BackingByteVec, Option<u8>))>,
@@ -430,7 +431,7 @@ where
 	L: TrieLayout,
 {
 	/// Create a new trie with backing database `db` and empty `root`.
-	pub fn new(db: &'a mut dyn HashDB<L::Hash, DBValue>, root: &'a mut TrieHash<L>) -> Self {
+	pub fn new(db: &'a mut dyn HashDBComplexDyn<L::Hash, DBValue>, root: &'a mut TrieHash<L>) -> Self {
 		*root = L::Codec::hashed_null_node();
 		let root_handle = NodeHandle::Hash(L::Codec::hashed_null_node());
 
@@ -447,7 +448,7 @@ where
 	/// Create a new trie with the backing database `db` and `root.
 	/// Returns an error if `root` does not exist.
 	pub fn from_existing(
-		db: &'a mut dyn HashDB<L::Hash, DBValue>,
+		db: &'a mut dyn HashDBComplexDyn<L::Hash, DBValue>,
 		root: &'a mut TrieHash<L>,
 	) -> Result<Self, TrieHash<L>, CError<L>> {
 		if !db.contains(root, EMPTY_PREFIX) {
@@ -465,12 +466,12 @@ where
 		})
 	}
 	/// Get the backing database.
-	pub fn db(&self) -> &dyn HashDB<L::Hash, DBValue> {
+	pub fn db(&self) -> &dyn HashDBComplexDyn<L::Hash, DBValue> {
 		self.db
 	}
 
 	/// Get the backing database mutably.
-	pub fn db_mut(&mut self) -> &mut dyn HashDB<L::Hash, DBValue> {
+	pub fn db_mut(&mut self) -> &mut dyn HashDBComplexDyn<L::Hash, DBValue> {
 		self.db
 	}
 
@@ -1613,14 +1614,14 @@ mod tests {
 	use log::debug;
 	use crate::DBValue;
 	use memory_db::{MemoryDB, PrefixedKey};
-	use hash_db::{Hasher, HashDB};
+	use hash_db::Hasher;
 	use keccak_hasher::KeccakHasher;
-	use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMut, TrieMut, NodeCodec,
+	use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMut, TrieMut, NodeCodec, HashDBComplexDyn,
 		ReferenceNodeCodec, reference_trie_root, reference_trie_root_no_extension};
 	use crate::nibble::BackingByteVec;
 
 	fn populate_trie<'db>(
-		db: &'db mut dyn HashDB<KeccakHasher, DBValue>,
+		db: &'db mut dyn HashDBComplexDyn<KeccakHasher, DBValue>,
 		root: &'db mut <KeccakHasher as Hasher>::Out,
 		v: &[(Vec<u8>, Vec<u8>)]
 	) -> RefTrieDBMut<'db> {
@@ -1641,7 +1642,7 @@ mod tests {
 	}
 
 	fn populate_trie_no_extension<'db>(
-		db: &'db mut dyn HashDB<KeccakHasher, DBValue>,
+		db: &'db mut dyn HashDBComplexDyn<KeccakHasher, DBValue>,
 		root: &'db mut <KeccakHasher as Hasher>::Out,
 		v: &[(Vec<u8>, Vec<u8>)]
 	) -> RefTrieDBMutNoExt<'db> {

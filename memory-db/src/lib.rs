@@ -19,7 +19,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-use ordered_trie::{SequenceBinaryTree, HashOnly, UsizeKeyNode, HashDBComplex, HasherComplex, BinaryHasher};
+use ordered_trie::{HashOnly, HashDBComplex, HasherComplex, BinaryHasher};
 use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
 	AsHashDB, AsPlainDB, Prefix, ComplexLayout, ComplexLayoutIterValues};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
@@ -609,22 +609,6 @@ where
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
 {
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
-		<Self as HashDB<H, T>>::get(self, key, prefix)
-	}
-
-	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
-		<Self as HashDB<H, T>>::contains(self, key, prefix)
-	}
-
-	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T) {
-		<Self as HashDB<H, T>>::emplace(self, key, prefix, value)
-	}
-
-	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out {
-		<Self as HashDB<H, T>>::insert(self, prefix, value)
-	}
-
 	fn insert_complex<
 		I: Iterator<Item = Option<H::Out>>,
 		I2: Iterator<Item = H::Out>,
@@ -641,10 +625,7 @@ where
 			return self.hashed_null_node.clone();
 		}
 
-		let seq_trie = SequenceBinaryTree::new(0, 0, nb_children);
-
 		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
-		let mut callback_read_proof = HashOnly::<H>::new(&mut hash_buf2);
 		let key = if let Some(key) = H::hash_complex(
 			value,
 			nb_children,
@@ -661,10 +642,6 @@ where
 
 		HashDB::emplace(self, key, prefix, value.into());
 		key
-	}
-
-	fn remove(&mut self, key: &H::Out, prefix: Prefix) {
-		<Self as HashDB<H, T>>::remove(self, key, prefix)
 	}
 }
 
