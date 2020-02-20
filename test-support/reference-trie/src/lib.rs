@@ -145,23 +145,25 @@ fn reference_trie_root_unhashed_no_extension<I, A, B>(input: I) -> Vec<u8> where
 	trie_root::unhashed_trie_no_extension::<KeccakHasher, ReferenceTrieStreamNoExt, _, _, _>(input)
 }
 
+
+fn data_sorted_unique<I, A: Ord, B>(input: I) -> Vec<(A, B)>
+	where
+		I: IntoIterator<Item = (A, B)>,
+{
+	let mut m = std::collections::BTreeMap::new();
+	for (k,v) in input {
+		let _ = m.insert(k,v); // latest value for uniqueness
+	}
+	m.into_iter().collect()
+}
+
 pub fn reference_trie_root_iter_build<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	let mut cb = trie_db::TrieRootComplex::<KeccakHasher, _>::default();
-	trie_visit::<ExtensionLayout, _, _, _, _>(input, &mut cb);
-	cb.root.unwrap_or(Default::default())
-}
-
-pub fn reference_trie_root_unhashed_iter_build<I, A, B>(input: I) -> Vec<u8> where
-	I: IntoIterator<Item = (A, B)>,
-	A: AsRef<[u8]> + Ord + fmt::Debug,
-	B: AsRef<[u8]> + fmt::Debug,
-{
-	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
-	trie_visit::<ExtensionLayout, _, _, _, _>(input, &mut cb);
+	trie_visit::<ExtensionLayout, _, _, _, _>(data_sorted_unique(input), &mut cb);
 	cb.root.unwrap_or(Default::default())
 }
 
@@ -171,17 +173,7 @@ pub fn reference_trie_root_no_extension_iter_build<I, A, B>(input: I) -> <Keccak
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	let mut cb = trie_db::TrieRootComplex::<KeccakHasher, _>::default();
-	trie_visit::<NoExtensionLayout, _, _, _, _>(input, &mut cb);
-	cb.root.unwrap_or(Default::default())
-}
-
-pub fn reference_trie_root_unhashed_no_extension_iter_build<I, A, B>(input: I) -> Vec<u8> where
-	I: IntoIterator<Item = (A, B)>,
-	A: AsRef<[u8]> + Ord + fmt::Debug,
-	B: AsRef<[u8]> + fmt::Debug,
-{
-	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
-	trie_visit::<NoExtensionLayout, _, _, _, _>(input, &mut cb);
+	trie_visit::<NoExtensionLayout, _, _, _, _>(data_sorted_unique(input), &mut cb);
 	cb.root.unwrap_or(Default::default())
 }
 
