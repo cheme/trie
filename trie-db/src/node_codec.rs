@@ -19,8 +19,7 @@ use crate::MaybeDebug;
 use crate::node::{Node, NodePlan};
 use crate::ChildReference;
 
-use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec, EmptyIter};
-
+use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec, EmptyIter, ops::Range, marker::PhantomData};
 
 /// Representation of a nible slice (right aligned).
 /// It contains a right aligned padded first byte (first pair element is the number of nibbles
@@ -72,6 +71,7 @@ pub trait NodeCodec: Sized {
 	fn branch_node(
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>,
+		register_children: Option<&mut [Option<Range<usize>>]>,
 	) -> Vec<u8>;
 
 	/// Returns an encoded branch node with a possible partial path.
@@ -80,7 +80,8 @@ pub trait NodeCodec: Sized {
 		partial: impl Iterator<Item = u8>,
 		number_nibble: usize,
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
-		value: Option<&[u8]>
+		value: Option<&[u8]>,
+		register_children: Option<&mut [Option<Range<usize>>]>,
 	) -> Vec<u8>;
 }
 
@@ -98,7 +99,7 @@ pub trait HashDBComplexDyn<H: Hasher, T>: Send + Sync + HashDB<H, T> {
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
-		children: &[Option<ChildReference<H::Out>>],
+		children: &[Option<Range<usize>>],
 	) -> H::Out;
 }
 
@@ -107,18 +108,16 @@ impl<H: HasherComplex, T, C: HashDBComplex<H, T>> HashDBComplexDyn<H, T> for C {
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
-		children: &[Option<ChildReference<H::Out>>],
+		children: &[Option<Range<usize>>],
 	) -> H::Out {
 
-		// TODO factor this with iter_build
+		// TODO factor this with iter_build (just use the trait)
 		let nb_children = children.iter().filter(|v| v.is_some()).count();
-		let children = children.iter().filter_map(|v| match v.borrow().as_ref() {
-			// TODO get rid of this clone (hasher do not require it: it is
-			// copied over the buffer anyway.
-			Some(ChildReference::Hash(v)) => Some(Some(v.clone())),
-			Some(ChildReference::Inline(v, _l)) => Some(Some(v.clone())),
-			None => None,
-		});
+		let children = ComplexLayoutIterValues::new(
+			nb_children,
+			children.iter().filter_map(|v| v.as_ref()),
+			value,
+		);
 
 		<C as HashDBComplex<H, T>>::insert_complex(
 			self,
@@ -149,5 +148,67 @@ impl<'a, H: Hasher, T> HashDBRef<H, T> for &'a mut dyn HashDBComplexDyn<H, T> {
 
 	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
 		self.as_hash_db().contains(key, prefix)
+	}
+}
+
+// TODO this using a buffer is bad (we should switch
+// binary hasher to use slice as input (or be able to))
+pub struct ComplexLayoutIterValues<'a, HO, I> {
+	nb_children: usize, 
+	children: I, 
+	node: &'a [u8],
+	_ph: PhantomData<HO>,
+}
+/*
+code snippet for children iter:
+ComplexLayoutIterValues::new(nb_children, children, value)
+				.map(|(is_defined, v)| {
+					debug_assert!(is_defined);
+					v
+				});
+code snippet for proof
+			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
+				.zip(iter_key)
+				.filter_map(|((is_defined, hash), key)| if is_defined {
+					Some((key, hash))
+				} else {
+					None
+				});
+*/	
+
+impl<'a, HO: Default, I> ComplexLayoutIterValues<'a, HO, I> {
+	pub fn new(nb_children: usize, children: I, node: &'a[u8]) -> Self {
+		ComplexLayoutIterValues {
+			nb_children,
+			children,
+			node,
+			_ph: PhantomData,
+		}
+	}
+}
+
+impl<'a, HO: AsMut<[u8]> + Default, I: Iterator<Item = &'a Range<usize>>> Iterator for ComplexLayoutIterValues<'a, HO, I> {
+	type Item = Option<HO>;
+
+	fn next(&mut self) -> Option<Self::Item> {
+		if let Some(range) = self.children.next() {
+			let range_len = range.len();
+			if range_len == 0 {
+				// this is for undefined proof hash
+				return None;
+			}
+			let mut dest = HO::default();
+			dest.as_mut()[..range_len].copy_from_slice(&self.node[range.clone()]);
+			/* inherent to default?? TODO consider doing it, but if refacto
+			 * this will be part of hasher (when run with slice as input)
+			 * for i in range_len..dest.len() {
+				dest[i] = 0;
+			}*/
+			// TODO the input iterator is HO but could really be &HO, would need some
+			// change on trie_root to.
+			Some(Some(dest))
+		} else {
+			None
+		}
 	}
 }

@@ -32,11 +32,6 @@ pub trait MaybeDebug {}
 #[cfg(not(feature = "std"))]
 impl<T> MaybeDebug for T {}
 
-#[cfg(feature = "std")]
-use std::ops::Range;
-#[cfg(not(feature = "std"))]
-use core::ops::Range;
-
 /// A trie node prefix, it is the nibble path from the trie root
 /// to the trie node.
 /// For a node containing no partial key value it is the full key.
@@ -145,65 +140,6 @@ pub struct ComplexLayout<I, I2> {
 	pub additional_hashes: I2,
 }
 
-pub struct ComplexLayoutIterValues<'a, HO, I> {
-	nb_children: usize, 
-	children: I, 
-	buf: HO,
-	node: &'a [u8],
-}
-/*
-code snippet for children iter:
-ComplexLayoutIterValues::new(nb_children, children, value)
-				.map(|(is_defined, v)| {
-					debug_assert!(is_defined);
-					v
-				});
-code snippet for proof
-			let iter = ComplexLayoutIterValues::new(nb_children, children, value)
-				.zip(iter_key)
-				.filter_map(|((is_defined, hash), key)| if is_defined {
-					Some((key, hash))
-				} else {
-					None
-				});
-*/	
-
-impl<'a, HO: Default, I> ComplexLayoutIterValues<'a, HO, I> {
-	pub fn new(nb_children: usize, children: I, node: &'a[u8]) -> Self {
-		ComplexLayoutIterValues {
-			nb_children,
-			children,
-			buf: Default::default(),
-			node,
-		}
-	}
-}
-
-impl<'a, HO: AsMut<[u8]> + Clone, I: Iterator<Item = (bool, Range<usize>)>> Iterator for ComplexLayoutIterValues<'a, HO, I> {
-	type Item = (bool, HO);
-
-	fn next(&mut self) -> Option<Self::Item> {
-		if let Some((is_defined, range)) = self.children.next() {
-			let dest = self.buf.as_mut();
-			let range_len = range.len();
-			dest[..range_len].copy_from_slice(&self.node[range]);
-			for i in range_len..dest.len() {
-				dest[i] = 0;
-			}
-			// TODO the input iterator is HO but could really be &HO, would need some
-			// change on trie_root to.
-			Some((is_defined, self.buf.clone()))
-		} else {
-			None
-		}
-	}
-
-	fn size_hint(&self) -> (usize, Option<usize>) {
-		// warning we unsafely presume the complexe layout
-		// is only defined values.
-			(self.nb_children, Some(self.nb_children))
-	}
-}
 
 /// Trait for immutable reference of HashDB.
 pub trait HashDBRef<H: Hasher, T> {

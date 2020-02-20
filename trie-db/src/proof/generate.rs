@@ -107,7 +107,8 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 				)?;
 				C::branch_node(
 					self.children.into_iter(),
-					value_with_omission(node_data, value, self.omit_value)
+					value_with_omission(node_data, value, self.omit_value),
+					None, // TODO allow complex here
 				)
 			},
 			NodePlan::NibbledBranch { partial: partial_plan, value, children } => {
@@ -122,7 +123,8 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 					partial.right_iter(),
 					partial.len(),
 					self.children.into_iter(),
-					value_with_omission(node_data, value, self.omit_value)
+					value_with_omission(node_data, value, self.omit_value),
+					None, // TODO allow complex here
 				)
 			},
 		})

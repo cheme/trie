@@ -111,7 +111,8 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 			NodePlan::Branch { value, children } => {
 				C::branch_node(
 					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-					value.clone().map(|range| &node_data[range])
+					value.clone().map(|range| &node_data[range]),
+					None, // TODO allow using complex proof
 				)
 			}
 			NodePlan::NibbledBranch { partial, value, children } => {
@@ -120,7 +121,8 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					partial.right_iter(),
 					partial.len(),
 					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-					value.clone().map(|range| &node_data[range])
+					value.clone().map(|range| &node_data[range]),
+					None, // TODO allow using complex proof
 				)
 			}
 		})
@@ -361,13 +363,18 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 						.expect("required by method precondition; qed"),
 				),
 			Node::Branch(_, value) =>
-				C::branch_node(self.children.into_iter(), value),
+				C::branch_node(
+					self.children.into_iter(),
+					value,
+					None, // TODO allow using complex proof
+				),
 			Node::NibbledBranch(partial, _, value) =>
 				C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					self.children.iter(),
 					value,
+					None, // TODO allow using complex proof
 				),
 		}
 	}

@@ -27,6 +27,7 @@ use crate::node_codec::NodeCodec;
 use crate::nibble::{NibbleVec, NibbleSlice, nibble_ops, BackingByteVec};
 use crate::rstd::{
 	boxed::Box, convert::TryFrom, hash::Hash, mem, ops::Index, result, vec::Vec, VecDeque,
+	ops::Range,
 };
 
 #[cfg(feature = "std")]
@@ -204,8 +205,11 @@ where
 	}
 
 	// TODO: parallelize
-	fn into_encoded<F, C, H>(self, mut child_cb: F) -> Vec<u8>
-	where
+	fn into_encoded<F, C, H>(
+		self,
+		mut child_cb: F,
+		register_children: Option<&mut [Option<Range<usize>>]>,
+	) -> Vec<u8> where
 		C: NodeCodec<HashOut=O>,
 		F: FnMut(NodeHandle<H::Out>, Option<&NibbleSlice>, Option<u8>) -> ChildReference<H::Out>,
 		H: Hasher<Out = O>,
@@ -235,7 +239,8 @@ where
 						.map(|(i, maybe_child)| {
 							maybe_child.map(|child| child_cb(child, None, Some(i as u8)))
 						}),
-					value.as_ref().map(|v| &v[..])
+					value.as_ref().map(|v| &v[..]),
+					register_children,
 				)
 			},
 			Node::NibbledBranch(partial, mut children, value) => {
@@ -255,7 +260,8 @@ where
 								child_cb(child, Some(&pr), Some(i as u8))
 							})
 						}),
-					value.as_ref().map(|v| &v[..])
+					value.as_ref().map(|v| &v[..]),
+					register_children,
 				)
 			},
 		}
@@ -430,6 +436,14 @@ impl<'a, L> TrieDBMut<'a, L>
 where
 	L: TrieLayout,
 {
+	#[inline]
+	fn register_children_buf() -> Option<[Option<Range<usize>>; 16]> {
+		if L::COMPLEX_HASH {
+			Some(Default::default())
+		} else {
+			None
+		}
+	}
 	/// Create a new trie with backing database `db` and empty `root`.
 	pub fn new(db: &'a mut dyn HashDBComplexDyn<L::Hash, DBValue>, root: &'a mut TrieHash<L>) -> Self {
 		*root = L::Codec::hashed_null_node();
@@ -1422,13 +1436,15 @@ where
 		match self.storage.destroy(handle) {
 			Stored::New(node) => {
 				let mut k = NibbleVec::new();
+				let mut register_children = Self::register_children_buf();
 				let encoded_root = node.into_encoded::<_, L::Codec, L::Hash>(
 					|child, o_slice, o_index| {
 						let mov = k.append_optional_slice_and_nibble(o_slice, o_index);
 						let cr = self.commit_child(child, &mut k);
 						k.drop_lasts(mov);
 						cr
-					}
+					},
+					register_children.as_mut().map(|a| &mut a[..]),
 				);
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "encoded root node: {:#x?}", &encoded_root[..]);
@@ -1463,6 +1479,7 @@ where
 				match self.storage.destroy(storage_handle) {
 					Stored::Cached(_, hash) => ChildReference::Hash(hash),
 					Stored::New(node) => {
+						let mut register_children = Self::register_children_buf();
 						let encoded = {
 							let commit_child = |
 								node_handle,
@@ -1474,7 +1491,10 @@ where
 								prefix.drop_lasts(mov);
 								cr
 							};
-							node.into_encoded::<_, L::Codec, L::Hash>(commit_child)
+							node.into_encoded::<_, L::Codec, L::Hash>(
+								commit_child,
+								register_children.as_mut().map(|a| &mut a[..]),
+							)
 						};
 						if encoded.len() >= L::Hash::LENGTH {
 							let hash = self.db.insert(prefix.as_prefix(), &encoded[..]);

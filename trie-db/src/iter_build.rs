@@ -201,6 +201,7 @@ impl<T, V> CacheAccum<T, V>
 		let encoded = T::Codec::branch_node(
 			self.0[last].0.as_ref().iter(),
 			v.as_ref().map(|v| v.as_ref()),
+			None, // TODO switch to codec approach
 		);
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
 		let branch_hash = if T::COMPLEX_HASH {
@@ -243,7 +244,9 @@ impl<T, V> CacheAccum<T, V>
 		let encoded = T::Codec::branch_node_nibbled(
 			pr.right_range_iter(nkeyix.1),
 			nkeyix.1,
-			self.0[last].0.as_ref().iter(), v.as_ref().map(|v| v.as_ref()));
+			self.0[last].0.as_ref().iter(), v.as_ref().map(|v| v.as_ref()),
+			None, // TODO switch to codec approach
+		);
 		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.0).unwrap_or(0);
 		let pr = NibbleSlice::new_offset(
 			&key_branch,

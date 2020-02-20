@@ -164,6 +164,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 				C::branch_node(
 					self.children.iter(),
 					self.value,
+					None, // TODO allow complex here
 				),
 			Node::NibbledBranch(partial, _, _) =>
 				C::branch_node_nibbled(
@@ -171,6 +172,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 					partial.len(),
 					self.children.iter(),
 					self.value,
+					None, // TODO allow complex here
 				),
 		})
 	}

@@ -21,7 +21,7 @@ extern crate alloc;
 
 use ordered_trie::{HashOnly, HashDBComplex, HasherComplex, BinaryHasher};
 use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
-	AsHashDB, AsPlainDB, Prefix, ComplexLayout, ComplexLayoutIterValues};
+	AsHashDB, AsPlainDB, Prefix, ComplexLayout};
 use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
 #[cfg(feature = "deprecated")]
 #[cfg(feature = "std")]
@@ -625,7 +625,6 @@ where
 			return self.hashed_null_node.clone();
 		}
 
-		let mut hash_buf2 = <H as BinaryHasher>::Buffer::default();
 		let key = if let Some(key) = H::hash_complex(
 			value,
 			nb_children,
