@@ -28,6 +28,7 @@ use trie_db::{
 	trie_visit,
 	TrieBuilderComplex,
 	TrieRootComplex,
+	TrieRootUnhashedComplex,
 	Partial,
 	BinaryHasher,
 };
@@ -50,7 +51,7 @@ pub struct ExtensionLayout;
 
 impl TrieLayout for ExtensionLayout {
 	const USE_EXTENSION: bool = true;
-	const COMPLEX_HASH: bool = true;
+	const COMPLEX_HASH: bool = false;
 	type Hash = KeccakHasher;
 	type Codec = ReferenceNodeCodec<KeccakHasher>;
 }
@@ -63,7 +64,7 @@ pub struct GenericNoExtensionLayout<H>(PhantomData<H>);
 
 impl<H: BinaryHasher> TrieLayout for GenericNoExtensionLayout<H> {
 	const USE_EXTENSION: bool = false;
-	const COMPLEX_HASH: bool = true;
+	const COMPLEX_HASH: bool = false;
 	type Hash = H;
 	type Codec = ReferenceNodeCodecNoExt<H>;
 }
@@ -142,6 +143,46 @@ fn reference_trie_root_unhashed_no_extension<I, A, B>(input: I) -> Vec<u8> where
 	B: AsRef<[u8]> + fmt::Debug,
 {
 	trie_root::unhashed_trie_no_extension::<KeccakHasher, ReferenceTrieStreamNoExt, _, _, _>(input)
+}
+
+pub fn reference_trie_root_iter_build<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootComplex::<KeccakHasher, _>::default();
+	trie_visit::<ExtensionLayout, _, _, _, _>(input, &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
+pub fn reference_trie_root_unhashed_iter_build<I, A, B>(input: I) -> Vec<u8> where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
+	trie_visit::<ExtensionLayout, _, _, _, _>(input, &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
+pub fn reference_trie_root_no_extension_iter_build<I, A, B>(input: I) -> <KeccakHasher as Hasher>::Out where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootComplex::<KeccakHasher, _>::default();
+	trie_visit::<NoExtensionLayout, _, _, _, _>(input, &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
+pub fn reference_trie_root_unhashed_no_extension_iter_build<I, A, B>(input: I) -> Vec<u8> where
+	I: IntoIterator<Item = (A, B)>,
+	A: AsRef<[u8]> + Ord + fmt::Debug,
+	B: AsRef<[u8]> + fmt::Debug,
+{
+	let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
+	trie_visit::<NoExtensionLayout, _, _, _, _>(input, &mut cb);
+	cb.root.unwrap_or(Default::default())
 }
 
 const EMPTY_TRIE: u8 = 0;
@@ -725,6 +766,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 	fn branch_node(
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
+		mut register_children: Option<&mut [Option<Range<usize>>]>,
 	) -> Vec<u8> {
 		let mut output = vec![0; BITMAP_LENGTH + 1];
 		let mut prefix: [u8; 3] = [0; 3];
@@ -734,12 +776,34 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		} else {
 			false
 		};
+		let mut ix = 0;
+		let ix = &mut ix;
+		let mut register_children = register_children.as_mut();
+		let register_children = &mut register_children;
 		let has_children = children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
+				if let Some(ranges) = register_children {
+					// this assume scale codec put len on one byte, which is the
+					// case for reasonable hash length.
+					let encode_size_offset = 1;
+					ranges[*ix] = Some(Range {
+						start: output.len() + encode_size_offset,
+						end: output.len() + encode_size_offset + h.as_ref().len(),
+					});
+					*ix += 1;
+				}
 				h.as_ref().encode_to(&mut output);
 				true
 			}
 			&Some(ChildReference::Inline(inline_data, len)) => {
+				if let Some(ranges) = register_children {
+					let encode_size_offset = 1;
+					ranges[*ix] = Some(Range {
+						start: output.len() + encode_size_offset,
+						end: output.len() + encode_size_offset + len,
+					});
+					*ix += 1;
+				}
 				inline_data.as_ref()[..len].encode_to(&mut output);
 				true
 			}
@@ -754,7 +818,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		_partial:	impl Iterator<Item = u8>,
 		_number_nibble: usize,
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
-		_maybe_value: Option<&[u8]>) -> Vec<u8> {
+		_maybe_value: Option<&[u8]>,
+		_register_children: Option<&mut [Option<Range<usize>>]>,
+	) -> Vec<u8> {
 		unreachable!()
 	}
 
@@ -856,6 +922,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 	fn branch_node(
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<<H as Hasher>::Out>>>>,
 		_maybe_value: Option<&[u8]>,
+		_register_children: Option<&mut [Option<Range<usize>>]>,
 	) -> Vec<u8> {
 		unreachable!()
 	}
@@ -865,6 +932,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		number_nibble: usize,
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
+		mut register_children: Option<&mut [Option<Range<usize>>]>,
 	) -> Vec<u8> {
 		let mut output = if maybe_value.is_some() {
 			partial_from_iterator_encode(
@@ -885,12 +953,34 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		if let Some(value) = maybe_value {
 			value.encode_to(&mut output);
 		};
+		let mut ix = 0;
+		let ix = &mut ix;
+		let mut register_children = register_children.as_mut();
+		let register_children = &mut register_children;
 		Bitmap::encode(children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
+				if let Some(ranges) = register_children {
+					// this assume scale codec put len on one byte, which is the
+					// case for reasonable hash length.
+					let encode_size_offset = 1;
+					ranges[*ix] = Some(Range {
+						start: output.len() + encode_size_offset,
+						end: output.len() + encode_size_offset + h.as_ref().len(),
+					});
+					*ix += 1;
+				}
 				h.as_ref().encode_to(&mut output);
 				true
 			}
 			&Some(ChildReference::Inline(inline_data, len)) => {
+				if let Some(ranges) = register_children {
+					let encode_size_offset = 1;
+					ranges[*ix] = Some(Range {
+						start: output.len() + encode_size_offset,
+						end: output.len() + encode_size_offset + len,
+					});
+					*ix += 1;
+				}
 				inline_data.as_ref()[..len].encode_to(&mut output);
 				true
 			}
@@ -974,7 +1064,7 @@ pub fn compare_unhashed(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 ) {
 	let root_new = {
-		let mut cb = trie_db::TrieRootUnhashed::<KeccakHasher>::default();
+		let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
 		trie_visit::<ExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
@@ -989,7 +1079,7 @@ pub fn compare_unhashed_no_extension(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 ) {
 	let root_new = {
-		let mut cb = trie_db::TrieRootUnhashed::<KeccakHasher>::default();
+		let mut cb = trie_db::TrieRootUnhashedComplex::<KeccakHasher>::default();
 		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};

@@ -71,7 +71,7 @@ pub use self::recorder::{Recorder, Record};
 pub use self::lookup::Lookup;
 pub use self::nibble::{NibbleSlice, NibbleVec, nibble_ops};
 pub use crate::node_codec::{NodeCodec, Partial, HashDBComplexDyn};
-pub use crate::iter_build::{trie_visit, ProcessEncodedNode,
+pub use crate::iter_build::{trie_visit, ProcessEncodedNode, TrieRootUnhashedComplex,
 	 TrieBuilder, TrieRoot, TrieRootUnhashed, TrieRootComplex, TrieBuilderComplex};
 pub use crate::iterator::TrieDBNodeIterator;
 pub use crate::trie_codec::{decode_compact, encode_compact};

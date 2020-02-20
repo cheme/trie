@@ -437,12 +437,16 @@ where
 	L: TrieLayout,
 {
 	#[inline]
-	fn register_children_buf() -> Option<[Option<Range<usize>>; 16]> {
-		if L::COMPLEX_HASH {
-			Some(Default::default())
-		} else {
-			None
+	fn register_children_buf(node: &Node<TrieHash<L>>) -> Option<[Option<Range<usize>>; 16]> {
+		match node {
+			Node::NibbledBranch(..) | Node::Branch(..) => if L::COMPLEX_HASH {
+				Some(Default::default())
+			} else {
+				None
+			},
+			_ => None,
 		}
+		
 	}
 	/// Create a new trie with backing database `db` and empty `root`.
 	pub fn new(db: &'a mut dyn HashDBComplexDyn<L::Hash, DBValue>, root: &'a mut TrieHash<L>) -> Self {
@@ -1436,7 +1440,7 @@ where
 		match self.storage.destroy(handle) {
 			Stored::New(node) => {
 				let mut k = NibbleVec::new();
-				let mut register_children = Self::register_children_buf();
+				let mut register_children = Self::register_children_buf(&node);
 				let encoded_root = node.into_encoded::<_, L::Codec, L::Hash>(
 					|child, o_slice, o_index| {
 						let mov = k.append_optional_slice_and_nibble(o_slice, o_index);
@@ -1448,7 +1452,11 @@ where
 				);
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "encoded root node: {:#x?}", &encoded_root[..]);
-				*self.root = self.db.insert(EMPTY_PREFIX, &encoded_root[..]);
+				if let Some(children) = register_children {
+					*self.root = self.db.insert_complex(EMPTY_PREFIX, &encoded_root[..], &children[..]);
+				} else {
+					*self.root = self.db.insert(EMPTY_PREFIX, &encoded_root[..]);
+				}
 				self.hash_count += 1;
 
 				self.root_handle = NodeHandle::Hash(*self.root);
@@ -1479,7 +1487,7 @@ where
 				match self.storage.destroy(storage_handle) {
 					Stored::Cached(_, hash) => ChildReference::Hash(hash),
 					Stored::New(node) => {
-						let mut register_children = Self::register_children_buf();
+						let mut register_children = Self::register_children_buf(&node);
 						let encoded = {
 							let commit_child = |
 								node_handle,
@@ -1497,7 +1505,12 @@ where
 							)
 						};
 						if encoded.len() >= L::Hash::LENGTH {
-							let hash = self.db.insert(prefix.as_prefix(), &encoded[..]);
+							let hash = if let Some(children) = register_children {
+								self.db.insert_complex(prefix.as_prefix(), &encoded[..], &children[..])
+							} else {
+								self.db.insert(prefix.as_prefix(), &encoded[..])
+							};
+	
 							self.hash_count +=1;
 							ChildReference::Hash(hash)
 						} else {
@@ -1637,7 +1650,8 @@ mod tests {
 	use hash_db::Hasher;
 	use keccak_hasher::KeccakHasher;
 	use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMut, TrieMut, NodeCodec, HashDBComplexDyn,
-		ReferenceNodeCodec, reference_trie_root, reference_trie_root_no_extension};
+		ReferenceNodeCodec, reference_trie_root_iter_build as reference_trie_root,
+		reference_trie_root_no_extension_iter_build as reference_trie_root_no_extension};
 	use crate::nibble::BackingByteVec;
 
 	fn populate_trie<'db>(

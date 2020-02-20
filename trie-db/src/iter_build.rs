@@ -547,6 +547,19 @@ impl<H> Default for TrieRootUnhashed<H> {
 	}
 }
 
+/// Get the trie root node encoding.
+pub struct TrieRootUnhashedComplex<H> {
+	/// The resulting encoded root.
+	pub root: Option<Vec<u8>>,
+	_ph: PhantomData<H>,
+}
+
+impl<H> Default for TrieRootUnhashedComplex<H> {
+	fn default() -> Self {
+		TrieRootUnhashedComplex { root: None, _ph: PhantomData }
+	}
+}
+
 #[cfg(feature = "std")]
 /// Calculate the trie root of the trie.
 /// Print a debug trace.
@@ -613,6 +626,46 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashed<H> {
 		ChildReference::Hash(hash)
 	}
 }
+
+impl<H: HasherComplex> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashedComplex<H> {
+	fn process(
+		&mut self,
+		_: Prefix,
+		encoded_node: Vec<u8>,
+		is_root: bool,
+		complex_hash: Option<(impl Iterator<Item = impl Borrow<Option<ChildReference<H::Out>>>>, usize)>,
+	) -> ChildReference<<H as Hasher>::Out> {
+		let len = encoded_node.len();
+		if !is_root && len < <H as Hasher>::LENGTH {
+			let mut h = <<H as Hasher>::Out as Default>::default();
+			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
+
+			return ChildReference::Inline(h, len);
+		}
+		let hash = if let Some((children, nb_children)) = complex_hash {
+			let iter = children
+				.filter_map(|v| match v.borrow().as_ref() {
+					Some(ChildReference::Hash(v)) => Some(Some(v.clone())),
+					Some(ChildReference::Inline(v, _l)) => Some(Some(v.clone())),
+					None => None,
+				});
+			<H as HasherComplex>::hash_complex(
+				&encoded_node[..],
+				nb_children,
+				iter,
+				EmptyIter::default(),
+				false,
+			).expect("only proof fails: TODO two primitives")
+		} else {
+			<H as Hasher>::hash(&encoded_node[..])
+		};
+		if is_root {
+			self.root = Some(encoded_node);
+		};
+		ChildReference::Hash(hash)
+	}
+}
+
 
 #[cfg(test)]
 mod test {
