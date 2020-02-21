@@ -344,7 +344,7 @@ impl SequenceBinaryTree<usize> {
 			}
 		})
 	}
-	fn iter_path_node_key<KN>(&self, from: Option<usize>) -> impl Iterator<Item = KN>
+	pub fn iter_path_node_key<KN>(&self, from: Option<usize>) -> impl Iterator<Item = KN>
 		where
 			KN: KeyNode + From<(usize, usize)> + Clone,
 	{
@@ -1474,6 +1474,9 @@ pub trait HasherComplex: BinaryHasher {
 }
 
 impl<H: BinaryHasher> HasherComplex for H {
+	// TODO this is totally BROKEN !!! audit if
+	// x is consistently encoded node without its
+	// child tries!!
 	fn hash_complex<
 		I: Iterator<Item = Option<<Self as Hasher>::Out>>,
 		I2: Iterator<Item = <Self as Hasher>::Out>,
@@ -1535,6 +1538,7 @@ pub trait HashDBComplex<H: HasherComplex, T>: Send + Sync + HashDB<H, T> {
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
+		no_child_value: &[u8],
 		nb_children: usize,
 		children: I,
 		additional_hashes: I2,

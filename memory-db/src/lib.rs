@@ -616,6 +616,7 @@ where
 		&mut self,
 		prefix: Prefix,
 		value: &[u8],
+		no_child_value: &[u8],
 		nb_children: usize,
 		children: I,
 		additional_hashes: I2,
@@ -626,7 +627,7 @@ where
 		}
 
 		let key = if let Some(key) = H::hash_complex(
-			value,
+			no_child_value,
 			nb_children,
 			children,
 			additional_hashes,

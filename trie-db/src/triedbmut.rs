@@ -23,7 +23,7 @@ use crate::node_codec::HashDBComplexDyn;
 use hash_db::{HashDB, Hasher, Prefix, EMPTY_PREFIX};
 use hashbrown::HashSet;
 
-use crate::node_codec::NodeCodec;
+use crate::node_codec::{NodeCodec, EncodedNoChild};
 use crate::nibble::{NibbleVec, NibbleSlice, nibble_ops, BackingByteVec};
 use crate::rstd::{
 	boxed::Box, convert::TryFrom, hash::Hash, mem, ops::Index, result, vec::Vec, VecDeque,
@@ -209,26 +209,26 @@ where
 		self,
 		mut child_cb: F,
 		register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8> where
+	) -> (Vec<u8>, EncodedNoChild) where
 		C: NodeCodec<HashOut=O>,
 		F: FnMut(NodeHandle<H::Out>, Option<&NibbleSlice>, Option<u8>) -> ChildReference<H::Out>,
 		H: Hasher<Out = O>,
 	{
 		match self {
-			Node::Empty => C::empty_node().to_vec(),
+			Node::Empty => (C::empty_node().to_vec(), EncodedNoChild::Unused),
 			Node::Leaf(partial, value) => {
 				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				C::leaf_node(pr.right(), &value)
+				(C::leaf_node(pr.right(), &value), EncodedNoChild::Unused)
 			},
 			Node::Extension(partial, child) => {
 				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
 				let it = pr.right_iter();
 				let c = child_cb(child, Some(&pr), None);
-				C::extension_node(
+				(C::extension_node(
 					it,
 					pr.len(),
 					c,
-				)
+				), EncodedNoChild::Unused)
 			},
 			Node::Branch(mut children, value) => {
 				C::branch_node(
@@ -1441,7 +1441,7 @@ where
 			Stored::New(node) => {
 				let mut k = NibbleVec::new();
 				let mut register_children = Self::register_children_buf(&node);
-				let encoded_root = node.into_encoded::<_, L::Codec, L::Hash>(
+				let (encoded_root, no_node) = node.into_encoded::<_, L::Codec, L::Hash>(
 					|child, o_slice, o_index| {
 						let mov = k.append_optional_slice_and_nibble(o_slice, o_index);
 						let cr = self.commit_child(child, &mut k);
@@ -1453,7 +1453,12 @@ where
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "encoded root node: {:#x?}", &encoded_root[..]);
 				if let Some(children) = register_children {
-					*self.root = self.db.insert_complex(EMPTY_PREFIX, &encoded_root[..], &children[..]);
+					*self.root = self.db.insert_complex(
+						EMPTY_PREFIX,
+						&encoded_root[..],
+						&children[..],
+						no_node,
+					);
 				} else {
 					*self.root = self.db.insert(EMPTY_PREFIX, &encoded_root[..]);
 				}
@@ -1488,7 +1493,7 @@ where
 					Stored::Cached(_, hash) => ChildReference::Hash(hash),
 					Stored::New(node) => {
 						let mut register_children = Self::register_children_buf(&node);
-						let encoded = {
+						let (encoded, no_node) = {
 							let commit_child = |
 								node_handle,
 								o_slice: Option<&NibbleSlice>,
@@ -1506,7 +1511,12 @@ where
 						};
 						if encoded.len() >= L::Hash::LENGTH {
 							let hash = if let Some(children) = register_children {
-								self.db.insert_complex(prefix.as_prefix(), &encoded[..], &children[..])
+								self.db.insert_complex(
+									prefix.as_prefix(),
+									&encoded[..],
+									&children[..],
+									no_node,
+								)
 							} else {
 								self.db.insert(prefix.as_prefix(), &encoded[..])
 							};

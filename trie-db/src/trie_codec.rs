@@ -25,7 +25,8 @@
 //! expected to save roughly (n - 1) hashes in size where n is the number of nodes in the partial
 //! trie.
 
-use hash_db::HashDB;
+pub use ordered_trie::BinaryHasher;
+use hash_db::{HashDB, Hasher};
 use crate::{
 	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
 	TrieHash, TrieError, TrieDB, TrieDBNodeIterator, TrieLayout,
@@ -34,7 +35,7 @@ use crate::{
 use crate::rstd::{
 	boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec,
 };
-
+use ordered_trie::{SequenceBinaryTree, HashProof, trie_root, UsizeKeyNode};
 struct EncoderStackEntry<C: NodeCodec> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: NibbleVec,
@@ -95,7 +96,15 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 	}
 
 	/// Generates the encoding of the subtrie rooted at this entry.
-	fn encode_node(&self) -> Result<Vec<u8>, C::HashOut, C::Error> {
+	fn encode_node<H>(
+		&self,
+		complex_hash: bool,
+		omit_children: &[bool],
+		hash_buf: &mut H::Buffer,
+	) -> Result<Vec<u8>, C::HashOut, C::Error>
+		where
+				H: BinaryHasher<Out = C::HashOut>,
+	{
 		let node_data = self.node.data();
 		Ok(match self.node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } => node_data.to_vec(),
@@ -109,21 +118,53 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 				}
 			}
 			NodePlan::Branch { value, children } => {
-				C::branch_node(
-					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
+				let children_encode = if complex_hash {
+					Self::branch_children_complex(node_data, &children, &self.omit_children)?
+				} else {
+					Self::branch_children(node_data, &children, &self.omit_children)?
+				};
+				let mut result = C::branch_node(
+					children_encode.iter(),
 					value.clone().map(|range| &node_data[range]),
 					None, // TODO allow using complex proof
-				)
+				).0;
+				if complex_hash {
+					let nb_children = children.iter().filter(|v| v.is_some()).count();
+					result.push(nb_children as u8);
+					let children = Self::branch_children(node_data, &children, &[])?;
+					let additional_hashes = binary_additional_hashes::<H>(&children[..], omit_children, hash_buf, nb_children as usize);
+					result.push(additional_hashes.len() as u8);
+					for hash in additional_hashes {
+						result.extend_from_slice(hash.as_ref());
+					}
+				}
+				result
 			}
 			NodePlan::NibbledBranch { partial, value, children } => {
+				let children_encode = if complex_hash {
+					Self::branch_children_complex(node_data, &children, &self.omit_children)?
+				} else {
+					Self::branch_children(node_data, &children, &self.omit_children)?
+				};
 				let partial = partial.build(node_data);
-				C::branch_node_nibbled(
+				let mut result = C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
-					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
+					children_encode.iter(),
 					value.clone().map(|range| &node_data[range]),
 					None, // TODO allow using complex proof
-				)
+				).0;
+				if complex_hash {
+					let nb_children = children.iter().filter(|v| v.is_some()).count();
+					result.push(nb_children as u8);
+					let children = Self::branch_children(node_data, &children, &[])?;
+					let additional_hashes = binary_additional_hashes::<H>(&children[..], omit_children, hash_buf, nb_children as usize);
+					result.push(additional_hashes.len() as u8);
+					for hash in additional_hashes {
+						result.extend_from_slice(hash.as_ref());
+					}
+				}
+				result
 			}
 		})
 	}
@@ -158,6 +199,27 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 		}
 		Ok(children)
 	}
+
+	/// only store the omitted_children (so we got a valid bitmap of their position)
+	/// the remaining is additional hash
+	fn branch_children_complex(
+		node_data: &[u8],
+		child_handles: &[Option<NodeHandlePlan>; NIBBLE_LENGTH],
+		omit_children: &[bool],
+	) -> Result<[Option<ChildReference<C::HashOut>>; NIBBLE_LENGTH], C::HashOut, C::Error>
+	{
+		let empty_child = ChildReference::Inline(C::HashOut::default(), 0);
+		let mut children = [None; NIBBLE_LENGTH];
+		for i in 0..NIBBLE_LENGTH {
+			children[i] = if omit_children[i] {
+				Some(empty_child)
+			} else {
+				None
+			};
+		}
+		Ok(children)
+	}
+
 }
 
 /// Generates a compact representation of the partial trie stored in the given DB. The encoding
@@ -172,6 +234,10 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 		L: TrieLayout
 {
 	let mut output = Vec::new();
+
+	// TODO make it optional and replace boolean is_complex
+	let mut hash_buf = <L::Hash as BinaryHasher>::Buffer::default();
+	let hash_buf = &mut hash_buf;
 
 	// The stack of nodes through a path in the trie. Each entry is a child node of the preceding
 	// entry.
@@ -214,7 +280,11 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 						stack.push(last_entry);
 						break;
 					} else {
-						output[last_entry.output_index] = last_entry.encode_node()?;
+						output[last_entry.output_index] = last_entry.encode_node::<L::Hash>(
+							L::COMPLEX_HASH,
+							last_entry.omit_children.as_slice(),
+							hash_buf,
+						)?;
 					}
 				}
 
@@ -246,7 +316,11 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 	}
 
 	while let Some(entry) = stack.pop() {
-		output[entry.output_index] = entry.encode_node()?;
+		output[entry.output_index] = entry.encode_node::<L::Hash>(
+			L::COMPLEX_HASH,
+			entry.omit_children.as_slice(),
+			hash_buf,
+		)?;
 	}
 
 	Ok(output)
@@ -367,7 +441,7 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 					self.children.into_iter(),
 					value,
 					None, // TODO allow using complex proof
-				),
+				).0,
 			Node::NibbledBranch(partial, _, value) =>
 				C::branch_node_nibbled(
 					partial.right_iter(),
@@ -375,7 +449,7 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 					self.children.iter(),
 					value,
 					None, // TODO allow using complex proof
-				),
+				).0,
 		}
 	}
 }
@@ -408,7 +482,11 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 	for (i, encoded_node) in encoded.iter().enumerate() {
 		let node = L::Codec::decode(encoded_node)
 			.map_err(|err| Box::new(TrieError::DecoderError(<TrieHash<L>>::default(), err)))?;
-
+		let complex = if L::COMPLEX_HASH {
+			Some("TODO read from encoded node the nb_elt, and the additional hashes")
+		} else {
+			None
+		};
 		let children_len = match node {
 			Node::Empty | Node::Leaf(..) => 0,
 			Node::Extension(..) => 1,
@@ -424,14 +502,27 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 		loop {
 			if !last_entry.advance_child_index()? {
 				last_entry.push_to_prefix(&mut prefix);
-				stack.push(last_entry);
+				stack.push(last_entry); // TODO this needs the complex payload to (as for pop)
 				break;
 			}
 
 			// Since `advance_child_index` returned true, the preconditions for `encode_node` are
 			// satisfied.
 			let node_data = last_entry.encode_node();
-			let node_hash = db.insert(prefix.as_prefix(), node_data.as_ref());
+			let node_hash = if let Some(_todo) = complex {
+/*				db.insert_complex(
+					prefix.as_prefix(),
+					node_data.as_ref(),
+		nb_children: usize,
+		children: I,
+		additional_hashes: I2, -> from decode
+		proof: bool, -> true
+	
+				);*/
+				unimplemented!()
+			} else {
+				db.insert(prefix.as_prefix(), node_data.as_ref())
+			};
 
 			if let Some(entry) = stack.pop() {
 				last_entry = entry;
@@ -446,6 +537,37 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 	}
 
 	Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())))
+}
+
+fn binary_additional_hashes<H: BinaryHasher>(
+	children: &[Option<ChildReference<H::Out>>],
+	in_proof_children: &[bool],
+	hash_buf: &mut H::Buffer,
+	nb_children: usize,
+) -> Vec<H::Out> {
+	let tree = SequenceBinaryTree::new(0, 0, nb_children);
+
+	let to_prove = children.iter().zip(in_proof_children.iter())
+		.filter_map(|(o_child, in_proof)| o_child.as_ref().map(|_| *in_proof))
+		// correct iteration over binary tree
+		.zip(tree.iter_path_node_key::<UsizeKeyNode>(None))
+		.filter_map(|(in_proof, ix_key)| if in_proof {
+			Some(ix_key)
+		} else {
+			None
+		});
+
+
+	let mut callback = HashProof::<H, _, _>::new(hash_buf, to_prove);
+	let hashes = children.iter()
+		.filter_map(|o_child| o_child.as_ref())
+		.map(|child| match child {
+			ChildReference::Hash(h) => h.clone(),
+			ChildReference::Inline(h, _) => h.clone(),
+		});
+	// TODO we can skip a hash (the one to calculate root)
+	let _root = trie_root::<_, UsizeKeyNode, _, _>(&tree, hashes.clone().into_iter(), &mut callback);
+	callback.take_additional_hash()
 }
 
 #[cfg(test)]

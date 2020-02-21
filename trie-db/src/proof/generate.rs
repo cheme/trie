@@ -109,7 +109,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 					self.children.into_iter(),
 					value_with_omission(node_data, value, self.omit_value),
 					None, // TODO allow complex here
-				)
+				).0
 			},
 			NodePlan::NibbledBranch { partial: partial_plan, value, children } => {
 				let partial = partial_plan.build(node_data);
@@ -125,7 +125,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 					self.children.into_iter(),
 					value_with_omission(node_data, value, self.omit_value),
 					None, // TODO allow complex here
-				)
+				).0
 			},
 		})
 	}

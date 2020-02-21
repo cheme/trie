@@ -31,6 +31,7 @@ use trie_db::{
 	TrieRootUnhashedComplex,
 	Partial,
 	BinaryHasher,
+	EncodedNoChild,
 };
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
@@ -778,7 +779,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
 		mut register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8> {
+	) -> (Vec<u8>, EncodedNoChild) {
 		let mut output = vec![0; BITMAP_LENGTH + 1];
 		let mut prefix: [u8; 3] = [0; 3];
 		let have_value = if let Some(value) = maybe_value {
@@ -791,6 +792,14 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		let ix = &mut ix;
 		let mut register_children = register_children.as_mut();
 		let register_children = &mut register_children;
+		let no_child = if register_children.is_some() {
+			EncodedNoChild::Range(Range {
+				start: 0,
+				end: output.len(),
+			})
+		} else {
+			EncodedNoChild::Unused
+		};
 		let has_children = children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
 				if let Some(ranges) = register_children {
@@ -822,7 +831,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		});
 		branch_node_buffered(have_value, has_children, prefix.as_mut());
 		output[0..BITMAP_LENGTH + 1].copy_from_slice(prefix.as_ref());
-		output
+		(output, no_child)
 	}
 
 	fn branch_node_nibbled(
@@ -831,7 +840,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		_maybe_value: Option<&[u8]>,
 		_register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8> {
+	) -> (Vec<u8>, EncodedNoChild) {
 		unreachable!()
 	}
 
@@ -934,7 +943,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<<H as Hasher>::Out>>>>,
 		_maybe_value: Option<&[u8]>,
 		_register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8> {
+	) -> (Vec<u8>, EncodedNoChild) {
 		unreachable!()
 	}
 
@@ -944,7 +953,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
 		mut register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8> {
+	) -> (Vec<u8>, EncodedNoChild) {
 		let mut output = if maybe_value.is_some() {
 			partial_from_iterator_encode(
 				partial,
@@ -968,6 +977,14 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		let ix = &mut ix;
 		let mut register_children = register_children.as_mut();
 		let register_children = &mut register_children;
+		let no_child = if register_children.is_some() {
+			EncodedNoChild::Range(Range {
+				start: 0,
+				end: output.len(),
+			})
+		} else {
+			EncodedNoChild::Unused
+		};
 		Bitmap::encode(children.map(|maybe_child| match maybe_child.borrow() {
 			Some(ChildReference::Hash(h)) => {
 				if let Some(ranges) = register_children {
@@ -999,7 +1016,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		}), bitmap.as_mut());
 		output[bitmap_index..bitmap_index + BITMAP_LENGTH]
 			.copy_from_slice(&bitmap.as_ref()[..BITMAP_LENGTH]);
-		output
+		(output, no_child)
 	}
 
 }

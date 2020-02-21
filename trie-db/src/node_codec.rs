@@ -72,7 +72,7 @@ pub trait NodeCodec: Sized {
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>,
 		register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8>;
+	) -> (Vec<u8>, EncodedNoChild);
 
 	/// Returns an encoded branch node with a possible partial path.
 	/// `number_nibble` is the partial path length as in `extension_node`.
@@ -82,7 +82,26 @@ pub trait NodeCodec: Sized {
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>,
 		register_children: Option<&mut [Option<Range<usize>>]>,
-	) -> Vec<u8>;
+	) -> (Vec<u8>, EncodedNoChild);
+}
+
+pub enum EncodedNoChild {
+	// not runing complex
+	Unused,
+	// range over the full encoded
+	Range(Range<usize>),
+	// allocated in case we cannot use a range
+	Allocated(Vec<u8>),
+}
+
+impl EncodedNoChild {
+	pub fn encoded_no_child<'a>(&'a self, encoded: &'a [u8]) -> &'a [u8] {
+		match self {
+			EncodedNoChild::Unused => encoded,
+			EncodedNoChild::Range(range) => &encoded[range.clone()],
+			EncodedNoChild::Allocated(data) => &data[..],
+		}
+	}
 }
 
 use ordered_trie::{HashDBComplex, HasherComplex};
@@ -100,6 +119,7 @@ pub trait HashDBComplexDyn<H: Hasher, T>: Send + Sync + HashDB<H, T> {
 		prefix: Prefix,
 		value: &[u8],
 		children: &[Option<Range<usize>>],
+		no_child: EncodedNoChild,
 	) -> H::Out;
 }
 
@@ -109,6 +129,7 @@ impl<H: HasherComplex, T, C: HashDBComplex<H, T>> HashDBComplexDyn<H, T> for C {
 		prefix: Prefix,
 		value: &[u8],
 		children: &[Option<Range<usize>>],
+		no_child: EncodedNoChild,
 	) -> H::Out {
 
 		// TODO factor this with iter_build (just use the trait)
@@ -123,6 +144,7 @@ impl<H: HasherComplex, T, C: HashDBComplex<H, T>> HashDBComplexDyn<H, T> for C {
 			self,
 			prefix,
 			value,
+			no_child.encoded_no_child(value),
 			nb_children,
 			children,
 			EmptyIter::default(),
