@@ -120,7 +120,7 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 	fn new(node_data: &'a [u8], prefix: LeftNibbleSlice<'a>, is_inline: bool, complex: bool)
 		   -> Result<Self, Error<C::HashOut, C::Error>>
 	{
-		let (node, complex) = if complex {
+		let (node, complex) = if !is_inline && complex {
 			// TODO factorize with trie_codec
 			let encoded_node = node_data;
 			let (mut node, mut offset) = C::decode_no_child(encoded_node)
