@@ -19,7 +19,7 @@ use crate::MaybeDebug;
 use crate::node::{Node, NodePlan};
 use crate::ChildReference;
 
-use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec, EmptyIter, ops::Range, marker::PhantomData};
+use crate::rstd::{borrow::Borrow, Error, hash, vec::Vec, EmptyIter, ops::Range, marker::PhantomData, mem::replace};
 
 /// Representation of a nible slice (right aligned).
 /// It contains a right aligned padded first byte (first pair element is the number of nibbles
@@ -42,9 +42,21 @@ pub trait NodeCodec: Sized {
 	/// Decode bytes to a `NodePlan`. Returns `Self::E` on failure.
 	fn decode_plan(data: &[u8]) -> Result<NodePlan, Self::Error>;
 
+	/// See `Decode_no_child`.
+	fn decode_plan_no_child(data: &[u8]) -> Result<(NodePlan, usize), Self::Error>;
+
 	/// Decode bytes to a `Node`. Returns `Self::E` on failure.
 	fn decode(data: &[u8]) -> Result<Node, Self::Error> {
+		// TODO ensure real use codec have their own implementation
+		// as this can be slower
 		Ok(Self::decode_plan(data)?.build(data))
+	}
+
+	/// Decode but child are not include (instead we put empty inline
+	/// nodes).
+	fn decode_no_child(data: &[u8]) -> Result<(Node, usize), Self::Error> {
+		let (plan, offset) = Self::decode_plan_no_child(data)?;
+		Ok((plan.build(data), offset))
 	}
 
 	/// Check if the provided bytes correspond to the codecs "empty" node.
@@ -85,6 +97,7 @@ pub trait NodeCodec: Sized {
 	) -> (Vec<u8>, EncodedNoChild);
 }
 
+#[derive(Clone)]
 pub enum EncodedNoChild {
 	// not runing complex
 	Unused,
@@ -102,6 +115,24 @@ impl EncodedNoChild {
 			EncodedNoChild::Allocated(data) => &data[..],
 		}
 	}
+	// TODO this is bad we should produce a branch that does
+	// not include it in the first place (new encode fn with
+	// default impl using trim no child).
+	pub fn trim_no_child(self, encoded: &mut Vec<u8>) {
+		match self {
+			EncodedNoChild::Unused => (),
+			EncodedNoChild::Range(range) => {
+				encoded.truncate(range.end);
+				if range.start != 0 {
+					*encoded = encoded.split_off(range.start);
+				}
+			},
+			EncodedNoChild::Allocated(data) => {
+				replace(encoded, data);
+			},
+		}
+	}
+
 }
 
 use ordered_trie::{HashDBComplex, HasherComplex};
@@ -232,5 +263,34 @@ impl<'a, HO: AsMut<[u8]> + Default, I: Iterator<Item = &'a Range<usize>>> Iterat
 		} else {
 			None
 		}
+	}
+}
+
+/// Children bitmap codec for radix 16 trie.
+pub struct Bitmap(u16);
+
+/// Length of a 16 element bitmap.
+pub const BITMAP_LENGTH: usize = 2;
+
+impl Bitmap {
+
+	pub fn decode(data: &[u8]) -> Self {
+		let map = data[0] as u16 + data[1] as u16 * 256;
+		Bitmap(map)
+	}
+
+	pub fn value_at(&self, i: usize) -> bool {
+		self.0 & (1u16 << i) != 0
+	}
+
+	pub fn encode<I: Iterator<Item = bool>>(has_children: I , output: &mut [u8]) {
+		let mut bitmap: u16 = 0;
+		let mut cursor: u16 = 1;
+		for v in has_children {
+			if v { bitmap |= cursor }
+			cursor <<= 1;
+		}
+		output[0] = (bitmap % 256) as u8;
+		output[1] = (bitmap / 256) as u8;
 	}
 }

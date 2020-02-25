@@ -40,7 +40,7 @@ pub use trie_db::{
 	decode_compact, encode_compact, HashDBComplexDyn,
 	nibble_ops, NibbleSlice, NibbleVec, NodeCodec, proof, Record, Recorder,
 	Trie, TrieConfiguration, TrieDB, TrieDBIterator, TrieDBMut, TrieDBNodeIterator, TrieError,
-	TrieIterator, TrieLayout, TrieMut,
+	TrieIterator, TrieLayout, TrieMut, Bitmap, BITMAP_LENGTH,
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -74,34 +74,6 @@ impl<H: BinaryHasher> TrieConfiguration for GenericNoExtensionLayout<H> { }
 
 /// Trie layout without extension nodes.
 pub type NoExtensionLayout = GenericNoExtensionLayout<keccak_hasher::KeccakHasher>;
-
-/// Children bitmap codec for radix 16 trie.
-pub struct Bitmap(u16);
-
-const BITMAP_LENGTH: usize = 2;
-
-impl Bitmap {
-
-	fn decode(data: &[u8]) -> Result<Self, CodecError> {
-		Ok(u16::decode(&mut &data[..])
-			.map(|v| Bitmap(v))?)
-	}
-
-	fn value_at(&self, i: usize) -> bool {
-		self.0 & (1u16 << i) != 0
-	}
-
-	fn encode<I: Iterator<Item = bool>>(has_children: I , output: &mut [u8]) {
-		let mut bitmap: u16 = 0;
-		let mut cursor: u16 = 1;
-		for v in has_children {
-			if v { bitmap |= cursor }
-			cursor <<= 1;
-		}
-		output[0] = (bitmap % 256) as u8;
-		output[1] = (bitmap / 256) as u8;
-	}
-}
 
 pub type RefTrieDB<'a> = trie_db::TrieDB<'a, ExtensionLayout>;
 pub type RefTrieDBNoExt<'a> = trie_db::TrieDB<'a, NoExtensionLayout>;
@@ -666,6 +638,79 @@ impl<'a> Input for ByteSliceInput<'a> {
 	}
 }
 
+impl<H: Hasher> ReferenceNodeCodec<H> {
+	fn decode_plan_internal(
+		data: &[u8],
+		is_complex: bool,
+	) -> ::std::result::Result<(NodePlan, usize), <Self as NodeCodec>::Error> {
+		let mut input = ByteSliceInput::new(data);
+		let node = match NodeHeader::decode(&mut input)? {
+			NodeHeader::Null => NodePlan::Empty,
+			NodeHeader::Branch(has_value) => {
+				let bitmap_range = input.take(BITMAP_LENGTH)?;
+				let bitmap = Bitmap::decode(&data[bitmap_range]);
+
+				let value = if has_value {
+					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+					Some(input.take(count)?)
+				} else {
+					None
+				};
+				let mut children = [
+					None, None, None, None, None, None, None, None,
+					None, None, None, None, None, None, None, None,
+				];
+				for i in 0..nibble_ops::NIBBLE_LENGTH {
+					if bitmap.value_at(i) {
+						if is_complex {
+							children[i] = Some(NodeHandlePlan::Inline(Range { start: 0, end: 0 }));
+						} else {
+							let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+							let range = input.take(count)?;
+							children[i] = Some(if count == H::LENGTH {
+								NodeHandlePlan::Hash(range)
+							} else {
+								NodeHandlePlan::Inline(range)
+							});
+						}
+					}
+				}
+				NodePlan::Branch { value, children }
+			}
+			NodeHeader::Extension(nibble_count) => {
+				let partial = input.take(
+					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
+				)?;
+				let partial_padding = nibble_ops::number_padding(nibble_count);
+				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+				let range = input.take(count)?;
+				let child = if count == H::LENGTH {
+					NodeHandlePlan::Hash(range)
+				} else {
+					NodeHandlePlan::Inline(range)
+				};
+				NodePlan::Extension {
+					partial: NibbleSlicePlan::new(partial, partial_padding),
+					child
+				}
+			}
+			NodeHeader::Leaf(nibble_count) => {
+				let partial = input.take(
+					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
+				)?;
+				let partial_padding = nibble_ops::number_padding(nibble_count);
+				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+				let value = input.take(count)?;
+				NodePlan::Leaf {
+					partial: NibbleSlicePlan::new(partial, partial_padding),
+					value,
+				}
+			}
+		};
+		Ok((node, input.offset))
+	}
+}
+
 // NOTE: what we'd really like here is:
 // `impl<H: Hasher> NodeCodec<H> for RlpNodeCodec<H> where <KeccakHasher as Hasher>::Out: Decodable`
 // but due to the current limitations of Rust const evaluation we can't do
@@ -680,66 +725,11 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 	}
 
 	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan, Self::Error> {
-		let mut input = ByteSliceInput::new(data);
-		match NodeHeader::decode(&mut input)? {
-			NodeHeader::Null => Ok(NodePlan::Empty),
-			NodeHeader::Branch(has_value) => {
-				let bitmap_range = input.take(BITMAP_LENGTH)?;
-				let bitmap = Bitmap::decode(&data[bitmap_range])?;
+		Ok(Self::decode_plan_internal(data, false)?.0)
+	}
 
-				let value = if has_value {
-					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
-					Some(input.take(count)?)
-				} else {
-					None
-				};
-				let mut children = [
-					None, None, None, None, None, None, None, None,
-					None, None, None, None, None, None, None, None,
-				];
-				for i in 0..nibble_ops::NIBBLE_LENGTH {
-					if bitmap.value_at(i) {
-						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
-						let range = input.take(count)?;
-						children[i] = Some(if count == H::LENGTH {
-							NodeHandlePlan::Hash(range)
-						} else {
-							NodeHandlePlan::Inline(range)
-						});
-					}
-				}
-				Ok(NodePlan::Branch { value, children })
-			}
-			NodeHeader::Extension(nibble_count) => {
-				let partial = input.take(
-					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-				)?;
-				let partial_padding = nibble_ops::number_padding(nibble_count);
-				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
-				let range = input.take(count)?;
-				let child = if count == H::LENGTH {
-					NodeHandlePlan::Hash(range)
-				} else {
-					NodeHandlePlan::Inline(range)
-				};
-				Ok(NodePlan::Extension {
-					partial: NibbleSlicePlan::new(partial, partial_padding),
-					child
-				})
-			}
-			NodeHeader::Leaf(nibble_count) => {
-				let partial = input.take(
-					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-				)?;
-				let partial_padding = nibble_ops::number_padding(nibble_count);
-				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
-				let value = input.take(count)?;
-				Ok(NodePlan::Leaf {
-					partial: NibbleSlicePlan::new(partial, partial_padding),
-					value,
-				})
-			}
-		}
+	fn decode_plan_no_child(data: &[u8]) -> ::std::result::Result<(NodePlan, usize), Self::Error> {
+		Self::decode_plan_internal(data, true)
 	}
 
 	fn is_empty_node(data: &[u8]) -> bool {
@@ -846,18 +836,14 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 
 }
 
-impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
-	type Error = CodecError;
-	type HashOut = <H as Hasher>::Out;
-
-	fn hashed_null_node() -> <H as Hasher>::Out {
-		H::hash(<Self as NodeCodec>::empty_node())
-	}
-
-	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan, Self::Error> {
+impl<H: Hasher> ReferenceNodeCodecNoExt<H> {
+	fn decode_plan_internal(
+		data: &[u8],
+		is_complex: bool,
+	) -> ::std::result::Result<(NodePlan, usize), <Self as NodeCodec>::Error> {
 		let mut input = ByteSliceInput::new(data);
-		match NodeHeaderNoExt::decode(&mut input)? {
-			NodeHeaderNoExt::Null => Ok(NodePlan::Empty),
+		let node = match NodeHeaderNoExt::decode(&mut input)? {
+			NodeHeaderNoExt::Null => NodePlan::Empty,
 			NodeHeaderNoExt::Branch(has_value, nibble_count) => {
 				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
 				// check that the padding is valid (if any)
@@ -869,7 +855,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 				)?;
 				let partial_padding = nibble_ops::number_padding(nibble_count);
 				let bitmap_range = input.take(BITMAP_LENGTH)?;
-				let bitmap = Bitmap::decode(&data[bitmap_range])?;
+				let bitmap = Bitmap::decode(&data[bitmap_range]);
 				let value = if has_value {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 					Some(input.take(count)?)
@@ -882,20 +868,24 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 				];
 				for i in 0..nibble_ops::NIBBLE_LENGTH {
 					if bitmap.value_at(i) {
-						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
-						let range = input.take(count)?;
-						children[i] = Some(if count == H::LENGTH {
-							NodeHandlePlan::Hash(range)
+						if is_complex {
+							children[i] = Some(NodeHandlePlan::Inline(Range { start: 0, end: 0 }));
 						} else {
-							NodeHandlePlan::Inline(range)
-						});
+							let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+							let range = input.take(count)?;
+							children[i] = Some(if count == H::LENGTH {
+								NodeHandlePlan::Hash(range)
+							} else {
+								NodeHandlePlan::Inline(range)
+							});
+						}
 					}
 				}
-				Ok(NodePlan::NibbledBranch {
+				NodePlan::NibbledBranch {
 					partial: NibbleSlicePlan::new(partial, partial_padding),
 					value,
 					children,
-				})
+				}
 			}
 			NodeHeaderNoExt::Leaf(nibble_count) => {
 				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
@@ -909,12 +899,30 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 				let partial_padding = nibble_ops::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = input.take(count)?;
-				Ok(NodePlan::Leaf {
+				NodePlan::Leaf {
 					partial: NibbleSlicePlan::new(partial, partial_padding),
 					value,
-				})
+				}
 			}
-		}
+		};
+		Ok((node, input.offset))
+	}
+}
+
+impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
+	type Error = CodecError;
+	type HashOut = <H as Hasher>::Out;
+
+	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan, Self::Error> {
+		Ok(Self::decode_plan_internal(data, false)?.0)
+	}
+
+	fn decode_plan_no_child(data: &[u8]) -> ::std::result::Result<(NodePlan, usize), Self::Error> {
+		Self::decode_plan_internal(data, true)
+	}
+
+	fn hashed_null_node() -> <H as Hasher>::Out {
+		H::hash(<Self as NodeCodec>::empty_node())
 	}
 
 	fn is_empty_node(data: &[u8]) -> bool {

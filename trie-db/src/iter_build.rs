@@ -61,7 +61,6 @@ fn register_children_buf<T: TrieLayout>() -> Option<[Option<Range<usize>>; 16]> 
 	}
 }
 
-
 impl<T, V> CacheAccum<T, V>
 	where
 		T: TrieLayout,

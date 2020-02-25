@@ -810,6 +810,7 @@ struct MultiProofState<KN> {
 	join1: Option<usize>,
 	join2: Option<usize>,
 	stack: smallvec::SmallVec<[(KN, usize);4]>,
+	is_empty: bool,
 }
 
 enum MultiProofResult {
@@ -827,8 +828,13 @@ impl<KN: KeyNode> MultiProofState<KN> {
 			join1: None,
 			join2: None,
 			stack: Default::default(),
+			is_empty: false,
 		};
 		result.current_key = next_keys.next();
+		if result.current_key.is_none() {
+			result.is_empty = true;
+			return result;
+		}
 		result.next_key1 = next_keys.next();
 		result.next_key2 = next_keys.next();
 		result.refresh_join1();
@@ -976,7 +982,11 @@ impl<'a, H: BinaryHasher, KN: KeyNode, I: Iterator<Item = KN>> ProcessNode<H::Ou
 		self.buffer[H::LENGTH..].copy_from_slice(child2);
 		H::hash(&self.buffer[..])
 	}
-	fn register_root(&mut self, _root: &H::Out) { }
+	fn register_root(&mut self, root: &H::Out) {
+		if self.state.is_empty {
+			self.additional_hash.push(root.clone());
+		}
+	}
 }
 
 // This only include hash, for including hashed value or inline node, just map the process over the
@@ -1406,6 +1416,9 @@ mod test {
 	fn test_multiple_elements_proof() {
 		let result = base16_roots();
 		let tests = [
+			(1, &[][..]),
+			(4, &[][..]),
+			(4, &[1][..]),
 			(4, &[1, 2][..]),
 			(4, &[1, 2, 3][..]),
 			(13, &[1, 2, 3][..]),
@@ -1461,6 +1474,7 @@ pub trait BinaryHasher: Hasher {
 pub trait HasherComplex: BinaryHasher {
 
 	/// Alternate hash with complex proof allowed
+	/// TODO expose buffer !! (then memory db use a single buf)
 	fn hash_complex<
 		I: Iterator<Item = Option<<Self as Hasher>::Out>>,
 		I2: Iterator<Item = <Self as Hasher>::Out>,
@@ -1474,9 +1488,6 @@ pub trait HasherComplex: BinaryHasher {
 }
 
 impl<H: BinaryHasher> HasherComplex for H {
-	// TODO this is totally BROKEN !!! audit if
-	// x is consistently encoded node without its
-	// child tries!!
 	fn hash_complex<
 		I: Iterator<Item = Option<<Self as Hasher>::Out>>,
 		I2: Iterator<Item = <Self as Hasher>::Out>,

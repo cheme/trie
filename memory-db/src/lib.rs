@@ -645,9 +645,6 @@ where
 	}
 }
 
-
-
-
 impl<H, KF, T> HashDBRef<H, T> for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
