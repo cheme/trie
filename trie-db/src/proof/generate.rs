@@ -28,7 +28,7 @@ use crate::{
 };
 use ordered_trie::BinaryHasher;
 
-struct StackEntry<'a, C: NodeCodec, H: BinaryHasher> {
+struct StackEntry<'a, C: NodeCodec, H> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: LeftNibbleSlice<'a>,
 	node: OwnedNode<Vec<u8>>,

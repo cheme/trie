@@ -14,12 +14,15 @@
 
 use crate::rstd::{
 	convert::TryInto, iter::Peekable, marker::PhantomData, result::Result, vec, vec::Vec,
+	iter::from_fn, iter::FromFn,
 };
 use crate::{
 	CError, ChildReference, nibble::LeftNibbleSlice, nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle}, NodeCodec, TrieHash, TrieLayout,
 };
 use hash_db::Hasher;
+use ordered_trie::BinaryHasher;
+use crate::node_codec::{Bitmap, BITMAP_LENGTH};
 
 
 /// Errors that may occur during proof verification. Most of the errors types simply indicate that
@@ -94,7 +97,7 @@ impl<HO: std::fmt::Debug, CE: std::error::Error + 'static> std::error::Error for
 	}
 }
 
-struct StackEntry<'a, C: NodeCodec> {
+struct StackEntry<'a, C: NodeCodec, H> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: LeftNibbleSlice<'a>,
 	node: Node<'a>,
@@ -106,16 +109,79 @@ struct StackEntry<'a, C: NodeCodec> {
 	child_index: usize,
 	/// The child references to use in reconstructing the trie nodes.
 	children: Vec<Option<ChildReference<C::HashOut>>>,
-	_marker: PhantomData<C>,
+	complex: Option<(Bitmap, Vec<C::HashOut>)>,
+	_marker: PhantomData<(C, H)>,
 }
 
-impl<'a, C: NodeCodec> StackEntry<'a, C> {
-	fn new(node_data: &'a [u8], prefix: LeftNibbleSlice<'a>, is_inline: bool)
+impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
+	where
+		H: BinaryHasher<Out = C::HashOut>,
+{
+	fn new(node_data: &'a [u8], prefix: LeftNibbleSlice<'a>, is_inline: bool, complex: bool)
 		   -> Result<Self, Error<C::HashOut, C::Error>>
 	{
-		let node = C::decode(node_data)
-			.map_err(Error::DecodeError)?;
-		let children_len = match node {
+		let (node, complex) = if !is_inline && complex {
+			// TODO factorize with trie_codec
+			let encoded_node = node_data;
+			let (mut node, mut offset) = C::decode_no_child(encoded_node)
+				.map_err(Error::DecodeError)?;
+			match &mut node {
+				Node::Branch(b_child, _) | Node::NibbledBranch(_, b_child, _) => {
+					if encoded_node.len() < offset + 3 {
+						// TODO new error or move this parte to codec trait and use codec error
+						return Err(Error::IncompleteProof);
+					}
+					let keys_position = Bitmap::decode(&encoded_node[offset..offset + BITMAP_LENGTH]);
+					offset += BITMAP_LENGTH;
+
+					let mut nb_additional;
+					// inline nodes
+					loop {
+						let nb = encoded_node[offset] as usize;
+						offset += 1;
+						if nb >= 128 {
+							nb_additional = nb - 128;
+							break;
+						}
+						if encoded_node.len() < offset + nb + 2 {
+							return Err(Error::IncompleteProof);
+						}
+						let ix = encoded_node[offset] as usize;
+						offset += 1;
+						let inline = &encoded_node[offset..offset + nb];
+						if ix >= NIBBLE_LENGTH {
+							return Err(Error::IncompleteProof);
+						}
+						b_child[ix] = Some(NodeHandle::Inline(inline));
+						offset += nb;
+					}
+					let hash_len = <H as BinaryHasher>::NULL_HASH.len();
+					let additional_len = nb_additional * hash_len;
+					if encoded_node.len() < offset + additional_len {
+						return Err(Error::IncompleteProof);
+					}
+					let additional_hashes = from_fn(move || {
+						if nb_additional > 0 {
+							let mut hash = <H::Out>::default();
+							hash.as_mut().copy_from_slice(&encoded_node[offset..offset + hash_len]);
+							offset += hash_len;
+							nb_additional -= 1;
+							Some(hash)
+						} else {
+							None
+						}
+					});
+					// TODO dedicated iterator type instead of from_fn to avoid alloc
+					let additional_hashes: Vec<H::Out> = additional_hashes.collect();
+					(node, Some((keys_position, additional_hashes)))
+				},
+				_ => (node, None),
+			}
+		} else {
+			(C::decode(node_data)
+				.map_err(Error::DecodeError)?, None)
+		};
+		let children_len = match node { // TODO use array
 			Node::Empty | Node::Leaf(..) => 0,
 			Node::Extension(..) => 1,
 			Node::Branch(..) | Node::NibbledBranch(..) => NIBBLE_LENGTH,
@@ -132,6 +198,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 			value,
 			child_index: 0,
 			children: vec![None; children_len],
+			complex,
 			_marker: PhantomData::default(),
 		})
 	}
@@ -181,6 +248,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 		&mut self,
 		child_prefix: LeftNibbleSlice<'a>,
 		proof_iter: &mut I,
+		complex: bool,
 	) -> Result<Self, Error<C::HashOut, C::Error>>
 		where
 			I: Iterator<Item=&'a Vec<u8>>,
@@ -189,7 +257,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 			Node::Extension(_, child) => {
 				// Guaranteed because of sorted keys order.
 				assert_eq!(self.child_index, 0);
-				Self::make_child_entry(proof_iter, child, child_prefix)
+				Self::make_child_entry(proof_iter, child, child_prefix, complex)
 			}
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
 				// because this is a branch
@@ -207,7 +275,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 				}
 				let child = children[self.child_index]
 					.expect("guaranteed by advance_item");
-				Self::make_child_entry(proof_iter, child, child_prefix)
+				Self::make_child_entry(proof_iter, child, child_prefix, complex)
 			}
 			_ => panic!("cannot have children"),
 		}
@@ -241,6 +309,7 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 		proof_iter: &mut I,
 		child: NodeHandle<'a>,
 		prefix: LeftNibbleSlice<'a>,
+		complex: bool,
 	) -> Result<Self, Error<C::HashOut, C::Error>>
 		where
 			I: Iterator<Item=&'a Vec<u8>>,
@@ -250,9 +319,9 @@ impl<'a, C: NodeCodec> StackEntry<'a, C> {
 				if data.is_empty() {
 					let node_data = proof_iter.next()
 						.ok_or(Error::IncompleteProof)?;
-					StackEntry::new(node_data, prefix, false)
+					StackEntry::new(node_data, prefix, false, complex)
 				} else {
-					StackEntry::new(data, prefix, true)
+					StackEntry::new(data, prefix, true, complex)
 				}
 			}
 			NodeHandle::Hash(data) => {
@@ -425,7 +494,7 @@ pub fn verify_proof<'a, L, I, K, V>(root: &<L::Hash as Hasher>::Out, proof: &[Ve
 
 	// A stack of child references to fill in omitted branch children for later trie nodes in the
 	// proof.
-	let mut stack: Vec<StackEntry<L::Codec>> = Vec::new();
+	let mut stack: Vec<StackEntry<L::Codec, L::Hash>> = Vec::new();
 
 	let root_node = match proof_iter.next() {
 		Some(node) => node,
@@ -434,13 +503,18 @@ pub fn verify_proof<'a, L, I, K, V>(root: &<L::Hash as Hasher>::Out, proof: &[Ve
 	let mut last_entry = StackEntry::new(
 		root_node,
 		LeftNibbleSlice::new(&[]),
-		false
+		false,
+		L::COMPLEX_HASH,
 	)?;
 	loop {
 		// Insert omitted value.
 		match last_entry.advance_item(&mut items_iter)? {
 			Step::Descend(child_prefix) => {
-				let next_entry = last_entry.advance_child_index(child_prefix, &mut proof_iter)?;
+				let next_entry = last_entry.advance_child_index(
+					child_prefix,
+					&mut proof_iter,
+					L::COMPLEX_HASH,
+				)?;
 				stack.push(last_entry);
 				last_entry = next_entry;
 			}
