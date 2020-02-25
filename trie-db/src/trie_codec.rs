@@ -137,7 +137,7 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);
-					Bitmap::encode(self.omit_children.iter().map(|b| *b), &mut result[bitmap_start..]);
+					let mut in_proof_children = self.omit_children.clone();
 					// write all inline nodes
 					for (ix, child) in children.iter().enumerate() {
 						if let Some(ChildReference::Inline(h, nb)) = child.as_ref() {
@@ -145,14 +145,14 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 							result.push(*nb as u8);
 							result.push(ix as u8);
 							result.extend_from_slice(&h.as_ref()[..*nb]);
+							in_proof_children[ix] = true;
 						}
 					}
-					let nb_children = children.iter().filter(|v| v.is_some()).count();
+					Bitmap::encode(in_proof_children.iter().map(|b| *b), &mut result[bitmap_start..]);
 					let additional_hashes = binary_additional_hashes::<H>(
 						&children[..],
-						&self.omit_children[..],
+						&in_proof_children[..],
 						hash_buf,
-						nb_children as usize,
 					);
 					result.push((additional_hashes.len() as u8) | 128); // first bit at one indicates we are on additional hashes
 					for hash in additional_hashes {
@@ -183,7 +183,7 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);
-					Bitmap::encode(self.omit_children.iter().map(|b| *b), &mut result[bitmap_start..]);
+					let mut in_proof_children = self.omit_children.clone();
 					// write all inline nodes
 					for (ix, child) in children.iter().enumerate() {
 						if let Some(ChildReference::Inline(h, nb)) = child.as_ref() {
@@ -191,14 +191,14 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 							result.push(*nb as u8);
 							result.push(ix as u8);
 							result.extend_from_slice(&h.as_ref()[..*nb]);
+							in_proof_children[ix] = true;
 						}
 					}
-					let nb_children = children.iter().filter(|v| v.is_some()).count();
+					Bitmap::encode(in_proof_children.iter().map(|b| *b), &mut result[bitmap_start..]);
 					let additional_hashes = binary_additional_hashes::<H>(
 						&children[..],
-						&self.omit_children[..],
+						&in_proof_children[..],
 						hash_buf,
-						nb_children as usize,
 					);
 					result.push((additional_hashes.len() as u8) | 128); // first bit at one indicates we are on additional hashes
 					for hash in additional_hashes {
@@ -381,13 +381,10 @@ impl<'a, C: NodeCodec, F> DecoderStackEntry<'a, C, F> {
 				if let Some((bitmap, _)) = self.complex.as_ref() {
 					while self.child_index < NIBBLE_LENGTH {
 						match children[self.child_index] {
-							Some(NodeHandle::Inline(data)) if bitmap.value_at(self.child_index) => {
-								debug_assert!(data.is_empty());
+							Some(NodeHandle::Inline(data)) if data.is_empty() && bitmap.value_at(self.child_index) => {
 								return Ok(false);
 							},
 							Some(child) => {
-								// TODO could use a static value (those are missing child
-								// from reconstructed proof db).
 								let child_ref = child.try_into()
 									.map_err(|hash| Box::new(
 										TrieError::InvalidHash(C::HashOut::default(), hash)
@@ -519,10 +516,10 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 
 	for (i, encoded_node) in encoded.iter().enumerate() {
 		let (node, complex) = if L::COMPLEX_HASH  {
-			let (node, mut offset) = L::Codec::decode_no_child(encoded_node)
+			let (mut node, mut offset) = L::Codec::decode_no_child(encoded_node)
 				.map_err(|err| Box::new(TrieError::DecoderError(<TrieHash<L>>::default(), err)))?;
-			match node {
-				Node::Branch(mut b_child, _) | Node::NibbledBranch(_, mut b_child, _) => {
+			match &mut node {
+				Node::Branch(b_child, _) | Node::NibbledBranch(_, b_child, _) => {
 					if encoded_node.len() < offset + 3 {
 						// TODO new error or move this parte to codec trait and use codec error
 						return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
@@ -664,8 +661,8 @@ fn binary_additional_hashes<H: BinaryHasher>(
 	children: &[Option<ChildReference<H::Out>>],
 	in_proof_children: &[bool],
 	hash_buf: &mut H::Buffer,
-	nb_children: usize,
 ) -> Vec<H::Out> {
+	let nb_children = children.iter().filter(|v| v.is_some()).count();
 	let tree = SequenceBinaryTree::new(0, 0, nb_children);
 
 	let to_prove = children.iter().zip(in_proof_children.iter())
