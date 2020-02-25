@@ -138,7 +138,8 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					result.push(0u8);
 					result.push(0u8);
 					let mut in_proof_children = self.omit_children.clone();
-					// write all inline nodes
+					// write all inline nodes TODO we could omit children first
+					// as in std case and fill this bitmap as in generate.rs.
 					for (ix, child) in children.iter().enumerate() {
 						if let Some(ChildReference::Inline(h, nb)) = child.as_ref() {
 							debug_assert!(*nb < 128);
@@ -657,7 +658,7 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 	Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())))
 }
 
-fn binary_additional_hashes<H: BinaryHasher>(
+pub(crate) fn binary_additional_hashes<H: BinaryHasher>(
 	children: &[Option<ChildReference<H::Out>>],
 	in_proof_children: &[bool],
 	hash_buf: &mut H::Buffer,
