@@ -1025,7 +1025,12 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 				inline_data.as_ref()[..len].encode_to(&mut output);
 				true
 			}
-			None => false,
+			None => {
+				if register_children.is_some() {
+					*ix += 1;
+				}
+				false
+			},
 		}), bitmap.as_mut());
 		output[bitmap_index..bitmap_index + BITMAP_LENGTH]
 			.copy_from_slice(&bitmap.as_ref()[..BITMAP_LENGTH]);
