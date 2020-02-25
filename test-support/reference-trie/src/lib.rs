@@ -817,7 +817,12 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 				inline_data.as_ref()[..len].encode_to(&mut output);
 				true
 			}
-			None => false,
+			None => {
+				if register_children.is_some() {
+					*ix += 1;
+				}
+				false
+			},
 		});
 		branch_node_buffered(have_value, has_children, prefix.as_mut());
 		output[0..BITMAP_LENGTH + 1].copy_from_slice(prefix.as_ref());

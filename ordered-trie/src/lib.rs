@@ -833,7 +833,6 @@ impl<KN: KeyNode> MultiProofState<KN> {
 		result.current_key = next_keys.next();
 		if result.current_key.is_none() {
 			result.is_empty = true;
-			return result;
 		}
 		result.next_key1 = next_keys.next();
 		result.next_key2 = next_keys.next();
@@ -1417,6 +1416,7 @@ mod test {
 		let result = base16_roots();
 		let tests = [
 			(1, &[][..]),
+			(1, &[0][..]),
 			(4, &[][..]),
 			(4, &[1][..]),
 			(4, &[1, 2][..]),

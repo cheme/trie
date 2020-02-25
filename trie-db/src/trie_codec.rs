@@ -101,7 +101,6 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 	fn encode_node<H>(
 		&self,
 		complex_hash: bool,
-		omit_children: &[bool],
 		hash_buf: &mut H::Buffer,
 	) -> Result<Vec<u8>, C::HashOut, C::Error>
 		where
@@ -138,10 +137,24 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);
-					Bitmap::encode(omit_children.iter().map(|b| *b), &mut result[bitmap_start..]);
+					Bitmap::encode(self.omit_children.iter().map(|b| *b), &mut result[bitmap_start..]);
+					// write all inline nodes
+					for (ix, child) in children.iter().enumerate() {
+						if let Some(ChildReference::Inline(h, nb)) = child.as_ref() {
+							debug_assert!(*nb < 128);
+							result.push(*nb as u8);
+							result.push(ix as u8);
+							result.extend_from_slice(&h.as_ref()[..*nb]);
+						}
+					}
 					let nb_children = children.iter().filter(|v| v.is_some()).count();
-					let additional_hashes = binary_additional_hashes::<H>(&children[..], omit_children, hash_buf, nb_children as usize);
-					result.push(additional_hashes.len() as u8);
+					let additional_hashes = binary_additional_hashes::<H>(
+						&children[..],
+						&self.omit_children[..],
+						hash_buf,
+						nb_children as usize,
+					);
+					result.push((additional_hashes.len() as u8) | 128); // first bit at one indicates we are on additional hashes
 					for hash in additional_hashes {
 						result.extend_from_slice(hash.as_ref());
 					}
@@ -167,10 +180,27 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 				);
 				if complex_hash {
 					no_child.trim_no_child(&mut result);
+					let bitmap_start = result.len();
+					result.push(0u8);
+					result.push(0u8);
+					Bitmap::encode(self.omit_children.iter().map(|b| *b), &mut result[bitmap_start..]);
+					// write all inline nodes
+					for (ix, child) in children.iter().enumerate() {
+						if let Some(ChildReference::Inline(h, nb)) = child.as_ref() {
+							debug_assert!(*nb < 128);
+							result.push(*nb as u8);
+							result.push(ix as u8);
+							result.extend_from_slice(&h.as_ref()[..*nb]);
+						}
+					}
 					let nb_children = children.iter().filter(|v| v.is_some()).count();
-					result.push(nb_children as u8);
-					let additional_hashes = binary_additional_hashes::<H>(&children[..], omit_children, hash_buf, nb_children as usize);
-					result.push(additional_hashes.len() as u8);
+					let additional_hashes = binary_additional_hashes::<H>(
+						&children[..],
+						&self.omit_children[..],
+						hash_buf,
+						nb_children as usize,
+					);
+					result.push((additional_hashes.len() as u8) | 128); // first bit at one indicates we are on additional hashes
 					for hash in additional_hashes {
 						result.extend_from_slice(hash.as_ref());
 					}
@@ -272,7 +302,6 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 					} else {
 						output[last_entry.output_index] = last_entry.encode_node::<L::Hash>(
 							L::COMPLEX_HASH,
-							&last_entry.omit_children[..],
 							hash_buf,
 						)?;
 					}
@@ -303,7 +332,6 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 	while let Some(entry) = stack.pop() {
 		output[entry.output_index] = entry.encode_node::<L::Hash>(
 			L::COMPLEX_HASH,
-			&entry.omit_children[..],
 			hash_buf,
 		)?;
 	}
@@ -350,20 +378,42 @@ impl<'a, C: NodeCodec, F> DecoderStackEntry<'a, C, F> {
 				self.child_index += 1;
 			}
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
-				while self.child_index < NIBBLE_LENGTH {
-					match children[self.child_index] {
-						Some(NodeHandle::Inline(data)) if data.is_empty() =>
-							return Ok(false),
-						Some(child) => {
-							let child_ref = child.try_into()
-								.map_err(|hash| Box::new(
-									TrieError::InvalidHash(C::HashOut::default(), hash)
-								))?;
-							self.children[self.child_index] = Some(child_ref);
+				if let Some((bitmap, _)) = self.complex.as_ref() {
+					while self.child_index < NIBBLE_LENGTH {
+						match children[self.child_index] {
+							Some(NodeHandle::Inline(data)) if bitmap.value_at(self.child_index) => {
+								debug_assert!(data.is_empty());
+								return Ok(false);
+							},
+							Some(child) => {
+								// TODO could use a static value (those are missing child
+								// from reconstructed proof db).
+								let child_ref = child.try_into()
+									.map_err(|hash| Box::new(
+										TrieError::InvalidHash(C::HashOut::default(), hash)
+									))?;
+								self.children[self.child_index] = Some(child_ref);
+							},
+							None => {},
 						}
-						None => {}
+						self.child_index += 1;
 					}
-					self.child_index += 1;
+				} else {
+					while self.child_index < NIBBLE_LENGTH {
+						match children[self.child_index] {
+							Some(NodeHandle::Inline(data)) if data.is_empty() =>
+								return Ok(false),
+							Some(child) => {
+								let child_ref = child.try_into()
+									.map_err(|hash| Box::new(
+										TrieError::InvalidHash(C::HashOut::default(), hash)
+									))?;
+								self.children[self.child_index] = Some(child_ref);
+							}
+							None => {}
+						}
+						self.child_index += 1;
+					}
 				}
 			}
 			_ => {}
@@ -471,35 +521,60 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 		let (node, complex) = if L::COMPLEX_HASH  {
 			let (node, mut offset) = L::Codec::decode_no_child(encoded_node)
 				.map_err(|err| Box::new(TrieError::DecoderError(<TrieHash<L>>::default(), err)))?;
-			if node.is_branch() {
-				if encoded_node.len() < offset + 3 {
-					// TODO new error or move this parte to codec trait and use codec error
-					return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
-				}
-				let keys_position = Bitmap::decode(&encoded_node[offset..offset + BITMAP_LENGTH]);
-				offset += BITMAP_LENGTH;
-				let mut nb_additional = encoded_node[offset] as usize;
-				offset += 1;
-				let hash_len = <L::Hash as BinaryHasher>::NULL_HASH.len();
-				let additional_len = nb_additional * hash_len;
-				if encoded_node.len() < offset + additional_len {
-					// TODO new error or move this parte to codec trait and use codec error
-					return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
-				}
-				let additional_hashes = from_fn(move || {
-					if nb_additional > 0 {
-						let mut hash = <TrieHash<L>>::default();
-						hash.as_mut().copy_from_slice(&encoded_node[offset..offset + hash_len]);
-						offset += hash_len;
-						nb_additional -= 1;
-						Some(hash)
-					} else {
-						None
+			match node {
+				Node::Branch(mut b_child, _) | Node::NibbledBranch(_, mut b_child, _) => {
+					if encoded_node.len() < offset + 3 {
+						// TODO new error or move this parte to codec trait and use codec error
+						return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
 					}
-				});
-				(node, Some((keys_position, additional_hashes)))
-			} else {
-				(node, None)
+					let keys_position = Bitmap::decode(&encoded_node[offset..offset + BITMAP_LENGTH]);
+					offset += BITMAP_LENGTH;
+
+					let mut nb_additional;
+					// inline nodes
+					loop {
+						let nb = encoded_node[offset] as usize;
+						offset += 1;
+						if nb >= 128 {
+							nb_additional = nb - 128;
+							break;
+						}
+						if encoded_node.len() < offset + nb + 2 {
+							// TODO new error or move this parte to codec trait and use codec error
+							return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
+						}
+						let ix = encoded_node[offset] as usize;
+						offset += 1;
+						let inline = &encoded_node[offset..offset + nb];
+						if ix >= NIBBLE_LENGTH {
+							// TODO new error or move this parte to codec trait and use codec error
+							return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
+						}
+						b_child[ix] = Some(NodeHandle::Inline(inline));
+						offset += nb;
+					}
+					let hash_len = <L::Hash as BinaryHasher>::NULL_HASH.len();
+					let additional_len = nb_additional * hash_len;
+					if encoded_node.len() < offset + additional_len {
+						// TODO new error or move this parte to codec trait and use codec error
+						return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())));
+					}
+					let additional_hashes = from_fn(move || {
+						if nb_additional > 0 {
+							let mut hash = <TrieHash<L>>::default();
+							hash.as_mut().copy_from_slice(&encoded_node[offset..offset + hash_len]);
+							offset += hash_len;
+							nb_additional -= 1;
+							Some(hash)
+						} else {
+							None
+						}
+					});
+					(node, Some((keys_position, additional_hashes)))
+				},
+				_ => { 
+					(node, None)
+				},
 			}
 		} else {
 			(
