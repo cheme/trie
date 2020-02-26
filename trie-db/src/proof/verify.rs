@@ -226,20 +226,26 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 					child
 				), EncodedNoChild::Unused)
 			}
-			Node::Branch(_, _) =>
+			Node::Branch(_, _) => {
+				let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
+				let register_children = &mut register_children[..];
 				C::branch_node(
 					self.children.iter(),
 					self.value,
-					None,
-				),
-			Node::NibbledBranch(partial, _, _) =>
+					Some(register_children), // TODO again unused register result
+				)
+			},
+			Node::NibbledBranch(partial, _, _) => {
+				let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
+				let register_children = &mut register_children[..];
 				C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					self.children.iter(),
 					self.value,
-					None,
-				),
+					Some(register_children), // TODO again unused register result
+				)
+			},
 		})
 	}
 
