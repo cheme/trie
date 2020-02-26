@@ -18,10 +18,10 @@ use crate::rstd::{
 };
 use crate::{
 	CError, ChildReference, nibble::LeftNibbleSlice, nibble_ops::NIBBLE_LENGTH,
-	node::{Node, NodeHandle}, NodeCodec, TrieHash, TrieLayout,
+	node::{Node, NodeHandle}, NodeCodec, TrieHash, TrieLayout, EncodedNoChild,
 };
 use hash_db::Hasher;
-use ordered_trie::BinaryHasher;
+use ordered_trie::{BinaryHasher, HasherComplex};
 use crate::node_codec::{Bitmap, BITMAP_LENGTH};
 
 
@@ -120,6 +120,8 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 	fn new(node_data: &'a [u8], prefix: LeftNibbleSlice<'a>, is_inline: bool, complex: bool)
 		   -> Result<Self, Error<C::HashOut, C::Error>>
 	{
+		let children_len = NIBBLE_LENGTH;
+		let mut	children = vec![None; NIBBLE_LENGTH]; // TODO use array
 		let (node, complex) = if !is_inline && complex {
 			// TODO factorize with trie_codec
 			let encoded_node = node_data;
@@ -181,34 +183,31 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 			(C::decode(node_data)
 				.map_err(Error::DecodeError)?, None)
 		};
-		let children_len = match node { // TODO use array
-			Node::Empty | Node::Leaf(..) => 0,
-			Node::Extension(..) => 1,
-			Node::Branch(..) | Node::NibbledBranch(..) => NIBBLE_LENGTH,
-		};
 		let value = match node {
 			Node::Empty | Node::Extension(_, _) => None,
 			Node::Leaf(_, value) => Some(value),
 			Node::Branch(_, value) | Node::NibbledBranch(_, _, value) => value,
 		};
+
+
 		Ok(StackEntry {
 			node,
 			is_inline,
 			prefix,
 			value,
 			child_index: 0,
-			children: vec![None; children_len],
+			children,
 			complex,
 			_marker: PhantomData::default(),
 		})
 	}
 
 	/// Encode this entry to an encoded trie node with data properly reconstructed.
-	fn encode_node(mut self) -> Result<Vec<u8>, Error<C::HashOut, C::Error>> {
+	fn encode_node(&mut self) -> Result<(Vec<u8>, EncodedNoChild), Error<C::HashOut, C::Error>> {
 		self.complete_children()?;
 		Ok(match self.node {
 			Node::Empty =>
-				C::empty_node().to_vec(),
+				(C::empty_node().to_vec(), EncodedNoChild::Unused),
 			Node::Leaf(partial, _) => {
 				let value = self.value
 					.expect(
@@ -216,31 +215,31 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 						value is only ever reassigned in the ValueMatch::MatchesLeaf match \
 						clause, which assigns only to Some"
 					);
-				C::leaf_node(partial.right(), value)
+				(C::leaf_node(partial.right(), value), EncodedNoChild::Unused)
 			}
 			Node::Extension(partial, _) => {
 				let child = self.children[0]
 					.expect("the child must be completed since child_index is 1");
-				C::extension_node(
+				(C::extension_node(
 					partial.right_iter(),
 					partial.len(),
 					child
-				)
+				), EncodedNoChild::Unused)
 			}
 			Node::Branch(_, _) =>
 				C::branch_node(
 					self.children.iter(),
 					self.value,
-					None, // TODO allow complex here
-				).0,
+					None,
+				),
 			Node::NibbledBranch(partial, _, _) =>
 				C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					self.children.iter(),
 					self.value,
-					None, // TODO allow complex here
-				).0,
+					None,
+				),
 		})
 	}
 
@@ -520,7 +519,7 @@ pub fn verify_proof<'a, L, I, K, V>(root: &<L::Hash as Hasher>::Out, proof: &[Ve
 			}
 			Step::UnwindStack => {
 				let is_inline = last_entry.is_inline;
-				let node_data = last_entry.encode_node()?;
+				let (node_data, no_child) = last_entry.encode_node()?;
 
 				let child_ref = if is_inline {
 					if node_data.len() > L::Hash::LENGTH {
@@ -530,8 +529,41 @@ pub fn verify_proof<'a, L, I, K, V>(root: &<L::Hash as Hasher>::Out, proof: &[Ve
 					&mut hash.as_mut()[..node_data.len()].copy_from_slice(node_data.as_ref());
 					ChildReference::Inline(hash, node_data.len())
 				} else {
-					let hash = L::Hash::hash(&node_data);
-					ChildReference::Hash(hash)
+					ChildReference::Hash(if let Some((bitmap_keys, additional_hash)) = last_entry.complex {
+						let children = last_entry.children;
+						let nb_children = children.iter().filter(|v| v.is_some()).count();
+						let children = children.into_iter()
+							.enumerate()
+							.filter_map(|(ix, v)| {
+								v.as_ref().map(|v| (ix, v.clone()))
+							})
+							.map(|(ix, child_ref)| {
+								if bitmap_keys.value_at(ix) {
+									Some(match child_ref {
+										ChildReference::Hash(h) => h,
+										ChildReference::Inline(h, _) => h,
+									})
+								} else {
+									None
+								}
+							});
+
+						if let Some(h) = L::Hash::hash_complex(
+							&no_child.encoded_no_child(node_data.as_slice())[..],
+							nb_children,
+							children,
+							additional_hash.into_iter(),
+							true,
+						) {
+							h
+						} else {
+							// TODO better error for the invalid
+							// complex hash
+							return Err(Error::RootMismatch(Default::default()));
+						}
+					} else {
+						L::Hash::hash(&node_data)
+					})
 				};
 
 				if let Some(entry) = stack.pop() {
