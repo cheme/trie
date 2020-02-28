@@ -191,3 +191,25 @@ pub trait CompositeManagement<H> {
 	fn get_management(&mut self, DualState) -> DualManagement<Self::M1, Self::M2>;
 }
 */
+
+
+// Additional trait that should not be in this crate (deals with collections).
+
+pub trait MultipleDB {
+	type Handle;
+	fn set_collection(&mut self, h: Self::Handle);
+	fn current_collection(&self) -> Self::Handle;
+}
+pub struct Collection {
+	// static handle
+	pub top: &'static[u8],
+	// dynamic handle
+	pub child: Vec<u8>,
+}
+pub trait ManagedDB {
+	type Collection;
+	type Handle;
+	fn get_collection(&self, collection: &Self::Collection) -> Option<Self::Handle>;
+	fn new_collection(&mut self, collection: &Self::Collection) -> Self::Handle;
+	fn delete_collection(&mut self, collection: &Self::Collection);
+}
