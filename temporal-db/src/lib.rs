@@ -20,7 +20,39 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+#[cfg(feature = "std")]
+mod rstd {
+	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
+	pub use std::collections::VecDeque;
+	pub use std::error::Error;
+}
+
+#[cfg(not(feature = "std"))]
+mod rstd {
+	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
+	pub use alloc::{boxed, rc, vec};
+	pub use alloc::collections::VecDeque;
+	pub trait Error {}
+	impl<T> Error for T {}
+}
+
 use core::marker::PhantomData;
+
+/// Implementation of temporal-db traits
+/// using historied values
+pub mod historied;
+
+#[cfg_attr(test, derive(PartialEq, Debug))]
+///  result to be able to proceed
+/// with further update if the value needs it.
+pub enum UpdateResult<T> {
+	Unchanged,
+	Changed(T),
+	Cleared(T),
+}
 
 /// Trait for immutable reference of PlainDB.
 pub trait StateDBRef<K, V> {
@@ -33,6 +65,13 @@ pub trait StateDBRef<K, V> {
 
 	/// Check for the existance of a hash-key.
 	fn contains(&self, key: &K, at: &Self::S) -> bool;
+}
+
+/// Variant of `StateDBRef` to return value without copy.
+pub trait InMemoryStateDBRef<K, V>: StateDBRef<K, V> {
+	/// Look up a given hash into the bytes that hash to it, returning None if the
+	/// hash is not known.
+	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V>;
 }
 
 pub trait StateDB<K, V>: StateDBRef<K, V> {
@@ -114,6 +153,7 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	/// TODO see if Pin could do something for us.
 	fn applied_migrate(&mut self);
 }
+
 /// This trait is for mapping a given state to the DB opaque inner state.
 pub trait ForkableManagement<H>: ManagementRef<H> {
 	fn register_external_state(&mut self, state: H, at: &Self::S) -> Self::S;
@@ -200,12 +240,14 @@ pub trait MultipleDB {
 	fn set_collection(&mut self, h: Self::Handle);
 	fn current_collection(&self) -> Self::Handle;
 }
+
 pub struct Collection {
 	// static handle
-	pub top: &'static[u8],
+	pub top: &'static [u8],
 	// dynamic handle
 	pub child: Vec<u8>,
 }
+
 pub trait ManagedDB {
 	type Collection;
 	type Handle;

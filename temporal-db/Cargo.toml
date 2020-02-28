@@ -8,6 +8,10 @@ categories = [ "no-std" ]
 repository = "https://github.com/paritytech/trie"
 edition = "2018"
 
+[dependencies]
+smallvec = "1.2"
+hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
+
 [features]
 default = ["std"]
 std = [
