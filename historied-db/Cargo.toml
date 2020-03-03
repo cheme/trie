@@ -1,5 +1,5 @@
 [package]
-name = "temporal-db"
+name = "historied-db"
 version = "0.0.1"
 authors = ["Parity Technologies <admin@parity.io>"]
 description = "Trait for key value databases with history."

@@ -58,14 +58,14 @@ pub trait Value<V>: ValueRef<V> {
 	type Migrate;
 
 	/// Insert or update a value.
-	fn set(&mut self, value: V, at: &Self::SE);
+	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()>;
 
 
 	/// Discard history at.
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>>;
 
-	fn gc(&mut self, gc: Self::GC) -> UpdateResult<()>;
-	fn migrate(&mut self, mig: Self::Migrate) -> UpdateResult<()>;
+	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()>;
+	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()>;
 }
 
 pub trait InMemoryValue<V>: Value<V> {

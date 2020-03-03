@@ -27,6 +27,7 @@ extern crate alloc;
 mod rstd {
 	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
 	pub use std::collections::VecDeque;
+	pub use std::collections::{BTreeMap, BTreeSet};
 	pub use std::error::Error;
 }
 
@@ -35,13 +36,14 @@ mod rstd {
 	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
+	pub use alloc::collections::BTreeMap;
 	pub trait Error {}
 	impl<T> Error for T {}
 }
 
 use core::marker::PhantomData;
 
-/// Implementation of temporal-db traits
+/// Implementation of historied-db traits
 /// using historied values
 pub mod historied;
 
@@ -75,6 +77,11 @@ pub trait InMemoryStateDBRef<K, V>: StateDBRef<K, V> {
 }
 
 pub trait StateDB<K, V>: StateDBRef<K, V> {
+	/// State to use here.
+	/// We use a different state than
+	/// for the ref as it can use different
+	/// constraints.
+	type SE;
 	/// GC strategy that can be applied.
 	/// GC can be run in parallel, it does not
 	/// make query incompatible.
@@ -85,15 +92,15 @@ pub trait StateDB<K, V>: StateDBRef<K, V> {
 	/// Insert a datum item into the DB. Insertions are counted and the equivalent
 	/// number of `remove()`s must be performed before the data is considered dead.
 	/// The caller should ensure that a key only corresponds to one value.
-	fn emplace(&mut self, key: K, value: V, at: &Self::S);
+	fn emplace(&mut self, key: K, value: V, at: &Self::SE);
 
 	/// Remove a datum previously inserted. Insertions can be "owed" such that the
 	/// same number of `insert()`s may happen without the data being eventually
 	/// being inserted into the DB. It can be "owed" more than once.
 	/// The caller should ensure that a key only corresponds to one value.
-	fn remove(&mut self, key: &K, at: &Self::S);
-	fn gc(&mut self, gc: Self::GC);
-	fn migrate(&mut self, mig: Self::Migrate);
+	fn remove(&mut self, key: &K, at: &Self::SE);
+	fn gc(&mut self, gc: &Self::GC);
+	fn migrate(&mut self, mig: &Self::Migrate);
 }
 
 pub struct Migrate<H, M>(M, PhantomData<H>);
@@ -121,25 +128,17 @@ pub trait ManagementRef<H> {
 }
 
 pub trait Management<H>: ManagementRef<H> + Sized {
+	/// attached db state for actual modification
+	type SE;
 	fn init() -> (Self, Self::S);
-	fn latest_state(&self) -> Self::S;
-	fn reverse_lookup(&self, state: &Self::S) -> H;
-	fn drop_from(&mut self, state: &Self::S);
-	fn try_drop_from(&mut self, state: &H) {
-		self.get_db_state(state).map(|at| self.drop_from(&at));
-	}
-	fn drop_before(&mut self, state: &Self::S);
-	fn try_drop_before(&mut self, state: &H) {
-		self.get_db_state(state).map(|at| self.drop_before(&at));
-	}
-	fn drop_at(&mut self, state: &Self::S);
-	fn try_drop_at(&mut self, state: &H) {
-		self.get_db_state(state).map(|at| self.drop_at(&at));
-	}
+	fn latest_state(&self) -> Self::SE;
+	fn reverse_lookup(&self, state: &Self::S) -> Option<H>;
 
 	/// report a gc did run successfully, this only update gc
 	/// information to not include these info.
 	fn applied_gc(&mut self, gc: Self::GC);
+
+
 	/// see migrate. When running thes making a backup of this management
 	/// state is usually a good idea (this method does not manage
 	/// backup or rollback).
