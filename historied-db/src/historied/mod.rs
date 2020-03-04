@@ -19,6 +19,7 @@ use crate::rstd::{vec::Vec, vec};
 use crate::UpdateResult;
 
 pub mod linear;
+pub mod tree_management;
 pub mod encoded_array;
 
 /// Trait for historied value
