@@ -120,20 +120,19 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 			}
 			NodePlan::Branch { value, children } => {
 				let mut branch_options = BranchOptions::default();
-				branch_options.add_encoded_no_child = complex_hash;
 				let children = if complex_hash {
 					let no_omit = [false; NIBBLE_LENGTH];
 					Self::branch_children(node_data, &children, &no_omit[..])?
 				} else {
 					Self::branch_children(node_data, &children, &self.omit_children[..])?
 				};
+				branch_options.encode_no_child = complex_hash;
 				let (mut result, no_child) = C::branch_node(
 					children.iter(),
 					value.clone().map(|range| &node_data[range]),
 					branch_options,
 				);
 				if complex_hash {
-					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);
@@ -171,7 +170,7 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 				};
 				let partial = partial.build(node_data);
 				let mut branch_options = BranchOptions::default();
-				branch_options.add_encoded_no_child = complex_hash;
+				branch_options.encode_no_child = complex_hash;
 				let (mut result, no_child) = C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
@@ -180,7 +179,6 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 					branch_options,
 				);
 				if complex_hash {
-					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);

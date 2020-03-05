@@ -119,13 +119,12 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 				)?;
 				if !self.is_inline && complex {
 					let mut branch_options = BranchOptions::default();
-					branch_options.add_encoded_no_child = true;
+					branch_options.encode_no_child = true;
 					let (mut result, no_child) = C::branch_node(
 						self.children.iter(),
 						value_with_omission(node_data, value, self.omit_value),
 						branch_options,
 					);
-					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);
@@ -173,7 +172,7 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 				if !self.is_inline && complex {
 					// TODO factor with non nibbled!!
 					let mut branch_options = BranchOptions::default();
-					branch_options.add_encoded_no_child = true;
+					branch_options.encode_no_child = true;
 					let (mut result, no_child) = C::branch_node_nibbled(
 						partial.right_iter(),
 						partial.len(),
@@ -181,7 +180,6 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 						value_with_omission(node_data, value, self.omit_value),
 						branch_options,
 					);
-					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
 					result.push(0u8);
 					result.push(0u8);

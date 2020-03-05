@@ -104,7 +104,8 @@ pub struct BranchOptions<'a> {
 	pub register_children: Option<&'a mut [Option<Range<usize>>]>,
 	/// If true we also resolve `EncodedNoChild`.
 	pub add_encoded_no_child: bool,
-	/// If true we encode the without child.
+	/// If true we encode without the children (basis for complex hash
+	/// calculation).
 	pub encode_no_child: bool,
 }
 
@@ -126,24 +127,6 @@ impl EncodedNoChild {
 			EncodedNoChild::Allocated(data) => &data[..],
 		}
 	}
-	// TODO this is bad we should produce a branch that does
-	// not include it in the first place (new encode fn with
-	// default impl using trim no child).
-	pub fn trim_no_child(self, encoded: &mut Vec<u8>) {
-		match self {
-			EncodedNoChild::Unused => (),
-			EncodedNoChild::Range(range) => {
-				encoded.truncate(range.end);
-				if range.start != 0 {
-					*encoded = encoded.split_off(range.start);
-				}
-			},
-			EncodedNoChild::Allocated(data) => {
-				replace(encoded, data);
-			},
-		}
-	}
-
 }
 
 use ordered_trie::{HashDBComplex, HasherComplex};

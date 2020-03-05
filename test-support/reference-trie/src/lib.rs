@@ -781,6 +781,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		};
 		let mut ix = 0;
 		let ix = &mut ix;
+		let encode_no_child = branch_options.encode_no_child;
 		let mut register_children = branch_options.register_children.as_mut();
 		let register_children = &mut register_children;
 		let no_child = if branch_options.add_encoded_no_child {
@@ -803,7 +804,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 					});
 					*ix += 1;
 				}
-				h.as_ref().encode_to(&mut output);
+				if !encode_no_child {
+					h.as_ref().encode_to(&mut output);
+				}
 				true
 			}
 			&Some(ChildReference::Inline(inline_data, len)) => {
@@ -815,7 +818,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 					});
 					*ix += 1;
 				}
-				inline_data.as_ref()[..len].encode_to(&mut output);
+				if !encode_no_child {
+					inline_data.as_ref()[..len].encode_to(&mut output);
+				}
 				true
 			}
 			None => {
@@ -989,6 +994,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		};
 		let mut ix = 0;
 		let ix = &mut ix;
+		let encode_no_child = branch_options.encode_no_child;
 		let mut register_children = branch_options.register_children.as_mut();
 		let register_children = &mut register_children;
 		let no_child = if branch_options.add_encoded_no_child {
@@ -1011,7 +1017,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 					});
 					*ix += 1;
 				}
-				h.as_ref().encode_to(&mut output);
+				if !encode_no_child {
+					h.as_ref().encode_to(&mut output);
+				}
 				true
 			}
 			&Some(ChildReference::Inline(inline_data, len)) => {
@@ -1023,7 +1031,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 					});
 					*ix += 1;
 				}
-				inline_data.as_ref()[..len].encode_to(&mut output);
+				if !encode_no_child {
+					inline_data.as_ref()[..len].encode_to(&mut output);
+				}
 				true
 			}
 			None => {
