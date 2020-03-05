@@ -222,7 +222,7 @@ pub trait FixHash {
 	/// TODO rename to need finalize??
 	/// TODO for keccack we could only hash(hash1 xor hash2)?
 	const NEED_FIRST_HASHED: bool;
-	/// Value of empty hash at some given depth 
+	/// Value of empty hash at some given depth
 	/// TODO test case it
 	const EMPTY_HASHES: &'static [&'static [u8]];
 
@@ -233,9 +233,9 @@ pub trait FixHash {
 	// The length in bytes of the `Out` output. -> is Hasher::Length
 //	const LENGTH: usize;
 
-	/// Compute the hash 
+	/// Compute the hash
 	fn new(first: <Self::Hasher as Hasher>::Out) -> Self;
-	/// Compute the hash 
+	/// Compute the hash
 	fn hash(&mut self, second: &<Self::Hasher as Hasher>::Out);
 	/// Access current state (if NEED_FIRST_HASHED is false).
 	fn current_state(&self) -> &<Self::Hasher as Hasher>::Out;
@@ -243,4 +243,3 @@ pub trait FixHash {
 	fn finalize(self) -> <Self::Hasher as Hasher>::Out;
 }
 */
-

@@ -22,7 +22,7 @@ use hash_db::Hasher;
 
 use crate::node_codec::Bitmap;
 use crate::{
-	CError, ChildReference, nibble::LeftNibbleSlice, nibble_ops::NIBBLE_LENGTH, NibbleSlice, node::{NodeHandle, NodeHandlePlan, NodePlan, OwnedNode}, NodeCodec, Recorder,
+	CError, ChildReference, nibble::LeftNibbleSlice, nibble_ops::NIBBLE_LENGTH, NibbleSlice, node::{NodeHandle, NodeHandlePlan, NodePlan, OwnedNode}, NodeCodec, BranchOptions, Recorder,
 	Result as TrieResult, Trie, TrieError, TrieHash,
 	TrieLayout,
 };
@@ -118,12 +118,12 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 					&mut self.children,
 				)?;
 				if !self.is_inline && complex {
-					let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
-					let register_children = &mut register_children[..];
+					let mut branch_options = BranchOptions::default();
+					branch_options.add_encoded_no_child = true;
 					let (mut result, no_child) = C::branch_node(
 						self.children.iter(),
 						value_with_omission(node_data, value, self.omit_value),
-						Some(register_children),
+						branch_options,
 					);
 					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
@@ -158,7 +158,7 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 					C::branch_node(
 						self.children.into_iter(),
 						value_with_omission(node_data, value, self.omit_value),
-						None, // TODO allow complex here
+						BranchOptions::default(),
 					).0
 				}
 			},
@@ -172,14 +172,14 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 				)?;
 				if !self.is_inline && complex {
 					// TODO factor with non nibbled!!
-					let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
-					let register_children = &mut register_children[..];
+					let mut branch_options = BranchOptions::default();
+					branch_options.add_encoded_no_child = true;
 					let (mut result, no_child) = C::branch_node_nibbled(
 						partial.right_iter(),
 						partial.len(),
 						self.children.iter(),
 						value_with_omission(node_data, value, self.omit_value),
-						Some(register_children),
+						branch_options,
 					);
 					no_child.trim_no_child(&mut result);
 					let bitmap_start = result.len();
@@ -211,12 +211,14 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 					}
 					result
 				} else {
+					let mut branch_options = BranchOptions::default();
+					branch_options.add_encoded_no_child = true;
 					C::branch_node_nibbled(
 						partial.right_iter(),
 						partial.len(),
 						self.children.into_iter(),
 						value_with_omission(node_data, value, self.omit_value),
-						None, // TODO allow complex here
+						branch_options,
 					).0
 				}
 			},

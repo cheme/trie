@@ -83,7 +83,7 @@ pub trait NodeCodec: Sized {
 	fn branch_node(
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>,
-		register_children: Option<&mut [Option<Range<usize>>]>,
+		options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild);
 
 	/// Returns an encoded branch node with a possible partial path.
@@ -93,8 +93,19 @@ pub trait NodeCodec: Sized {
 		number_nibble: usize,
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		value: Option<&[u8]>,
-		register_children: Option<&mut [Option<Range<usize>>]>,
+		options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild);
+}
+
+#[derive(Default)]
+pub struct BranchOptions<'a> {
+	/// When this buffer is defined, it is used to record hash of children
+	/// positions.
+	pub register_children: Option<&'a mut [Option<Range<usize>>]>,
+	/// If true we also resolve `EncodedNoChild`.
+	pub add_encoded_no_child: bool,
+	/// If true we encode the without child.
+	pub encode_no_child: bool,
 }
 
 #[derive(Clone)]

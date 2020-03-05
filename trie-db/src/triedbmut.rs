@@ -19,7 +19,7 @@ use super::{Result, TrieError, TrieMut, TrieLayout, TrieHash, CError};
 use super::lookup::Lookup;
 use super::node::{NodeHandle as EncodedNodeHandle, Node as EncodedNode, decode_hash};
 
-use crate::node_codec::HashDBComplexDyn;
+use crate::node_codec::{HashDBComplexDyn, BranchOptions};
 use hash_db::{HashDB, Hasher, Prefix, EMPTY_PREFIX};
 use hashbrown::HashSet;
 
@@ -208,7 +208,7 @@ where
 	fn into_encoded<F, C, H>(
 		self,
 		mut child_cb: F,
-		register_children: Option<&mut [Option<Range<usize>>]>,
+		branch_options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild) where
 		C: NodeCodec<HashOut=O>,
 		F: FnMut(NodeHandle<H::Out>, Option<&NibbleSlice>, Option<u8>) -> ChildReference<H::Out>,
@@ -240,7 +240,7 @@ where
 							maybe_child.map(|child| child_cb(child, None, Some(i as u8)))
 						}),
 					value.as_ref().map(|v| &v[..]),
-					register_children,
+					branch_options,
 				)
 			},
 			Node::NibbledBranch(partial, mut children, value) => {
@@ -261,7 +261,7 @@ where
 							})
 						}),
 					value.as_ref().map(|v| &v[..]),
-					register_children,
+					branch_options,
 				)
 			},
 		}
@@ -1441,6 +1441,9 @@ where
 			Stored::New(node) => {
 				let mut k = NibbleVec::new();
 				let mut register_children = Self::register_children_buf(&node);
+				let mut branch_options = BranchOptions::default();
+				branch_options.add_encoded_no_child = true;
+				branch_options.register_children = register_children.as_mut().map(|a| &mut a[..]);
 				let (encoded_root, no_node) = node.into_encoded::<_, L::Codec, L::Hash>(
 					|child, o_slice, o_index| {
 						let mov = k.append_optional_slice_and_nibble(o_slice, o_index);
@@ -1448,7 +1451,7 @@ where
 						k.drop_lasts(mov);
 						cr
 					},
-					register_children.as_mut().map(|a| &mut a[..]),
+					branch_options,
 				);
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "encoded root node: {:#x?}", &encoded_root[..]);
@@ -1504,9 +1507,13 @@ where
 								prefix.drop_lasts(mov);
 								cr
 							};
+							let mut branch_options = BranchOptions::default();
+							branch_options.add_encoded_no_child = true;
+							branch_options.register_children = register_children.as_mut().map(|a| &mut a[..]);
+	
 							node.into_encoded::<_, L::Codec, L::Hash>(
 								commit_child,
-								register_children.as_mut().map(|a| &mut a[..]),
+								branch_options,
 							)
 						};
 						if encoded.len() >= L::Hash::LENGTH {

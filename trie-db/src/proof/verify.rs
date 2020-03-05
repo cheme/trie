@@ -22,7 +22,7 @@ use crate::{
 };
 use hash_db::Hasher;
 use ordered_trie::{BinaryHasher, HasherComplex};
-use crate::node_codec::{Bitmap, BITMAP_LENGTH};
+use crate::node_codec::{Bitmap, BITMAP_LENGTH, BranchOptions};
 
 
 /// Errors that may occur during proof verification. Most of the errors types simply indicate that
@@ -227,23 +227,23 @@ impl<'a, C: NodeCodec, H: BinaryHasher> StackEntry<'a, C, H>
 				), EncodedNoChild::Unused)
 			}
 			Node::Branch(_, _) => {
-				let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
-				let register_children = &mut register_children[..];
+				let mut branch_options = BranchOptions::default();
+				branch_options.add_encoded_no_child = true;
 				C::branch_node(
 					self.children.iter(),
 					self.value,
-					Some(register_children), // TODO again unused register result
+					branch_options,
 				)
 			},
 			Node::NibbledBranch(partial, _, _) => {
-				let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
-				let register_children = &mut register_children[..];
+				let mut branch_options = BranchOptions::default();
+				branch_options.add_encoded_no_child = true;
 				C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					self.children.iter(),
 					self.value,
-					Some(register_children), // TODO again unused register result
+					branch_options,
 				)
 			},
 		})

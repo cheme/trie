@@ -185,7 +185,7 @@ fn test_depth() {
 			(5, 3),
 			(7, 3),
 			(8, 4),
-*/	
+*/
 	assert_eq!(depth(0), 0);
 	assert_eq!(depth(1), 1);
 	assert_eq!(depth(2), 2);
@@ -430,7 +430,7 @@ impl SequenceBinaryTree<usize> {
 // the leftmost key index. TODO make test to check no collision and write asumption that to create
 // collision we need inline values of length == to hash (to target previous 2 values hash eg for 3
 // nodes trie: hash(v1,v2) = h1, v3 = h1 but this implies h1 of length of hash and this means that
-// we hash the value (with inline hash of length being strictly the hash length this can be use: 
+// we hash the value (with inline hash of length being strictly the hash length this can be use:
 // CONCLUSION even if we cannot run inline values of length of the H::Out (more should be fine as
 // it implies a second round of hashing) -> can be avoided with custom encoder.
 // Inline value less than size hash are a problem on the other hand: when close to size hash we can
@@ -659,7 +659,7 @@ impl KeyNode for UsizeKeyNode {
 		if self.depth < other.depth {
 			false
 		} else {
-			self.value >> (self.depth - other.depth) == other.value 
+			self.value >> (self.depth - other.depth) == other.value
 		}
 	}
 	fn common_depth(&self, other: &Self) -> usize {
@@ -764,7 +764,7 @@ pub trait ProcessNodeProof<HO, KN>: ProcessNode<HO, KN> {
 }
 
 /// Does only proccess hash on its buffer.
-/// Buffer length need to be right and is unchecked. 
+/// Buffer length need to be right and is unchecked.
 pub struct HashOnly<'a, H>(&'a mut [u8], PhantomData<H>);
 
 impl<'a, H: BinaryHasher> HashOnly<'a, H> {
@@ -790,7 +790,7 @@ impl<'a, H: BinaryHasher, KN> ProcessNode<H::Out, KN> for HashOnly<'a, H> {
 }
 
 /// Buffer length need to be right and is unchecked, proof elements are
-/// stored in memory (no streaming). 
+/// stored in memory (no streaming).
 pub struct HashProof<'a, H: Hasher, I, KN>{
 	buffer: &'a mut [u8],
 	// I must guaranty right depth and index in range regarding
@@ -891,9 +891,9 @@ impl<KN: KeyNode> MultiProofState<KN> {
 				}
 			}
 		}
-		
+
 		let start_with_next = self.next_key1.as_ref().map(|n| n.starts_with(key)).unwrap_or(false);
-		// next interval management 
+		// next interval management
 		if start_with_next {
 			let mut sibling = false;
 			if let Some(join2) = self.join2 {

@@ -32,6 +32,7 @@ use trie_db::{
 	Partial,
 	BinaryHasher,
 	EncodedNoChild,
+	BranchOptions,
 };
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
@@ -768,7 +769,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 	fn branch_node(
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
-		mut register_children: Option<&mut [Option<Range<usize>>]>,
+		mut branch_options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild) {
 		let mut output = vec![0; BITMAP_LENGTH + 1];
 		let mut prefix: [u8; 3] = [0; 3];
@@ -780,9 +781,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		};
 		let mut ix = 0;
 		let ix = &mut ix;
-		let mut register_children = register_children.as_mut();
+		let mut register_children = branch_options.register_children.as_mut();
 		let register_children = &mut register_children;
-		let no_child = if register_children.is_some() {
+		let no_child = if branch_options.add_encoded_no_child {
 			EncodedNoChild::Range(Range {
 				start: 0,
 				end: output.len(),
@@ -834,7 +835,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodec<H> {
 		_number_nibble: usize,
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		_maybe_value: Option<&[u8]>,
-		_register_children: Option<&mut [Option<Range<usize>>]>,
+		_branch_options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild) {
 		unreachable!()
 	}
@@ -955,7 +956,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 	fn branch_node(
 		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<<H as Hasher>::Out>>>>,
 		_maybe_value: Option<&[u8]>,
-		_register_children: Option<&mut [Option<Range<usize>>]>,
+		_branch_options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild) {
 		unreachable!()
 	}
@@ -965,7 +966,7 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		number_nibble: usize,
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<&[u8]>,
-		mut register_children: Option<&mut [Option<Range<usize>>]>,
+		mut branch_options: BranchOptions,
 	) -> (Vec<u8>, EncodedNoChild) {
 		let mut output = if maybe_value.is_some() {
 			partial_from_iterator_encode(
@@ -988,9 +989,9 @@ impl<H: Hasher> NodeCodec for ReferenceNodeCodecNoExt<H> {
 		};
 		let mut ix = 0;
 		let ix = &mut ix;
-		let mut register_children = register_children.as_mut();
+		let mut register_children = branch_options.register_children.as_mut();
 		let register_children = &mut register_children;
-		let no_child = if register_children.is_some() {
+		let no_child = if branch_options.add_encoded_no_child {
 			EncodedNoChild::Range(Range {
 				start: 0,
 				end: output.len(),

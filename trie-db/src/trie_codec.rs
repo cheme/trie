@@ -32,7 +32,7 @@ use crate::{
 	TrieHash, TrieError, TrieDB, TrieDBNodeIterator, TrieLayout,
 	nibble_ops::NIBBLE_LENGTH, node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode},
 };
-use crate::node_codec::{Bitmap, BITMAP_LENGTH, EncodedNoChild};
+use crate::node_codec::{Bitmap, BITMAP_LENGTH, EncodedNoChild, BranchOptions};
 use crate::rstd::{
 	boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec,
 	iter::from_fn, ops::Range,
@@ -119,18 +119,18 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 				}
 			}
 			NodePlan::Branch { value, children } => {
-				let mut register: [Option<_>; NIBBLE_LENGTH]; // TODO unused register
-				let (children, complex) = if complex_hash {
+				let mut branch_options = BranchOptions::default();
+				branch_options.add_encoded_no_child = complex_hash;
+				let children = if complex_hash {
 					let no_omit = [false; NIBBLE_LENGTH];
-					register = Default::default();
-					(Self::branch_children(node_data, &children, &no_omit[..])?, Some(&mut register[..]))
+					Self::branch_children(node_data, &children, &no_omit[..])?
 				} else {
-					(Self::branch_children(node_data, &children, &self.omit_children[..])?, None)
+					Self::branch_children(node_data, &children, &self.omit_children[..])?
 				};
 				let (mut result, no_child) = C::branch_node(
 					children.iter(),
 					value.clone().map(|range| &node_data[range]),
-					complex,
+					branch_options,
 				);
 				if complex_hash {
 					no_child.trim_no_child(&mut result);
@@ -163,21 +163,21 @@ impl<C: NodeCodec> EncoderStackEntry<C> {
 				result
 			}
 			NodePlan::NibbledBranch { partial, value, children } => {
-				let mut register: [Option<_>; NIBBLE_LENGTH]; // TODO unused register
-				let (children, complex) = if complex_hash {
+				let children = if complex_hash {
 					let no_omit = [false; NIBBLE_LENGTH];
-					register = Default::default();
-					(Self::branch_children(node_data, &children, &no_omit[..])?, Some(&mut register[..]))
+					Self::branch_children(node_data, &children, &no_omit[..])?
 				} else {
-					(Self::branch_children(node_data, &children, &self.omit_children[..])?, None)
+					Self::branch_children(node_data, &children, &self.omit_children[..])?
 				};
 				let partial = partial.build(node_data);
+				let mut branch_options = BranchOptions::default();
+				branch_options.add_encoded_no_child = complex_hash;
 				let (mut result, no_child) = C::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					children.iter(),
 					value.clone().map(|range| &node_data[range]),
-					complex,
+					branch_options,
 				);
 				if complex_hash {
 					no_child.trim_no_child(&mut result);
@@ -459,7 +459,7 @@ impl<'a, C: NodeCodec, F> DecoderStackEntry<'a, C, F> {
 	///
 	/// Preconditions:
 	/// - if node is an extension node, then `children[0]` is Some.
-	fn encode_node(self, register_children: Option<&mut [Option<Range<usize>>]>) -> (Vec<u8>, EncodedNoChild) {
+	fn encode_node(self, branch_options: BranchOptions) -> (Vec<u8>, EncodedNoChild) {
 		match self.node {
 			Node::Empty =>
 				(C::empty_node().to_vec(), EncodedNoChild::Unused),
@@ -476,7 +476,7 @@ impl<'a, C: NodeCodec, F> DecoderStackEntry<'a, C, F> {
 				C::branch_node(
 					self.children.into_iter(),
 					value,
-					register_children,
+					branch_options,
 				),
 			Node::NibbledBranch(partial, _, value) =>
 				C::branch_node_nibbled(
@@ -484,7 +484,7 @@ impl<'a, C: NodeCodec, F> DecoderStackEntry<'a, C, F> {
 					partial.len(),
 					self.children.iter(),
 					value,
-					register_children,
+					branch_options,
 				),
 		}
 	}
@@ -601,21 +601,19 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 				break;
 			}
 
-			let mut register_children: [Option<_>; NIBBLE_LENGTH];
-			let mut register_children = if last_entry.complex.is_some() {
-				register_children = Default::default();
-				Some(&mut register_children[..])
-			} else {
-				None
-			};
+			let mut register_children: [Option<_>; NIBBLE_LENGTH] = Default::default();
+			let mut branch_options = BranchOptions::default();
+			if last_entry.complex.is_some() {
+				branch_options.add_encoded_no_child = true;
+				branch_options.register_children = Some(register_children.as_mut());
+			}
 			let complex = last_entry.complex.take();
 			// Since `advance_child_index` returned true, the preconditions for `encode_node` are
 			// satisfied.
-			let (node_data, no_child) = last_entry.encode_node(register_children.as_mut().map(|r| r.as_mut()));
+			let (node_data, no_child) = last_entry.encode_node(branch_options);
 			let node_hash = if let Some((bitmap_keys, additional_hashes)) = complex {
-				let children = register_children.expect("Set to some if complex");
-				let nb_children = children.iter().filter(|v| v.is_some()).count();
-				let children = children.iter()
+				let nb_children = register_children.iter().filter(|v| v.is_some()).count();
+				let children = register_children.iter()
 					.enumerate()
 					.filter_map(|(ix, v)| {
 						v.as_ref().map(|v| (ix, v.clone()))

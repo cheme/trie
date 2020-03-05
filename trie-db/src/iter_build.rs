@@ -23,7 +23,7 @@ use crate::rstd::{cmp::max, marker::PhantomData, vec::Vec, EmptyIter, ops::Range
 use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
-use crate::node_codec::{NodeCodec, EncodedNoChild};
+use crate::node_codec::{NodeCodec, EncodedNoChild, BranchOptions};
 use crate::{TrieLayout, TrieHash};
 use crate::rstd::borrow::Borrow;
 
@@ -208,11 +208,12 @@ impl<T, V> CacheAccum<T, V>
 		// encode branch
 		let v = self.0[last].1.take();
 
-		let mut register_children = register_children_buf::<T>();
+		let mut branch_options = BranchOptions::default();
+		branch_options.add_encoded_no_child = T::COMPLEX_HASH;
 		let encoded = T::Codec::branch_node(
 			self.0[last].0.as_ref().iter(),
 			v.as_ref().map(|v| v.as_ref()),
-			register_children.as_mut().map(|t| t.as_mut()), // TODO switch fully to codec approach or just return trim info
+			branch_options,
 		);
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
 		let branch_hash = if T::COMPLEX_HASH {
@@ -251,13 +252,14 @@ impl<T, V> CacheAccum<T, V>
 		// encode branch
 		let v = self.0[last].1.take();
 		let nkeyix = nkey.unwrap_or((0, 0));
-		let mut register_children = register_children_buf::<T>();
+		let mut branch_options = BranchOptions::default();
+		branch_options.add_encoded_no_child = T::COMPLEX_HASH;
 		let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 		let encoded = T::Codec::branch_node_nibbled(
 			pr.right_range_iter(nkeyix.1),
 			nkeyix.1,
 			self.0[last].0.as_ref().iter(), v.as_ref().map(|v| v.as_ref()),
-			register_children.as_mut().map(|t| t.as_mut()), // TODO switch fully to codec approach
+			branch_options,
 		);
 		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.0).unwrap_or(0);
 		let pr = NibbleSlice::new_offset(
