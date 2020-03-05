@@ -220,8 +220,8 @@ impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> 
 mod test {
 	use super::*;
 
-	fn test_states() -> TestStates {
-		let mut states = TestStates::default();
+	fn test_states() -> RangeSet<usize, usize> {
+		let mut states = RangeSet::default();
 		assert_eq!(states.create_branch(1, 0, None), Some(1));
 		// root branching.
 		assert_eq!(states.create_branch(1, 0, None), Some(2));
