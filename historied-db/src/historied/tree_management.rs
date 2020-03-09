@@ -20,7 +20,8 @@
 
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::BTreeMap;
-use crate::{ManagementRef,};
+use crate::historied::linear::Latest;
+use crate::{Management, ManagementRef, Migrate, ForkableManagement};
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
@@ -119,20 +120,18 @@ pub struct TreeManagement<H, I, BI, V> {
 	touched_gc: bool,
 	current_gc: TreeGc<I, BI, V>,
 	neutral_element: Option<V>,
+	last_in_use_index: (I, BI),
 }
 
-impl<H: Ord, I: Default + Ord, BI, V> Default for TreeManagement<H, I, BI, V> {
+impl<H: Ord, I: Default + Ord, BI: Default, V> Default for TreeManagement<H, I, BI, V> {
 	fn default() -> Self {
 		TreeManagement {
-			tree: Tree {
-				storage: BTreeMap::new(),
-				last_index: I::default(),
-				composite_treshold: I::default(),
-			},
+			tree: Tree::default(),
 			mapping: crate::rstd::BTreeMap::new(),
 			neutral_element: None,
 			touched_gc: false,
 			current_gc: Default::default(),
+			last_in_use_index: Default::default(),
 		}
 	}
 }
@@ -192,10 +191,19 @@ impl<
 		})
 	}
 
-	/// TODO
-	pub fn query_plan(&self, mut branch_index: I) -> ForkPlan<I, BI> {
+	/// TODO doc & switch to &I
+	pub fn query_plan_at(&self, (branch_index, mut index) : (I, BI)) -> ForkPlan<I, BI> {
+		// make index exclusive
+		index += 1;
+		self.query_plan_inner(branch_index, Some(index))
+	}
+	/// TODO doc & switch to &I
+	pub fn query_plan(&self, branch_index: I) -> ForkPlan<I, BI> {
+		self.query_plan_inner(branch_index, None)
+	}
+
+	fn query_plan_inner(&self, mut branch_index: I, mut parent_fork_branch_index: Option<BI>) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
-		let mut parent_fork_branch_index = None;
 		while branch_index > self.composite_treshold {
 			if let Some(branch) = self.storage.get(&branch_index) {
 				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
@@ -204,11 +212,13 @@ impl<
 					branch.query_plan()
 				};
 				parent_fork_branch_index = Some(branch_ref.start.clone());
-				// vecdeque would be better suited
-				history.insert(0, BranchPlan {
-					state: branch_ref,
-					branch_index: branch_index.clone(),
-				});
+				if branch_ref.end > branch_ref.start {
+					// vecdeque would be better suited
+					history.insert(0, BranchPlan {
+						state: branch_ref,
+						branch_index: branch_index.clone(),
+					});
+				}
 				branch_index = branch.parent_branch_index.clone();
 			} else {
 				break;
@@ -295,6 +305,7 @@ impl<
 /// (block processing), that way we iterate on a vec rather than 
 /// hoping over linked branches.
 /// TODO small vec that ??
+/// TODO add I treshold (everything valid starting at this one)?
 pub struct ForkPlan<I, BI> {
 	history: Vec<BranchPlan<I, BI>>,
 }
@@ -498,15 +509,26 @@ impl<I, BI, V> Default for TreeGc<I, BI, V> {
 	}
 }
 
-impl<H: Ord, I: Clone, BI: Clone, V: Clone> ManagementRef<H> for TreeManagement<H, I, BI, V> {
-	type S = (I, BI);
+impl<I, BI, V> TreeGc<I, BI, V> {
+	fn applied(&mut self, gc_applied: TreeGc<I, BI, V>) {
+		unimplemented!("TODO run a delta to keep possible updates in between");
+	}
+}
+
+impl<
+	H: Ord,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
+	V: Clone,
+> ManagementRef<H> for TreeManagement<H, I, BI, V> {
+	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
 	type GC = TreeGc<I, BI, V>;
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeGc<I, BI, V>;
 
 	fn get_db_state(&self, state: &H) -> Option<Self::S> {
-		self.mapping.get(state).cloned()
+		self.mapping.get(state).cloned().map(|i| self.tree.query_plan_at(i))
 	}
 
 	fn get_gc(&self) -> Option<Self::GC> {
@@ -517,6 +539,86 @@ impl<H: Ord, I: Clone, BI: Clone, V: Clone> ManagementRef<H> for TreeManagement<
 		}
 	}
 }
+
+impl<
+	H: Clone + Ord,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	V: Clone,
+> Management<H> for TreeManagement<H, I, BI, V> {
+	type SE = Latest<(I, BI)>;
+	fn init() -> (Self, Self::S) {
+		let management = Self::default();
+		let init_plan = management.tree.query_plan(I::default());
+		(management, init_plan)
+	}
+
+	fn latest_state(&self) -> Self::SE {
+		Latest::unchecked_latest(self.last_in_use_index.clone())
+	}
+
+	fn reverse_lookup(&self, state: &Self::S) -> Option<H> {
+		// TODO should be the closest valid and return non optional!!!! TODO
+		let state = state.history.last()
+			.map(|b| (b.branch_index.clone(), b.state.end.clone()))
+			.map(|mut b| {
+				b.1 -= 1;
+				b
+			})
+			.unwrap_or((Default::default(), Default::default()));
+		self.mapping.iter()
+			.find(|(_k, v)| v == &&state)
+			.map(|(k, _v)| k.clone())
+	}
+
+	fn applied_gc(&mut self, gc: Self::GC) {
+		self.current_gc.applied(gc);
+		self.touched_gc = false;
+	}
+
+
+	fn get_migrate(self) -> Migrate<H, Self> {
+		unimplemented!()
+	}
+
+	fn applied_migrate(&mut self) {
+		unimplemented!()
+	}
+}
+
+impl<
+	H: Clone + Ord,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	V: Clone,
+> ForkableManagement<H> for TreeManagement<H, I, BI, V> {
+	// note that se must be valid.
+	fn append_external_state(&mut self, state: H, at: &Self::SE) -> Option<Self::S> {
+		let (branch_index, index) = at.latest();
+		let mut index = index.clone();
+		index += 1;
+		if let Some(branch_index) = self.tree.add_state(branch_index.clone(), index.clone()) {
+			let result = self.tree.query_plan(branch_index.clone());
+			self.mapping.insert(state, (branch_index.clone(), index));
+			Some(result)
+		} else {
+			None
+		}
+	}
+
+	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
+		self.mapping.get(at).and_then(|(branch_index, _index)| {
+			self.tree.branch_state(branch_index).map(|branch| {
+				let mut index = branch.state.end.clone();
+				// TODO factor append_external state at +1 index
+				index -= 1;
+				Latest::unchecked_latest((branch_index.clone(), index))
+			 })
+		})
+		.and_then(|at| self.append_external_state(state, &at))
+	}
+}
+
 
 
 #[cfg(test)]

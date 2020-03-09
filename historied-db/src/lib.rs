@@ -154,16 +154,14 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 }
 
 /// This trait is for mapping a given state to the DB opaque inner state.
-pub trait ForkableManagement<H>: ManagementRef<H> {
-	fn register_external_state(&mut self, state: H, at: &Self::S) -> Self::S;
+pub trait ForkableManagement<H>: Management<H> {
+	fn append_external_state(&mut self, state: H, at: &Self::SE) -> Option<Self::S>;
 
-	fn try_register_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
-		self.get_db_state(at).map(|at| self.register_external_state(state, &at))
-	}
+	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S>;
 }
 
 pub trait LinearManagement<H>: ManagementRef<H> {
-	fn append_external_state(&mut self, state: H) -> Self::S;
+	fn append_external_state(&mut self, state: H) -> Option<Self::S>;
 
 	// cannot be empty: if at initial state we return initial
 	// state and initialise with a new initial state.

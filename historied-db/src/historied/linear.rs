@@ -19,7 +19,7 @@
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue};
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
-	Management, Migrate};
+	Management, Migrate, LinearManagement};
 use hash_db::{PlainDB, PlainDBRef};
 use crate::rstd::marker::PhantomData;
 use crate::rstd::convert::{TryFrom, TryInto};
@@ -76,10 +76,10 @@ impl<S> Latest<S> {
 	/// This is only to be use by a `Management` or
 	/// a context where the state can be proven as
 	/// being the latest.
-	fn unchecked_latest(s: S) -> Self {
+	pub(crate) fn unchecked_latest(s: S) -> Self {
 		Latest(s)
 	}
-	fn latest(&self) -> &S {
+	pub(crate) fn latest(&self) -> &S {
 		&self.0
 	}
 }
@@ -448,6 +448,7 @@ pub struct LinearInMemoryManagement<H, S, V> {
 	next_state: S,
 	neutral_element: Option<V>,
 	changed_treshold: bool,
+	can_append: bool,
 }
 
 impl<H, S, V> LinearInMemoryManagement<H, S, V> {
@@ -499,9 +500,11 @@ V: Clone,
 			next_state,
 			neutral_element: None,
 			changed_treshold: false,
+			can_append: true,
 		}, state)
 	}
 	fn latest_state(&self) -> Self::SE {
+		// TODO can use next_state - 1 to avoid this search
 		Latest::unchecked_latest(self.mapping.values().max()
 			.map(Clone::clone)
 			.unwrap_or(S::default()))
@@ -524,5 +527,31 @@ V: Clone,
 
 	fn applied_migrate(&mut self) {
 		unimplemented!()
+	}
+}
+
+impl<
+H: Ord + Clone,
+S: Default + Clone + SubAssign<S> + AddAssign<usize> + Ord,
+V: Clone,
+> LinearManagement<H> for LinearInMemoryManagement<H, S, V> {
+	fn append_external_state(&mut self, state: H) -> Option<Self::S> {
+		if !self.can_append {
+			return None;
+		}
+		self.mapping.insert(state, self.next_state.clone());
+		let result = self.next_state.clone();
+		self.next_state += 1;
+		Some(result)
+	}
+
+	fn drop_last_state(&mut self) -> Self::S {
+		if self.next_state != S::default() {
+			let mut dec = S::default();
+			dec += 1;
+			self.next_state -= dec;
+		}
+		self.can_append = true;
+		self.next_state.clone()
 	}
 }
