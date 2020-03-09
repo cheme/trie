@@ -24,14 +24,14 @@ use crate::rstd::BTreeMap;
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
 /// to a tree path.
-pub trait BranchesStateTrait<I, BI> {
-	type Branch: BranchStateTrait<BI>;
+pub trait BranchesContainer<I, BI> {
+	type Branch: BranchContainer<BI>;
 	type Iter: Iterator<Item = (Self::Branch, I)>;
 
 	/// Get branch state for node at a given index.
 	fn get_branch(self, index: &I) -> Option<Self::Branch>;
 
-	/// Get the last state, inclusive.
+	/// Get the last branch, inclusive.
 	fn last_index(self) -> I;
 
 	/// Iterator over the branch states.
@@ -40,7 +40,7 @@ pub trait BranchesStateTrait<I, BI> {
 
 /// Trait defining a state for querying or modifying a branch.
 /// This is therefore the representation of a branch state.
-pub trait BranchStateTrait<I> {
+pub trait BranchContainer<I> {
 	/// Get state for node at a given index.
 	fn exists(&self, i: &I) -> bool;
 
@@ -53,7 +53,7 @@ pub trait BranchStateTrait<I> {
 /// information (is branch appendable).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchState<I, BI> {
-	state: BranchStateRef<BI>,
+	state: BranchRange<BI>,
 	can_append: bool,
 	parent_branch_index: I,
 }
@@ -61,7 +61,7 @@ pub struct BranchState<I, BI> {
 /// This is a simple range, end non inclusive.
 /// TODO type alias or use ops::Range? see next todo?
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BranchStateRef<I> {
+pub struct BranchRange<I> {
 	// TODO rewrite this to use as single linear index?
 	// we could always start at 0 but the state could not
 	// be compared between branch which is sad.
@@ -72,15 +72,19 @@ pub struct BranchStateRef<I> {
 }
 
 
-/// Current branches range definition, indexed by branch
-/// numbers.
+/// Full state of current tree layout.
+/// It contains all layout inforamation for branches
+/// states.
+/// Branches are indexed by a sequential index.
+/// Element of branches are indexed by a secondary
+/// sequential indexes.
 ///
-/// New branches index are using `last_index`.
+/// New branches index are defined by using `last_index`.
 ///
 /// Also acts as a cache, storage can store
 /// unknown db value as `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RangeSet<I, BI> {
+pub struct BranchesSet<I, BI> {
 	storage: BTreeMap<I, BranchState<I, BI>>,
 	last_index: I,
 	/// treshold for possible node value, correspond
@@ -89,9 +93,9 @@ pub struct RangeSet<I, BI> {
 	composite_treshold: I,
 }
 
-impl<I: Default + Ord, BI> Default for RangeSet<I, BI> {
+impl<I: Default + Ord, BI> Default for BranchesSet<I, BI> {
 	fn default() -> Self {
-		RangeSet {
+		BranchesSet {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
 			composite_treshold: I::default(),
@@ -99,7 +103,10 @@ impl<I: Default + Ord, BI> Default for RangeSet<I, BI> {
 	}
 }
 
-impl<I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> RangeSet<I, BI> {
+impl<
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
+> BranchesSet<I, BI> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
 	/// - new index in case of branch range creation
@@ -139,14 +146,14 @@ impl<I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord, BI: Ord + E
 		})
 	}
 
-	/// Get the branch reference for a given branch index if it exists.
-	pub fn state_ref(&self, mut branch_index: I) -> BranchRanges<I, BI> {
+	/// TODO
+	pub fn query_plan(&self, mut branch_index: I) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
 		while branch_index > self.composite_treshold {
 			if let Some(branch) = self.storage.get(&branch_index) {
-				let branch_ref = branch.state_ref();
+				let branch_ref = branch.query_plan();
 				// vecdeque would be better suited
-				history.insert(0, BranchStatesRef {
+				history.insert(0, BranchPlan {
 					state: branch_ref,
 					branch_index: branch_index.clone(),
 				});
@@ -155,7 +162,7 @@ impl<I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord, BI: Ord + E
 				break;
 			}
 		}
-		BranchRanges {
+		ForkPlan {
 			history
 		}
 	}
@@ -222,8 +229,9 @@ impl<I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord, BI: Ord + E
 }
 
 #[derive(Clone, Default, Debug)]
-/// State needed for query updates.
-/// That is a subset of the full branch ranges set.
+/// Query plane needed for operation for a given
+/// fork.
+/// This is a subset of the full branch set definition.
 ///
 /// Values are ordered by branch_ix,
 /// and only a logic branch path should be present.
@@ -235,20 +243,21 @@ impl<I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord, BI: Ord + E
 /// (block processing), that way we iterate on a vec rather than 
 /// hoping over linked branches.
 /// TODO small vec that ??
-pub struct BranchRanges<I, BI> {
-	history: Vec<BranchStatesRef<I, BI>>,
+pub struct ForkPlan<I, BI> {
+	history: Vec<BranchPlan<I, BI>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BranchStatesRef<I, BI> {
+/// Query plan element for a single branch.
+pub struct BranchPlan<I, BI> {
 	// TODO rename to index
 	pub branch_index: I,
-	pub state: BranchStateRef<BI>,
+	pub state: BranchRange<BI>,
 }
 
-impl<'a, I: Default + Eq + Ord + Clone, BI: SubAssign<usize> + Ord + Clone> BranchesStateTrait<I, BI> for &'a BranchRanges<I, BI> {
-	type Branch = &'a BranchStateRef<BI>;
-	type Iter = BranchRangesIter<'a, I, BI>;
+impl<'a, I: Default + Eq + Ord + Clone, BI: SubAssign<usize> + Ord + Clone> BranchesContainer<I, BI> for &'a ForkPlan<I, BI> {
+	type Branch = &'a BranchRange<BI>;
+	type Iter = ForkPlanIter<'a, I, BI>;
 
 	fn get_branch(self, i: &I) -> Option<Self::Branch> {
 		for (b, bi) in self.iter() {
@@ -271,15 +280,15 @@ impl<'a, I: Default + Eq + Ord + Clone, BI: SubAssign<usize> + Ord + Clone> Bran
 	}
 
 	fn iter(self) -> Self::Iter {
-		BranchRangesIter(self, self.history.len())
+		ForkPlanIter(self, self.history.len())
 	}
 }
 
 /// Iterator, contains index of last inner struct.
-pub struct BranchRangesIter<'a, I, BI>(&'a BranchRanges<I, BI>, usize);
+pub struct ForkPlanIter<'a, I, BI>(&'a ForkPlan<I, BI>, usize);
 
-impl<'a, I: Clone, BI> Iterator for BranchRangesIter<'a, I, BI> {
-	type Item = (&'a BranchStateRef<BI>, I);
+impl<'a, I: Clone, BI> Iterator for ForkPlanIter<'a, I, BI> {
+	type Item = (&'a BranchRange<BI>, I);
 
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.1 > 0 {
@@ -293,7 +302,7 @@ impl<'a, I: Clone, BI> Iterator for BranchRangesIter<'a, I, BI> {
 	}
 }
 
-impl<I: Ord + SubAssign<usize> + Clone> BranchStateTrait<I> for BranchStateRef<I> {
+impl<I: Ord + SubAssign<usize> + Clone> BranchContainer<I> for BranchRange<I> {
 
 	fn exists(&self, i: &I) -> bool {
 		i >= &self.start && i < &self.end
@@ -309,7 +318,7 @@ impl<I: Ord + SubAssign<usize> + Clone> BranchStateTrait<I> for BranchStateRef<I
 
 
 
-impl<'a, I, B: BranchStateTrait<I>> BranchStateTrait<I> for &'a B {
+impl<'a, I, B: BranchContainer<I>> BranchContainer<I> for &'a B {
 
 	fn exists(&self, i: &I) -> bool {
 		(*self).exists(i)
@@ -323,7 +332,7 @@ impl<'a, I, B: BranchStateTrait<I>> BranchStateTrait<I> for &'a B {
 /*
 /// u64 is use a a state target so it is implemented as
 /// a upper bound.
-impl<'a, I: Clone + Ord> BranchStateTrait<I> for I {
+impl<'a, I: Clone + Ord> BranchContainer<I> for I {
 
 	fn exists(&self, i: &I) -> bool {
 		i <= self
@@ -342,7 +351,7 @@ impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> 
 		let mut end = BI::default();
 		end += 1;
 		BranchState {
-			state: BranchStateRef {
+			state: BranchRange {
 				start: Default::default(),
 				end,
 			},
@@ -354,7 +363,7 @@ impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> 
 
 impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<I, BI> {
 
-	pub fn state_ref(&self) -> BranchStateRef<BI> {
+	pub fn query_plan(&self) -> BranchRange<BI> {
 		self.state.clone()
 	}
 
@@ -362,7 +371,7 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 		let mut end = offset.clone();
 		end += 1;
 		BranchState {
-			state: BranchStateRef {
+			state: BranchRange {
 				start: offset,
 				end,
 			},
@@ -409,8 +418,8 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 mod test {
 	use super::*;
 
-	fn test_states() -> RangeSet<usize, usize> {
-		let mut states = RangeSet::default();
+	fn test_states() -> BranchesSet<usize, usize> {
+		let mut states = BranchesSet::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.
 		assert_eq!(states.add_state(1, 1), Some(2));
@@ -446,39 +455,39 @@ mod test {
 	}
 
 	#[test]
-	fn test_state_refs() {
+	fn test_query_plans() {
 		let states = test_states();
 		let ref_3 = vec![
-			BranchStatesRef {
+			BranchPlan {
 				branch_index: 1,
-				state: BranchStateRef { start: 0, end: 2 },
+				state: BranchRange { start: 0, end: 2 },
 			},
-			BranchStatesRef {
+			BranchPlan {
 				branch_index: 3,
-				state: BranchStateRef { start: 2, end: 3 },
+				state: BranchRange { start: 2, end: 3 },
 			},
 		];
-		assert_eq!(states.state_ref(3).history, ref_3);
+		assert_eq!(states.query_plan(3).history, ref_3);
 
 		let mut states = states;
 
 		assert_eq!(states.add_state(1, 1), Some(6));
 		let ref_6 = vec![
-			BranchStatesRef {
+			BranchPlan {
 				branch_index: 1,
-				state: BranchStateRef { start: 0, end: 1 },
+				state: BranchRange { start: 0, end: 1 },
 			},
-			BranchStatesRef {
+			BranchPlan {
 				branch_index: 6,
-				state: BranchStateRef { start: 1, end: 2 },
+				state: BranchRange { start: 1, end: 2 },
 			},
 		];
-		assert_eq!(states.state_ref(6).history, ref_6);
+		assert_eq!(states.query_plan(6).history, ref_6);
 
 		states.composite_treshold = 1;
 		let mut ref_6 = ref_6;
 		ref_6.remove(0);
-		assert_eq!(states.state_ref(6).history, ref_6);
+		assert_eq!(states.query_plan(6).history, ref_6);
 	}
 
 /* TODO enable it on tree history
@@ -493,23 +502,23 @@ mod test {
 		let mut item: History<u64> = Default::default();
 
 		for i in 0..6 {
-			assert_eq!(item.get(&states.state_ref(i)), None);
+			assert_eq!(item.get(&states.query_plan(i)), None);
 		}
 
 		// setting value respecting branch build order
 		for i in 1..6 {
-			item.set(&states.state_ref(i), i);
+			item.set(&states.query_plan(i), i);
 		}
 
 		for i in 1..6 {
-			assert_eq!(item.get(&states.state_ref(i)), Some(&i));
+			assert_eq!(item.get(&states.query_plan(i)), Some(&i));
 		}
 
-		let mut ref_3 = states.state_ref(3);
+		let mut ref_3 = states.query_plan(3);
 		ref_3.limit_branch(1, None);
 		assert_eq!(item.get(&ref_3), Some(&1));
 
-		let mut ref_1 = states.state_ref(1);
+		let mut ref_1 = states.query_plan(1);
 		ref_1.limit_branch(1, Some(0));
 		assert_eq!(item.get(&ref_1), None);
 		item.set(&ref_1, 11);
@@ -525,10 +534,10 @@ mod test {
 		];
 		for r in disordered.iter() {
 			for i in r {
-				item.set(&states.state_ref(*i), *i);
+				item.set(&states.query_plan(*i), *i);
 			}
 			for i in r {
-				assert_eq!(item.get(&states.state_ref(*i)), Some(i));
+				assert_eq!(item.get(&states.query_plan(*i)), Some(i));
 			}
 		}
 	}
@@ -545,7 +554,7 @@ mod test {
 		let mut item: History<u64> = Default::default();
 		// setting value respecting branch build order
 		for i in 1..6 {
-			item.set(&states.state_ref(i), i);
+			item.set(&states.query_plan(i), i);
 		}
 
 		let mut states1 = states.branches.clone();
@@ -560,12 +569,12 @@ mod test {
 		let states1: BTreeMap<_, _> = states1.iter().map(|(k,v)| (k, v.branch_ref())).collect();
 		let mut item1 = item.clone();
 		item1.gc(states1.iter().map(|(k, v)| ((&v.state, None), **k)).rev());
-		assert_eq!(item1.get(&states.state_ref(1)), None);
+		assert_eq!(item1.get(&states.query_plan(1)), None);
 		for a in action.iter().skip(1) {
 			if a.1 {
-				assert_eq!(item1.get(&states.state_ref(a.0)), Some(&a.0));
+				assert_eq!(item1.get(&states.query_plan(a.0)), Some(&a.0));
 			} else {
-				assert_eq!(item1.get(&states.state_ref(a.0)), None);
+				assert_eq!(item1.get(&states.query_plan(a.0)), None);
 			}
 		}
 	}
