@@ -20,6 +20,7 @@
 
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::BTreeMap;
+use crate::{ManagementRef,};
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
@@ -83,19 +84,25 @@ pub struct BranchRange<I> {
 ///
 /// Also acts as a cache, storage can store
 /// unknown db value as `None`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BranchesSet<I, BI> {
+///
+/// NOTE that the single element branch at default index
+/// containing the default branch index element does always
+/// exist by convention.
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct Tree<I, BI> {
 	storage: BTreeMap<I, BranchState<I, BI>>,
 	last_index: I,
 	/// treshold for possible node value, correspond
 	/// roughly to last cannonical block branch index.
 	/// If at default state value, we go through simple storage.
+	/// TODO move in tree management??
 	composite_treshold: I,
 }
 
-impl<I: Default + Ord, BI> Default for BranchesSet<I, BI> {
+impl<I: Default + Ord, BI> Default for Tree<I, BI> {
 	fn default() -> Self {
-		BranchesSet {
+		Tree {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
 			composite_treshold: I::default(),
@@ -103,10 +110,49 @@ impl<I: Default + Ord, BI> Default for BranchesSet<I, BI> {
 	}
 }
 
+
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct TreeManagement<H, I, BI, V> {
+	tree: Tree<I, BI>,
+	mapping: crate::rstd::BTreeMap<H, (I, BI)>,
+	touched_gc: bool,
+	current_gc: TreeGc<I, BI, V>,
+	neutral_element: Option<V>,
+}
+
+impl<H: Ord, I: Default + Ord, BI, V> Default for TreeManagement<H, I, BI, V> {
+	fn default() -> Self {
+		TreeManagement {
+			tree: Tree {
+				storage: BTreeMap::new(),
+				last_index: I::default(),
+				composite_treshold: I::default(),
+			},
+			mapping: crate::rstd::BTreeMap::new(),
+			neutral_element: None,
+			touched_gc: false,
+			current_gc: Default::default(),
+		}
+	}
+}
+
+impl<
+	H,
+	I,
+	BI,
+	V,
+> TreeManagement<H, I, BI, V> {
+	pub fn define_neutral_element(mut self, n: V) -> Self {
+		self.neutral_element = Some(n);
+		self
+	}
+}
+
 impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
-> BranchesSet<I, BI> {
+> Tree<I, BI> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
 	/// - new index in case of branch range creation
@@ -149,9 +195,15 @@ impl<
 	/// TODO
 	pub fn query_plan(&self, mut branch_index: I) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
+		let mut parent_fork_branch_index = None;
 		while branch_index > self.composite_treshold {
 			if let Some(branch) = self.storage.get(&branch_index) {
-				let branch_ref = branch.query_plan();
+				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
+					branch.query_plan_to(end)
+				} else {
+					branch.query_plan()
+				};
+				parent_fork_branch_index = Some(branch_ref.start.clone());
 				// vecdeque would be better suited
 				history.insert(0, BranchPlan {
 					state: branch_ref,
@@ -228,7 +280,7 @@ impl<
 	}
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 /// Query plane needed for operation for a given
 /// fork.
 /// This is a subset of the full branch set definition.
@@ -245,6 +297,12 @@ impl<
 /// TODO small vec that ??
 pub struct ForkPlan<I, BI> {
 	history: Vec<BranchPlan<I, BI>>,
+}
+
+impl<I, BI> Default for ForkPlan<I, BI> {
+	fn default() -> Self {
+		ForkPlan{ history: Vec::new() }
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,6 +425,14 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 		self.state.clone()
 	}
 
+	pub fn query_plan_to(&self, end: BI) -> BranchRange<BI> {
+		debug_assert!(self.state.end >= end);
+		BranchRange {
+			start: self.state.start.clone(),
+			end,
+		}
+	}
+
 	pub fn new(offset: BI, parent_branch_index: I) -> Self {
 		let mut end = offset.clone();
 		end += 1;
@@ -386,7 +452,7 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 	}
 
  	pub fn can_fork(&self, index: &BI) -> bool {
-		index <= &self.state.end && index >= &self.state.start
+		index <= &self.state.end && index > &self.state.start
 	}
  
 	pub fn add_state(&mut self) -> bool {
@@ -414,31 +480,72 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 	}
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct TreeGc<I, BI, V> {
+	pub removed_branch: Vec<I>,
+	pub modified_range: ForkPlan<I, BI>, 
+	pub neutral_element: Option<V>, 
+}
+
+impl<I, BI, V> Default for TreeGc<I, BI, V> {
+	fn default() -> Self {
+		TreeGc {
+			removed_branch: Vec::new(),
+			modified_range: ForkPlan::default(),
+			neutral_element: None,
+		}
+	}
+}
+
+impl<H: Ord, I: Clone, BI: Clone, V: Clone> ManagementRef<H> for TreeManagement<H, I, BI, V> {
+	type S = (I, BI);
+	/// Start treshold and neutral element
+	type GC = TreeGc<I, BI, V>;
+	/// TODO this needs some branch index mappings.
+	type Migrate = TreeGc<I, BI, V>;
+
+	fn get_db_state(&self, state: &H) -> Option<Self::S> {
+		self.mapping.get(state).cloned()
+	}
+
+	fn get_gc(&self) -> Option<Self::GC> {
+		if self.touched_gc {
+			Some(self.current_gc.clone())
+		} else {
+			None
+		}
+	}
+}
+
+
 #[cfg(test)]
 mod test {
 	use super::*;
 
-	fn test_states() -> BranchesSet<usize, usize> {
-		let mut states = BranchesSet::default();
+	fn test_states() -> Tree<usize, usize> {
+		let mut states = Tree::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.
-		assert_eq!(states.add_state(1, 1), Some(2));
+		assert_eq!(states.add_state(0, 1), Some(2));
 		assert_eq!(Some(true), states.branch_state_mut(&1).map(|ls| ls.add_state()));
-		assert_eq!(states.add_state(1, 2), Some(3));
-		assert_eq!(states.add_state(1, 2), Some(4));
-		assert_eq!(states.add_state(1, 1), Some(5));
+		assert_eq!(Some(true), states.branch_state_mut(&1).map(|ls| ls.add_state()));
+		assert_eq!(states.add_state(1, 3), Some(3));
+		assert_eq!(states.add_state(1, 3), Some(4));
+		assert_eq!(states.add_state(1, 2), Some(5));
 		assert_eq!(states.add_state(2, 2), Some(2));
-		assert_eq!(Some(true), states.branch_state_mut(&1).map(|ls| ls.add_state()));
 		assert_eq!(Some(1), states.drop_state(&1));
 		// cannot create when dropped happen on branch
 		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.add_state()));
 
 		assert!(states.branch_state(&1).unwrap().state.exists(&1));
+		assert!(states.branch_state(&1).unwrap().state.exists(&2));
+		assert!(!states.branch_state(&1).unwrap().state.exists(&3));
 		// 0> 1: _ _ X
 		// |			 |> 3: 1
 		// |			 |> 4: 1
 		// |		 |> 5: 1
-		// |> 2: _
+		// |> 2: _ _
 
 		states
 	}
@@ -447,9 +554,9 @@ mod test {
 	fn test_remove_attached() {
 		let mut states = test_states();
 		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.drop_state()));
-		assert!(states.branch_state(&3).unwrap().state.exists(&2));
-		assert!(states.branch_state(&4).unwrap().state.exists(&2));
-		states.apply_drop_state(&1, &1);
+		assert!(states.branch_state(&3).unwrap().state.exists(&3));
+		assert!(states.branch_state(&4).unwrap().state.exists(&3));
+		states.apply_drop_state(&1, &2);
 		assert_eq!(states.branch_state(&3), None);
 		assert_eq!(states.branch_state(&4), None);
 	}
@@ -460,26 +567,26 @@ mod test {
 		let ref_3 = vec![
 			BranchPlan {
 				branch_index: 1,
-				state: BranchRange { start: 0, end: 2 },
+				state: BranchRange { start: 1, end: 3 },
 			},
 			BranchPlan {
 				branch_index: 3,
-				state: BranchRange { start: 2, end: 3 },
+				state: BranchRange { start: 3, end: 4 },
 			},
 		];
 		assert_eq!(states.query_plan(3).history, ref_3);
 
 		let mut states = states;
 
-		assert_eq!(states.add_state(1, 1), Some(6));
+		assert_eq!(states.add_state(1, 2), Some(6));
 		let ref_6 = vec![
 			BranchPlan {
 				branch_index: 1,
-				state: BranchRange { start: 0, end: 1 },
+				state: BranchRange { start: 1, end: 2 },
 			},
 			BranchPlan {
 				branch_index: 6,
-				state: BranchRange { start: 1, end: 2 },
+				state: BranchRange { start: 2, end: 3 },
 			},
 		];
 		assert_eq!(states.query_plan(6).history, ref_6);

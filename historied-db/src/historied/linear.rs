@@ -288,7 +288,12 @@ impl<K, V: Clone, S: LinearState, DB: PlainDBRef<K, MemoryOnly<V, S>>> StateDBRe
 	}
 }
 
-impl<K: Ord + Clone, V: Clone + Eq, S: LinearState + SubAssign<S>, DB: PlainDBRef<K, MemoryOnly<V, S>> + PlainDB<K, MemoryOnly<V, S>>> StateDB<K, V> for PlainDBState<K, DB, S> {
+impl<
+	K: Ord + Clone,
+	V: Clone + Eq,
+	S: LinearState + SubAssign<S>,
+	DB: PlainDBRef<K, MemoryOnly<V, S>> + PlainDB<K, MemoryOnly<V, S>>
+> StateDB<K, V> for PlainDBState<K, DB, S> {
 	// see inmemory
 	type SE = Latest<S>;
 	// see inmemory
@@ -437,32 +442,33 @@ impl<K: Ord + Clone, V: Clone + Eq, S: LinearState + SubAssign<S>> StateDB<K, V>
 
 // This is for small state as there is no double
 // mapping an some operation goes through full scan.
-pub struct LinearInMemoryManagement<H, S> {
+pub struct LinearInMemoryManagement<H, S, V> {
 	mapping: crate::rstd::BTreeMap<H, S>,
 	start_treshold: S,
 	next_state: S,
-	neutral_element: Option<S>,
+	neutral_element: Option<V>,
 	changed_treshold: bool,
 }
 
-impl<H, S> LinearInMemoryManagement<H, S> {
+impl<H, S, V> LinearInMemoryManagement<H, S, V> {
 	// TODO should use a builder but then we neend
 	// to change Management trait
-	pub fn define_neutral_element(mut self, n: S) -> Self {
+	pub fn define_neutral_element(mut self, n: V) -> Self {
 		self.neutral_element = Some(n);
 		self
 	}
 }
 
-impl<H, S: AddAssign<usize>> LinearInMemoryManagement<H, S> {
+impl<H, S: AddAssign<usize>, V> LinearInMemoryManagement<H, S, V> {
 	pub fn prune(&mut self, nb: usize) {
 		self.changed_treshold = true;
 		self.start_treshold += nb
 	}
 }
-impl<H: Ord, S: Clone> ManagementRef<H> for LinearInMemoryManagement<H, S> {
+
+impl<H: Ord, S: Clone, V: Clone> ManagementRef<H> for LinearInMemoryManagement<H, S, V> {
 	type S = S;
-	type GC = (S, Option<S>);
+	type GC = (S, Option<V>);
 	type Migrate = (S, Self::GC);
 	fn get_db_state(&self, state: &H) -> Option<Self::S> {
 		self.mapping.get(state).cloned()
@@ -476,7 +482,11 @@ impl<H: Ord, S: Clone> ManagementRef<H> for LinearInMemoryManagement<H, S> {
 	}
 }
 
-impl<H: Ord + Clone, S: Default + Clone + AddAssign<usize> + Ord> Management<H> for LinearInMemoryManagement<H, S> {
+impl<
+H: Ord + Clone,
+S: Default + Clone + AddAssign<usize> + Ord,
+V: Clone,
+> Management<H> for LinearInMemoryManagement<H, S, V> {
 	type SE = Latest<S>;
 	fn init() -> (Self, Self::S) {
 		let state = S::default();
