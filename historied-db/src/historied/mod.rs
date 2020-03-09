@@ -20,6 +20,7 @@ use crate::UpdateResult;
 
 pub mod linear;
 pub mod tree_management;
+pub mod tree;
 pub mod encoded_array;
 
 /// Trait for historied value
@@ -61,17 +62,17 @@ pub trait Value<V>: ValueRef<V> {
 	/// Insert or update a value.
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()>;
 
-
 	/// Discard history at.
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>>;
 
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()>;
+
 	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()>;
 }
 
 pub trait InMemoryValue<V>: Value<V> {
 	/// Get latest value, can apply updates.
-	fn get_mut(&mut self, at: &Self::S) -> Option<&mut V>;
+	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V>;
 }
 
 /// An entry at a given history index.

@@ -69,6 +69,8 @@ impl<S> LinearState for S where S:
 ///
 /// Note that it is only informational and does not guaranty the state
 /// is the latest.
+/// TODO move to module
+/// TODO repr Transparent and cast ptr for tree?
 #[derive(Clone)]
 pub struct Latest<S>(S);
 
@@ -92,6 +94,8 @@ const ALLOCATED_HISTORY: usize = 2;
 /// Array like buffer for in memory storage.
 /// By in memory we expect that this will
 /// not required persistence and is not serialized.
+#[derive(Debug, Clone)]
+#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
 impl<V, S: Clone> MemoryOnly<V, S> {
@@ -138,7 +142,7 @@ impl<V: Clone, S: LinearState> InMemoryValueRef<V> for MemoryOnly<V, S> {
 		while index > 0 {
 			index -= 1;
 			if let Some(HistoriedValue { value, state }) = self.0.get(index) {
-				if at.exists(state) {
+				if state.exists(at) {
 					return Some(value);
 				}
 			}
@@ -162,19 +166,25 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
 		let at = at.latest();
-		if let Some(last) = self.0.last() {
-			// TODO this is rather unsafe: we expact that
-			// when changing value we use a state that is
-			// the latest from the state management.
-			// Their could be ways to enforce that, but nothing
-			// good at this point.
-			debug_assert!(&last.state <= at); 
-			if at == &last.state {
-				if last.value == value {
-					return UpdateResult::Unchanged;
+		loop {
+			if let Some(last) = self.0.last() {
+				// TODO this is rather unsafe: we expect that
+				// when changing value we use a state that is
+				// the latest from the state management.
+				// Their could be ways to enforce that, but nothing
+				// good at this point.
+				if &last.state > at {
+					self.0.pop();
+					continue;
+				} 
+				if at == &last.state {
+					if last.value == value {
+						return UpdateResult::Unchanged;
+					}
+					self.0.pop();
 				}
-				self.0.pop();
 			}
+			break;
 		}
 		self.0.push(HistoriedValue {value, state: at.clone()});
 		UpdateResult::Changed(())
@@ -249,16 +259,20 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 
 
 impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOnly<V, S> {
-	fn get_mut(&mut self, at: &Self::S) -> Option<&mut V> {
+	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let mut index = self.0.len();
 		if index == 0 {
 			return None;
 		}
+		let at = at.latest();
 		while index > 0 {
 			index -= 1;
 			if let Some(HistoriedValue { value: _, state }) = self.0.get(index) {
-				if at.exists(state) {
+				if at == state {
 					return self.0.get_mut(index).map(|v| &mut v.value)
+				}
+				if at < state {
+					break;
 				}
 			}
 		}

@@ -36,7 +36,8 @@ pub trait BranchesContainer<I, BI> {
 	/// Get the last branch, inclusive.
 	fn last_index(self) -> I;
 
-	/// Iterator over the branch states.
+	/// Iterator over the branch states in query order
+	/// (more recent first).
 	fn iter(self) -> Self::Iter;
 }
 
@@ -191,6 +192,14 @@ impl<
 		})
 	}
 
+	pub fn latest_at(&self, branch_index : I) -> Option<Latest<(I, BI)>> {
+		self.storage.get(&branch_index).map(|branch| {
+			let mut end = branch.state.end.clone();
+			end -= 1;
+			Latest::unchecked_latest((branch_index, end))
+		})
+	}
+	
 	/// TODO doc & switch to &I
 	pub fn query_plan_at(&self, (branch_index, mut index) : (I, BI)) -> ForkPlan<I, BI> {
 		// make index exclusive
@@ -361,9 +370,10 @@ impl<'a, I: Clone, BI> Iterator for ForkPlanIter<'a, I, BI> {
 
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.1 > 0 {
+			self.1 -= 1;
 			Some((
-				&(self.0).history[self.1 - 1].state,
-				(self.0).history[self.1 - 1].branch_index.clone(),
+				&(self.0).history[self.1].state,
+				(self.0).history[self.1].branch_index.clone(),
 			))
 		} else {
 			None
@@ -476,7 +486,7 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 	}
 
 	/// Return true if resulting branch is empty.
-	fn drop_state(&mut self) -> bool {
+	pub fn drop_state(&mut self) -> bool {
 		if self.state.end > self.state.start {
 			self.state.end -= 1;
 			self.can_append = false;
@@ -496,7 +506,8 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 pub struct TreeGc<I, BI, V> {
 	pub removed_branch: Vec<I>,
 	pub modified_range: ForkPlan<I, BI>, 
-	pub neutral_element: Option<V>, 
+	pub neutral_element: Option<V>,
+	// TODO add the key elements (as option to trigger registration or not).
 }
 
 impl<I, BI, V> Default for TreeGc<I, BI, V> {
@@ -622,10 +633,11 @@ impl<
 
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
 	use super::*;
 
-	fn test_states() -> Tree<usize, usize> {
+	// TODO switch to management function?
+	pub(crate) fn test_states() -> Tree<usize, usize> {
 		let mut states = Tree::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.
@@ -698,94 +710,4 @@ mod test {
 		ref_6.remove(0);
 		assert_eq!(states.query_plan(6).history, ref_6);
 	}
-
-/* TODO enable it on tree history
-	#[test]
-	fn test_set_get() {
-		// 0> 1: _ _ X
-		// |			 |> 3: 1
-		// |			 |> 4: 1
-		// |		 |> 5: 1
-		// |> 2: _
-		let states = test_states();
-		let mut item: History<u64> = Default::default();
-
-		for i in 0..6 {
-			assert_eq!(item.get(&states.query_plan(i)), None);
-		}
-
-		// setting value respecting branch build order
-		for i in 1..6 {
-			item.set(&states.query_plan(i), i);
-		}
-
-		for i in 1..6 {
-			assert_eq!(item.get(&states.query_plan(i)), Some(&i));
-		}
-
-		let mut ref_3 = states.query_plan(3);
-		ref_3.limit_branch(1, None);
-		assert_eq!(item.get(&ref_3), Some(&1));
-
-		let mut ref_1 = states.query_plan(1);
-		ref_1.limit_branch(1, Some(0));
-		assert_eq!(item.get(&ref_1), None);
-		item.set(&ref_1, 11);
-		assert_eq!(item.get(&ref_1), Some(&11));
-
-		item = Default::default();
-
-		// could rand shuffle if rand get imported later.
-		let disordered = [
-			[1,2,3,5,4],
-			[2,5,1,3,4],
-			[5,3,2,4,1],
-		];
-		for r in disordered.iter() {
-			for i in r {
-				item.set(&states.query_plan(*i), *i);
-			}
-			for i in r {
-				assert_eq!(item.get(&states.query_plan(*i)), Some(i));
-			}
-		}
-	}
-*/
-/* TODO move in tree
-	#[test]
-	fn test_gc() {
-		// 0> 1: _ _ X
-		// |			 |> 3: 1
-		// |			 |> 4: 1
-		// |		 |> 5: 1
-		// |> 2: _
-		let states = test_states();
-		let mut item: History<u64> = Default::default();
-		// setting value respecting branch build order
-		for i in 1..6 {
-			item.set(&states.query_plan(i), i);
-		}
-
-		let mut states1 = states.branches.clone();
-		let action = [(1, true), (2, false), (3, false), (4, true), (5, false)];
-		for a in action.iter() {
-			if !a.1 {
-				states1.remove(&a.0);
-			}
-		}
-		// makes invalid tree (detaches 4)
-		states1.get_mut(&1).map(|br| br.state.len = 1);
-		let states1: BTreeMap<_, _> = states1.iter().map(|(k,v)| (k, v.branch_ref())).collect();
-		let mut item1 = item.clone();
-		item1.gc(states1.iter().map(|(k, v)| ((&v.state, None), **k)).rev());
-		assert_eq!(item1.get(&states.query_plan(1)), None);
-		for a in action.iter().skip(1) {
-			if a.1 {
-				assert_eq!(item1.get(&states.query_plan(a.0)), Some(&a.0));
-			} else {
-				assert_eq!(item1.get(&states.query_plan(a.0)), None);
-			}
-		}
-	}
-*/
 }
