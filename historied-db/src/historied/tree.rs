@@ -19,13 +19,32 @@ use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, Latest, LinearSta
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 
+// TODO for not in memory we need some direct or indexed api, returning value
+// and the info if there can be lower value index (not just a direct index).
+// -> then similar to those reverse iteration with possible early exit.
+// -> Also need to attach some location index (see enumerate use here)
+
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct MemoryOnly<I, BI, V>(Vec<MemoryOnlyBranch<I, BI, V>>);
+pub struct MemoryOnly<I, BI, V> {
+	branches: Vec<MemoryOnlyBranch<I, BI, V>>,
+	// TODO add optional range indexing.
+	// Indexing is over couple (I, BI), runing on fix size batches (aka max size).
+	// First try latest, then try indexing, (needs 3 methods
+	// get_latest, get_index, iter; currently we use directly iter).
+
+	// TODO add an optional pointer to deeper branch
+	// to avoid iterating to much over latest fork when the
+	// deepest most usefull branch manage to keep a linear history
+	// but a lower branch index.
+	// (conf needed in state also with optional indexing).
+}
 
 impl<I, BI, V> Default for MemoryOnly<I, BI, V> {
 	fn default() -> Self {
-		MemoryOnly(Vec::new())
+		MemoryOnly{
+			branches: Vec::new(),
+		}
 	}
 }
 
@@ -36,7 +55,7 @@ pub struct MemoryOnlyBranch<I, BI, V> {
 	history: MemoryOnlyLinear<V, BI>,
 }
 
-impl<I: Clone, BI: Clone, V> MemoryOnlyBranch<I, BI, V> {
+impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> MemoryOnlyBranch<I, BI, V> {
 	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
 		let (branch_index, index) = state.latest().clone();
 		let index = Latest::unchecked_latest(index); // TODO cast ptr?
@@ -45,14 +64,6 @@ impl<I: Clone, BI: Clone, V> MemoryOnlyBranch<I, BI, V> {
 			branch_index,
 			history,
 		}
-	}
-}
-
-impl<I: Clone, BI: Clone, V> MemoryOnly<I, BI, V> {
-	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
-		let mut v = Vec::new();
-		v.push(MemoryOnlyBranch::new(value, state));
-		MemoryOnly(v)
 	}
 }
 
@@ -73,7 +84,7 @@ impl<
 
 	fn is_empty(&self) -> bool {
 		// This implies remove from linear clean directly the parent vec.
-		self.0.is_empty()
+		self.branches.is_empty()
 	}
 }
 
@@ -83,7 +94,7 @@ impl<
 	V: Clone,
 > MemoryOnly<I, BI, V> {
 	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
-		let mut index = self.0.len();
+		let mut index = self.branches.len();
 		// note that we expect branch index to be linearily set
 		// along a branch (no state containing unordered branch_index
 		// and no history containing unorderd branch_index).
@@ -93,14 +104,14 @@ impl<
 
 		for (state_branch_range, state_branch_index) in at.iter() {
 			while index > 0 {
-				let branch_index = &self.0[index - 1].branch_index;
+				let branch_index = &self.branches[index - 1].branch_index;
 				if branch_index < &state_branch_index {
 					break;
 				} else if branch_index == &state_branch_index {
 					// TODO add a lower bound check (maybe debug_assert it only).
 					let mut upper_bound = state_branch_range.end.clone();
 					upper_bound -= 1;
-					if let Some(result) = self.0[index - 1].history.get_ref(&upper_bound) {
+					if let Some(result) = self.branches[index - 1].history.get_ref(&upper_bound) {
 						return Some(result)
 					}
 				}
@@ -117,13 +128,22 @@ impl<
 	V: Clone + Eq,
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
+	type Index = (I, BI);
 	type GC = TreeGc<I, BI, V>;
 	type Migrate = TreeGc<I, BI, V>;
 
+	fn new(value: V, at: &Self::SE) -> Self {
+		let mut v = Vec::new();
+		v.push(MemoryOnlyBranch::new(value, at));
+		MemoryOnly {
+			branches: v,
+		}
+	}
+
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
 		let (branch_index, index) = at.latest();
-		let mut insert_at = self.0.len();
-		for (iter_index, branch) in self.0.iter_mut().enumerate().rev() {
+		let mut insert_at = self.branches.len();
+		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
 			if &branch.branch_index == branch_index {
 				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
 				return branch.history.set(value, &index);
@@ -134,17 +154,17 @@ impl<
 			}
 		}
 		let branch = MemoryOnlyBranch::new(value, at);
-		if insert_at == self.0.len() {
-			self.0.push(branch);
+		if insert_at == self.branches.len() {
+			self.branches.push(branch);
 		} else {
-			self.0.insert(insert_at, branch);
+			self.branches.insert(insert_at, branch);
 		}
 		UpdateResult::Changed(())
 	}
 
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>> {
 		let (branch_index, index) = at.latest();
-		for branch in self.0.iter_mut().rev() {
+		for branch in self.branches.iter_mut().rev() {
 			if &branch.branch_index == branch_index {
 				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
 				return branch.history.discard(&index);
@@ -157,7 +177,61 @@ impl<
 	}
 
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
-		unimplemented!("TODO needs impl");
+
+		let mut result = UpdateResult::Unchanged;
+		let start_len = self.branches.len();
+		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
+		let mut gc_iter = gc.changes.iter().rev();
+		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
+		let mut o_gc = gc_iter.next();
+		let mut o_branch = branch_iter.next();
+		while let (Some(gc), Some((index, branch))) = (o_gc.as_ref(), o_branch.as_mut()) {
+			if gc.branch_index == branch.branch_index {
+				if let Some(gc) = gc.new_range.as_ref() {
+					match branch.history.gc(gc) {
+						UpdateResult::Unchanged => (),
+						UpdateResult::Changed(_) => { result = UpdateResult::Changed(()); },
+						UpdateResult::Cleared(_) => to_remove.push(*index),
+					}
+				} else {
+					to_remove.push(*index);
+				}
+				o_gc = gc_iter.next();
+				o_branch = branch_iter.next();
+			} else if gc.branch_index < branch.branch_index {
+				o_branch = branch_iter.next();
+			} else {
+				o_gc = gc_iter.next();
+			}
+		}
+
+		for i in to_remove.into_iter() {
+			self.branches.remove(i);
+		}
+
+		if self.branches.len() == 0 {
+			result = UpdateResult::Cleared(());
+		} else if self.branches.len() != start_len {
+			result = UpdateResult::Changed(());
+		}
+
+		result
+	}
+
+	// TODO this is rather costy and would run in a loop, consider using btreemap instead of vec in
+	// treegc
+	fn is_in_gc((index, linear_index) : &Self::Index, gc: &Self::GC) -> bool {
+		for branch in gc.changes.iter().rev() {
+			if &branch.branch_index == index {
+				return branch.new_range.as_ref()
+					.map(|gc| MemoryOnlyLinear::is_in_gc(linear_index, gc))
+					.unwrap_or(true);
+			}
+			if &branch.branch_index < &index {
+				break;
+			}
+		}
+		false
 	}
 
 	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()> {
@@ -172,7 +246,7 @@ impl<
 > InMemoryValue<V> for MemoryOnly<I, BI, V> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let (branch_index, index) = at.latest();
-		for branch in self.0.iter_mut().rev() {
+		for branch in self.branches.iter_mut().rev() {
 			if &branch.branch_index == branch_index {
 				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
 				return branch.history.get_mut(&index);

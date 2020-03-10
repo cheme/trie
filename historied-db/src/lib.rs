@@ -77,6 +77,7 @@ pub trait InMemoryStateDBRef<K, V>: StateDBRef<K, V> {
 }
 
 pub trait StateDB<K, V>: StateDBRef<K, V> {
+		// TODO associated type from Value??
 	/// State to use here.
 	/// We use a different state than
 	/// for the ref as it can use different

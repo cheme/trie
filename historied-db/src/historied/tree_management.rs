@@ -20,7 +20,7 @@
 
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::BTreeMap;
-use crate::historied::linear::Latest;
+use crate::historied::linear::{Latest, LinearGC};
 use crate::{Management, ManagementRef, Migrate, ForkableManagement};
 
 /// Trait defining a state for querying or modifying a tree.
@@ -100,6 +100,13 @@ pub struct Tree<I, BI> {
 	/// If at default state value, we go through simple storage.
 	/// TODO move in tree management??
 	composite_treshold: I,
+	// TODO some strategie to close a long branch that gets
+	// behind multiple fork? This should only be usefull
+	// for high number of modification, small number of
+	// fork. The purpose is to avoid history where meaningfull
+	// value is always in a low number branch behind a few fork.
+	// A longest branch pointer per history is also a viable
+	// strategy and avoid fragmenting the history to much.
 }
 
 impl<I: Default + Ord, BI> Default for Tree<I, BI> {
@@ -503,9 +510,20 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct BranchGC<I, BI, V> {
+	pub branch_index: I,
+	/// A new start - end limit for the branch or a removed
+	/// branch.
+	pub new_range: Option<LinearGC<BI, V>>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TreeGc<I, BI, V> {
-	pub removed_branch: Vec<I>,
-	pub modified_range: ForkPlan<I, BI>, 
+	/// Every modified branch.
+	/// Ordered by branch index.
+	pub changes: Vec<BranchGC<I, BI, V>>,
+	// TODO is also in every lineargc of branchgc.
 	pub neutral_element: Option<V>,
 	// TODO add the key elements (as option to trigger registration or not).
 }
@@ -513,8 +531,7 @@ pub struct TreeGc<I, BI, V> {
 impl<I, BI, V> Default for TreeGc<I, BI, V> {
 	fn default() -> Self {
 		TreeGc {
-			removed_branch: Vec::new(),
-			modified_range: ForkPlan::default(),
+			changes: Vec::new(),
 			neutral_element: None,
 		}
 	}
@@ -557,7 +574,10 @@ impl<
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V: Clone,
 > Management<H> for TreeManagement<H, I, BI, V> {
+	// TODO attach gc infos to allow some lazy cleanup (make it optional)
+	// on set and on get_mut
 	type SE = Latest<(I, BI)>;
+
 	fn init() -> (Self, Self::S) {
 		let management = Self::default();
 		let init_plan = management.tree.query_plan(I::default());

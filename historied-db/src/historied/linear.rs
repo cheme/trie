@@ -17,10 +17,9 @@
 //! Current implementation is limited to a simple array indexing
 //! with modification at the end only.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, StateIndex};
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
 	Management, Migrate, LinearManagement};
-use hash_db::{PlainDB, PlainDBRef};
 use crate::rstd::marker::PhantomData;
 use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
@@ -86,6 +85,15 @@ impl<S> Latest<S> {
 	}
 }
 
+impl<S: Clone> StateIndex<S> for Latest<S> {
+	fn index(&self) -> S {
+		self.latest().clone()
+	}
+	fn index_ref(&self) -> &S {
+		self.latest()
+	}
+}
+
 /// Size of preallocated history per element.
 /// Currently at two for committed and prospective only.
 /// It means that using transaction in a module got a direct allocation cost.
@@ -99,12 +107,6 @@ const ALLOCATED_HISTORY: usize = 2;
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
 impl<V, S: Clone> MemoryOnly<V, S> {
-	pub fn new(value: V, state: &Latest<S>) -> Self {
-		let mut v = smallvec::SmallVec::default();
-		let state = state.latest().clone();
-		v.push(HistoriedValue{ value, state });
-		MemoryOnly(v)
-	}
 	pub fn remove_start(&mut self, split_off: usize) {
 		if self.0.spilled() {
 			let new = replace(&mut self.0, Default::default());
@@ -154,15 +156,19 @@ impl<V: Clone, S: LinearState> InMemoryValueRef<V> for MemoryOnly<V, S> {
 //impl<V: Clone, S: LinearState, Q: LinearStateLatest<S>> Value<V> for MemoryOnly<V, S> {
 impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S> {
 	type SE = Latest<S>;
-	/// Removing existing state before.
-	/// Optionally a skipable value (for
-	/// history containing deletion that is deletion
-	/// as a deletion on empty value can be remove).
-	type GC = (S, Option<V>);
+	type Index = S;
+	type GC = LinearGC<S, V>;
 	/// Migrate will act as GC but also align state to 0.
 	/// First index being the number for start state that
 	/// will be removed after migration.
 	type Migrate = (S, Self::GC);
+
+	fn new(value: V, at: &Self::SE) -> Self {
+		let mut v = smallvec::SmallVec::default();
+		let state = at.latest().clone();
+		v.push(HistoriedValue{ value, state });
+		MemoryOnly(v)
+	}
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
 		let at = at.latest();
@@ -207,37 +213,70 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		UpdateResult::Unchanged
 	}
 
-	fn gc(&mut self, (start_treshold, start_void): &Self::GC) -> UpdateResult<()> {
-		let mut index = 0;
-		loop {
-			if let Some(HistoriedValue{ value: _, state }) = self.0.get(index) {
-				if state >= &start_treshold {
-					index = index.saturating_sub(1);
+	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
+		if gc.new_start.is_some() && gc.new_start == gc.new_end {
+			self.0.clear();
+			return UpdateResult::Cleared(());
+		}
+
+		let mut end_result = UpdateResult::Unchanged;
+		if let Some(new_end) = gc.new_end.as_ref() {
+
+			let mut index = self.0.len();
+			while index > 0 {
+				if let Some(HistoriedValue{ value: _, state }) = self.0.get(index - 1) {
+					if state < new_end {
+						break;
+					}
+				} else {
 					break;
 				}
-			} else {
-				index = index.saturating_sub(1);
-				break;
+				index -= 1;
 			}
-			index += 1;
+
+			if index == 0 {
+				self.0.clear();
+				return UpdateResult::Cleared(());
+			} else if index != self.0.len() {
+				self.0.truncate(index);
+				end_result = UpdateResult::Changed(());
+			}
 		}
-		if let Some(start_void) = start_void.as_ref() {
-			while let Some(HistoriedValue{ value, state: _ }) = self.0.get(index) {
-				if value != start_void {
+
+		if let Some(start_treshold) = gc.new_start.as_ref() {
+			let mut index = 0;
+			loop {
+				if let Some(HistoriedValue{ value: _, state }) = self.0.get(index) {
+					if state >= start_treshold {
+						index = index.saturating_sub(1);
+						break;
+					}
+				} else {
+					index = index.saturating_sub(1);
 					break;
 				}
 				index += 1;
 			}
+			if let Some(neutral) = gc.neutral_element.as_ref() {
+				while let Some(HistoriedValue{ value, state: _ }) = self.0.get(index) {
+					if value != neutral {
+						break;
+					}
+					index += 1;
+				}
+			}
+			if index == 0 {
+				return end_result;
+			}
+			if index == self.0.len() {
+				self.0.clear();
+				return UpdateResult::Cleared(());
+			}
+			self.remove_start(index);
+			UpdateResult::Changed(())
+		} else {
+			return end_result;
 		}
-		if index == 0 {
-			return UpdateResult::Unchanged
-		}
-		if index == self.0.len() {
-			self.0.clear();
-			return UpdateResult::Cleared(());
-		}
-		self.remove_start(index);
-		UpdateResult::Changed(())
 	}
 
 	fn migrate(&mut self, (mig, gc): &Self::Migrate) -> UpdateResult<()> {
@@ -254,6 +293,11 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		} else {
 			res
 		}
+	}
+
+	fn is_in_gc(index: &Self::Index, gc: &Self::GC) -> bool {
+		gc.new_start.as_ref().map(|s| index < s).unwrap_or(false)
+			|| gc.new_end.as_ref().map(|s| index >= s).unwrap_or(false)
 	}
 }
 
@@ -280,178 +324,15 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOn
 	}
 }
 
-/// Implementation for plain db.
-pub struct PlainDBState<K, DB, S> {
-	db: DB,
-	touched_keys: crate::rstd::BTreeMap<S, Vec<K>>, // TODO change that by a journal trait!!
-	_ph: PhantomData<S>,
-}
-
-impl<K, V: Clone, S: LinearState, DB: PlainDBRef<K, MemoryOnly<V, S>>> StateDBRef<K, V> for PlainDBState<K, DB, S> {
-	type S = S;
-
-	fn get(&self, key: &K, at: &Self::S) -> Option<V> {
-		self.db.get(key)
-			.and_then(|h| h.get(at))
-	}
-
-	fn contains(&self, key: &K, at: &Self::S) -> bool {
-		self.db.get(key)
-			.map(|h| h.contains(at))
-			.unwrap_or(false)
-	}
-}
-
-impl<
-	K: Ord + Clone,
-	V: Clone + Eq,
-	S: LinearState + SubAssign<S>,
-	DB: PlainDBRef<K, MemoryOnly<V, S>> + PlainDB<K, MemoryOnly<V, S>>
-> StateDB<K, V> for PlainDBState<K, DB, S> {
-	// see inmemory
-	type SE = Latest<S>;
-	// see inmemory
-	type GC = (S, Option<V>);
-	// see inmemory
-	type Migrate = (S, Self::GC);
-
-	fn emplace(&mut self, key: K, value: V, at: &Self::SE) {
-		if let Some(mut hist) = <DB as PlainDB<_, _>>::get(&self.db, &key) {
-			match hist.set(value, at) {
-				UpdateResult::Changed(_) => self.db.emplace(key.clone(), hist),
-				UpdateResult::Cleared(_) => self.db.remove(&key),
-				UpdateResult::Unchanged => return,
-			}
-		} else {
-			self.db.emplace(key.clone(), MemoryOnly::new(value, at));
-		}
-		self.touched_keys.entry(at.latest().clone()).or_default().push(key);
-	}
-
-	fn remove(&mut self, key: &K, at: &Self::SE) {
-		if let Some(mut hist) = <DB as PlainDB<_, _>>::get(&self.db, &key) {
-			match hist.discard(at) {
-				UpdateResult::Changed(_) => self.db.emplace(key.clone(), hist),
-				UpdateResult::Cleared(_) => self.db.remove(&key),
-				UpdateResult::Unchanged => return,
-			}
-		}
-		self.touched_keys.entry(at.latest().clone()).or_default().push(key.clone());
-	}
-
-	fn gc(&mut self, gc: &Self::GC) {
-		// retain for btreemap missing here.
-		let mut states = Vec::new();
-		for touched in self.touched_keys.keys() {
-			if touched < &gc.0 {
-				states.push(touched.clone());
-			}
-		}
-		let mut keys: crate::rstd::BTreeSet<_> = Default::default();
-		for state in states {
-			if let Some(touched) = self.touched_keys.remove(&state) {
-				for k in touched {
-					keys.insert(k);
-				}
-			}
-		}
-		for key in keys {
-			if let Some(mut hist) = <DB as PlainDB<_, _>>::get(&self.db, &key) {
-				match hist.gc(gc) {
-					UpdateResult::Changed(_) => self.db.emplace(key, hist),
-					UpdateResult::Cleared(_) => self.db.remove(&key),
-					UpdateResult::Unchanged => break,
-				}
-			}
-		}
-	}
-
-	fn migrate(&mut self, mig: &Self::Migrate) {
-		// probably a MaybeTrait could be use to implement
-		// partially (or damn extract this in its own trait).
-		unimplemented!("requires iterator on the full db");
-	}
-}
-
-/// Implementation for plain db.
-pub struct BTreeMap<K, V, S>(crate::rstd::BTreeMap<K, MemoryOnly<V, S>>, PhantomData<S>);
-
-impl<K: Ord, V: Clone, S: LinearState> StateDBRef<K, V> for BTreeMap<K, V, S> {
-	type S = S;
-
-	fn get(&self, key: &K, at: &Self::S) -> Option<V> {
-		self.0.get(key)
-			.and_then(|h| h.get(at))
-	}
-
-	fn contains(&self, key: &K, at: &Self::S) -> bool {
-		self.0.get(key)
-			.map(|h| h.contains(at))
-			.unwrap_or(false)
-	}
-}
-
-// note that the constraint on state db ref for the associated type is bad (forces V as clonable).
-impl<K: Ord, V: Clone, S: LinearState> InMemoryStateDBRef<K, V> for BTreeMap<K, V, S> {
-	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
-		self.0.get(key)
-			.and_then(|h| h.get_ref(at))
-	}
-}
-
-impl<K: Ord + Clone, V: Clone + Eq, S: LinearState + SubAssign<S>> StateDB<K, V> for BTreeMap<K, V, S> {
-	// see inmemory
-	type SE = Latest<S>;
-	// see inmemory
-	type GC = (S, Option<V>);
-	// see inmemory
-	type Migrate = (S, Self::GC);
-
-	fn emplace(&mut self, key: K, value: V, at: &Self::SE) {
-		if let Some(hist) = self.0.get_mut(&key) {
-			hist.set(value, at);
-		} else {
-			self.0.insert(key, MemoryOnly::new(value, at));
-		}
-	}
-
-	fn remove(&mut self, key: &K, at: &Self::SE) {
-		match self.0.get_mut(&key).map(|h| h.discard(at)) {
-			Some(UpdateResult::Cleared(_)) => (),
-			_ => return,
-		}
-		self.0.remove(&key);
-	}
-
-	fn gc(&mut self, gc: &Self::GC) {
-		// retain for btreemap missing here.
-		let mut to_remove = Vec::new();
-		for (key, h) in self.0.iter_mut() {
-			match h.gc(gc) {
-				UpdateResult::Cleared(_) => (),
-				_ => break,
-			}
-			to_remove.push(key.clone());
-		}
-		for k in to_remove {
-			self.0.remove(&k);
-		}
-	}
-
-	fn migrate(&mut self, mig: &Self::Migrate) {
-		// retain for btreemap missing here.
-		let mut to_remove = Vec::new();
-		for (key, h) in self.0.iter_mut() {
-			match h.migrate(mig) {
-				UpdateResult::Cleared(_) => (),
-				_ => break,
-			}
-			to_remove.push(key.clone());
-		}
-		for k in to_remove {
-			self.0.remove(&k);
-		}
-	}
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct LinearGC<S, V> {
+	// inclusive
+	new_start: Option<S>,
+	// exclusive
+	new_end: Option<S>,
+	// TODO use reference??
+	neutral_element: Option<V>,
 }
 
 // This is for small state as there is no double
