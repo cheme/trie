@@ -317,43 +317,4 @@ mod test {
 			}
 		}
 	}
-
-/* TODO move in tree
-	#[test]
-	fn test_gc() {
-		// 0> 1: _ _ X
-		// |			 |> 3: 1
-		// |			 |> 4: 1
-		// |		 |> 5: 1
-		// |> 2: _
-		let states = test_states();
-		let mut item: MemoryOnly<usize, usize, usize> = Default::default();
-		// setting value respecting branch build order
-		for i in 1..6 {
-			item.set(&states.query_plan(i), i);
-		}
-
-		let mut states1 = states.branches.clone();
-		let action = [(1, true), (2, false), (3, false), (4, true), (5, false)];
-		for a in action.iter() {
-			if !a.1 {
-				states1.remove(&a.0);
-			}
-		}
-		// makes invalid tree (detaches 4)
-		states1.get_mut(&1).map(|br| br.state.len = 1);
-		let states1: BTreeMap<_, _> = states1.iter().map(|(k,v)| (k, v.branch_ref())).collect();
-		let mut item1 = item.clone();
-		item1.gc(states1.iter().map(|(k, v)| ((&v.state, None), **k)).rev());
-		assert_eq!(item1.get(&states.query_plan(1)), None);
-		for a in action.iter().skip(1) {
-			if a.1 {
-				assert_eq!(item1.get(&states.query_plan(a.0)), Some(&a.0));
-			} else {
-				assert_eq!(item1.get(&states.query_plan(a.0)), None);
-			}
-		}
-	}
-*/
-
 }
