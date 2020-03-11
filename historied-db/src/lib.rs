@@ -132,7 +132,11 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	/// attached db state for actual modification
 	type SE;
 	fn init() -> (Self, Self::S);
+
+	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE>;
+
 	fn latest_state(&self) -> Self::SE;
+
 	fn reverse_lookup(&self, state: &Self::S) -> Option<H>;
 
 	/// report a gc did run successfully, this only update gc

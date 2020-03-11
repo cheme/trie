@@ -87,12 +87,11 @@ impl<
 		self.branches.is_empty()
 	}
 }
-
 impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<usize>,
 	V: Clone,
-> MemoryOnly<I, BI, V> {
+> InMemoryValueRef<V> for MemoryOnly<I, BI, V> {
 	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
 		let mut index = self.branches.len();
 		// note that we expect branch index to be linearily set
@@ -256,6 +255,19 @@ impl<
 			}
 		}
 		None
+	}
+}
+
+impl MemoryOnly<usize, usize, Option<Vec<u8>>> {
+	/// Temporary function to get occupied stage.
+	/// TODO replace by heapsizeof
+	pub fn temp_size(&self) -> usize {
+		let mut size = 0;
+		for b in self.branches.iter() {
+			size += 4; // branch index (using u32 as usize)
+			size += b.history.temp_size();
+		}
+		size
 	}
 }
 

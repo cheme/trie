@@ -70,7 +70,7 @@ impl<S> LinearState for S where S:
 /// is the latest.
 /// TODO move to module
 /// TODO repr Transparent and cast ptr for tree?
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Latest<S>(S);
 
 impl<S> Latest<S> {
@@ -80,7 +80,8 @@ impl<S> Latest<S> {
 	pub(crate) fn unchecked_latest(s: S) -> Self {
 		Latest(s)
 	}
-	pub(crate) fn latest(&self) -> &S {
+	/// Reference to inner state.
+	pub fn latest(&self) -> &S {
 		&self.0
 	}
 }
@@ -398,12 +399,24 @@ V: Clone,
 			can_append: true,
 		}, state)
 	}
+
+	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
+		if let Some(state) = self.mapping.get(state) {
+			let latest = self.latest_state();
+			if state == latest.latest() {
+				return Some(latest)
+			}
+		}
+		None
+	}
+
 	fn latest_state(&self) -> Self::SE {
 		// TODO can use next_state - 1 to avoid this search
 		Latest::unchecked_latest(self.mapping.values().max()
 			.map(Clone::clone)
 			.unwrap_or(S::default()))
 	}
+
 	fn reverse_lookup(&self, state: &Self::S) -> Option<H> {
 		// TODO could be the closest valid and return non optional!!!! TODO
 		self.mapping.iter()
@@ -448,5 +461,19 @@ V: Clone,
 		}
 		self.can_append = true;
 		self.next_state.clone()
+	}
+}
+
+impl MemoryOnly<Option<Vec<u8>>, usize> {
+	/// Temporary function to get occupied stage.
+	/// TODO replace by heapsizeof
+	pub fn temp_size(&self) -> usize {
+		let mut size = 0;
+		for h in self.0.iter() {
+			size += 4; // usize as u32 for index
+			size += 1; // optional
+			size += h.value.as_ref().map(|v| v.len()).unwrap_or(0);
+		}
+		size
 	}
 }

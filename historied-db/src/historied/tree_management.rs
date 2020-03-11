@@ -128,7 +128,7 @@ pub struct TreeManagement<H, I, BI, V> {
 	touched_gc: bool,
 	current_gc: TreeGc<I, BI, V>,
 	neutral_element: Option<V>,
-	last_in_use_index: (I, BI),
+	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
 }
 
 impl<H: Ord, I: Default + Ord, BI: Default, V> Default for TreeManagement<H, I, BI, V> {
@@ -578,6 +578,18 @@ impl<
 	// on set and on get_mut
 	type SE = Latest<(I, BI)>;
 
+	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
+		self.mapping.get(state).cloned().and_then(|(i, bi)| {
+			// enforce only latest
+			if let Some(result) = self.tree.latest_at(i) {
+				if result.latest().1 == bi {
+					return Some(result)
+				}
+			}
+			None
+		})
+	}
+
 	fn init() -> (Self, Self::S) {
 		let management = Self::default();
 		let init_plan = management.tree.query_plan(I::default());
@@ -607,7 +619,6 @@ impl<
 		self.touched_gc = false;
 	}
 
-
 	fn get_migrate(self) -> Migrate<H, Self> {
 		unimplemented!()
 	}
@@ -630,7 +641,8 @@ impl<
 		index += 1;
 		if let Some(branch_index) = self.tree.add_state(branch_index.clone(), index.clone()) {
 			let result = self.tree.query_plan(branch_index.clone());
-			self.mapping.insert(state, (branch_index.clone(), index));
+			self.last_in_use_index = (branch_index.clone(), index);
+			self.mapping.insert(state, self.last_in_use_index.clone());
 			Some(result)
 		} else {
 			None
