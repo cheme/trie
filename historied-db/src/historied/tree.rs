@@ -15,8 +15,8 @@
 //! Tree historied data historied db implementations.
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, Latest, LinearState};
-use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeGc};
+use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, Latest, LinearState, LinearGC};
+use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeState};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 
 // TODO for not in memory we need some direct or indexed api, returning value
@@ -128,8 +128,8 @@ impl<
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
-	type GC = TreeGc<I, BI, V>;
-	type Migrate = TreeGc<I, BI, V>;
+	type GC = TreeState<I, BI, V>;
+	type Migrate = (BI, TreeMigrate<I, BI, V>);
 
 	fn new(value: V, at: &Self::SE) -> Self {
 		let mut v = Vec::new();
@@ -159,10 +159,80 @@ impl<
 
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
 
+		let neutral = &gc.neutral_element;
 		let mut result = UpdateResult::Unchanged;
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
-		let mut gc_iter = gc.changes.iter().rev();
+		let mut gc_iter = gc.tree.storage.iter().rev();
+		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
+		let mut o_gc = gc_iter.next();
+		let mut o_branch = branch_iter.next();
+		while let (Some(gc), Some((index, branch))) = (o_gc.as_ref(), o_branch.as_mut()) {
+			if gc.0 == &branch.branch_index {
+				// TODO using linear gc does not make sense here (no sense of delta: TODO change
+				// linear to use a simple range with neutral).
+				let (start, end) = gc.1.range();
+				let gc = LinearGC {
+					new_start: Some(start),
+					new_end:  Some(end),
+					neutral_element: neutral.clone(),
+				};
+
+				match branch.history.gc(&gc) {
+					UpdateResult::Unchanged => (),
+					UpdateResult::Changed(_) => { result = UpdateResult::Changed(()); },
+					UpdateResult::Cleared(_) => to_remove.push(*index),
+				}
+
+				o_gc = gc_iter.next();
+				o_branch = branch_iter.next();
+			} else if gc.0 < &branch.branch_index {
+				to_remove.push(*index);
+				o_branch = branch_iter.next();
+			} else {
+				o_gc = gc_iter.next();
+			}
+		}
+
+		for i in to_remove.into_iter() {
+			self.branches.remove(i);
+		}
+
+		if self.branches.len() == 0 {
+			result = UpdateResult::Cleared(());
+		} else if self.branches.len() != start_len {
+			result = UpdateResult::Changed(());
+		}
+
+		result
+	}
+
+	// TODO this is rather costy and would run in a loop, consider using btreemap instead of vec in
+	// treegc
+	fn is_in_migrate((index, linear_index) : &Self::Index, gc: &Self::Migrate) -> bool {
+		for branch in gc.1.changes.iter().rev() {
+			let bi = &gc.0;
+			if &branch.branch_index == index {
+				return branch.new_range.as_ref()
+					.map(|gc| {
+						let linear_migrate = (bi.clone(), gc.clone());
+						MemoryOnlyLinear::is_in_migrate(linear_index, &linear_migrate)
+					}).unwrap_or(true);
+			}
+			if &branch.branch_index < &index {
+				break;
+			}
+		}
+		false
+	}
+
+	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()> {
+		// This is basis from old gc, it does not do indexing change as it could
+		// be possible. TODO start migrate too (mig.0)
+		let mut result = UpdateResult::Unchanged;
+		let start_len = self.branches.len();
+		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
+		let mut gc_iter = mig.1.changes.iter().rev();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
@@ -197,26 +267,6 @@ impl<
 		}
 
 		result
-	}
-
-	// TODO this is rather costy and would run in a loop, consider using btreemap instead of vec in
-	// treegc
-	fn is_in_gc((index, linear_index) : &Self::Index, gc: &Self::GC) -> bool {
-		for branch in gc.changes.iter().rev() {
-			if &branch.branch_index == index {
-				return branch.new_range.as_ref()
-					.map(|gc| MemoryOnlyLinear::is_in_gc(linear_index, gc))
-					.unwrap_or(true);
-			}
-			if &branch.branch_index < &index {
-				break;
-			}
-		}
-		false
-	}
-
-	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()> {
-		unimplemented!()
 	}
 }
 

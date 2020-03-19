@@ -82,7 +82,7 @@ pub trait Value<V>: ValueRef<V> {
 
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()>;
 
-	fn is_in_gc(index: &Self::Index, gc: &Self::GC) -> bool;
+	fn is_in_migrate(index: &Self::Index, gc: &Self::Migrate) -> bool;
 
 	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()>;
 }
@@ -256,20 +256,10 @@ impl<
 	}
 
 	fn gc(&mut self, gc: &Self::GC) {
-		// retain for btreemap missing here.
-		let mut states = Vec::new();
-		// TODO do we really want this error prone prefiltering??
-		for touched in self.touched_keys.keys() {
-			if H::is_in_gc(touched, gc) {
-				states.push(touched.clone());
-			}
-		}
 		let mut keys: crate::rstd::BTreeSet<_> = Default::default();
-		for state in states {
-			if let Some(touched) = self.touched_keys.remove(&state) {
-				for k in touched {
-					keys.insert(k);
-				}
+		for touched in self.touched_keys.values() {
+			for key in touched.iter() {
+				keys.insert(key.clone());
 			}
 		}
 		for key in keys {
@@ -284,8 +274,32 @@ impl<
 	}
 
 	fn migrate(&mut self, mig: &Self::Migrate) {
-		// probably a MaybeTrait could be use to implement
-		// partially (or damn extract this in its own trait).
-		unimplemented!("requires iterator on the full db");
+		// TODO this is from old gc but seems ok (as long as touched is complete).
+		// retain for btreemap missing here.
+		let mut states = Vec::new();
+		// TODO do we really want this error prone prefiltering??
+		for touched in self.touched_keys.keys() {
+			if H::is_in_migrate(touched, mig) {
+				states.push(touched.clone());
+			}
+		}
+		let mut keys: crate::rstd::BTreeSet<_> = Default::default();
+		for state in states {
+			if let Some(touched) = self.touched_keys.remove(&state) {
+				for k in touched {
+					keys.insert(k);
+				}
+			}
+		}
+		self.touched_keys.clear();
+		for key in keys {
+			if let Some(mut hist) = <DB as PlainDB<_, _>>::get(&self.db, &key) {
+				match hist.migrate(mig) {
+					UpdateResult::Changed(_) => self.db.emplace(key, hist),
+					UpdateResult::Cleared(_) => self.db.remove(&key),
+					UpdateResult::Unchanged => break,
+				}
+			}
+		}
 	}
 }

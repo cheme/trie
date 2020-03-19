@@ -274,9 +274,9 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		}
 	}
 
-	fn is_in_gc(index: &Self::Index, gc: &Self::GC) -> bool {
-		gc.new_start.as_ref().map(|s| index < s).unwrap_or(false)
-			|| gc.new_end.as_ref().map(|s| index >= s).unwrap_or(false)
+	fn is_in_migrate(index: &Self::Index, gc: &Self::Migrate) -> bool {
+		gc.1.new_start.as_ref().map(|s| index < s).unwrap_or(false)
+			|| gc.1.new_end.as_ref().map(|s| index >= s).unwrap_or(false)
 	}
 }
 
@@ -336,11 +336,11 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOn
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct LinearGC<S, V> {
 	// inclusive
-	new_start: Option<S>,
+	pub(crate) new_start: Option<S>,
 	// exclusive
-	new_end: Option<S>,
+	pub(crate) new_end: Option<S>,
 	// TODO use reference??
-	neutral_element: Option<V>,
+	pub(crate) neutral_element: Option<V>,
 }
 
 // This is for small state as there is no double

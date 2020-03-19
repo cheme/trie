@@ -61,6 +61,12 @@ pub struct BranchState<I, BI> {
 	parent_branch_index: I,
 }
 
+impl<I, BI: Clone> BranchState<I, BI> {
+	pub(crate) fn range(&self) -> (BI, BI) {
+		(self.state.start.clone(), self.state.end.clone())
+	}
+}
+
 /// This is a simple range, end non inclusive.
 /// TODO type alias or use ops::Range? see next todo?
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,7 +82,7 @@ pub struct BranchRange<I> {
 
 
 /// Full state of current tree layout.
-/// It contains all layout inforamation for branches
+/// It contains all layout information for branches
 /// states.
 /// Branches are indexed by a sequential index.
 /// Element of branches are indexed by a secondary
@@ -93,13 +99,13 @@ pub struct BranchRange<I> {
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Tree<I, BI> {
-	storage: BTreeMap<I, BranchState<I, BI>>,
-	last_index: I,
+	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
+	pub(crate) last_index: I,
 	/// treshold for possible node value, correspond
 	/// roughly to last cannonical block branch index.
 	/// If at default state value, we go through simple storage.
 	/// TODO move in tree management??
-	composite_treshold: I,
+	pub(crate) composite_treshold: I,
 	// TODO some strategie to close a long branch that gets
 	// behind multiple fork? This should only be usefull
 	// for high number of modification, small number of
@@ -119,24 +125,31 @@ impl<I: Default + Ord, BI> Default for Tree<I, BI> {
 	}
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub struct TreeState<I, BI, V> {
+	pub(crate) tree: Tree<I, BI>,
+	pub(crate) neutral_element: Option<V>,
+}
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TreeManagement<H, I, BI, V> {
-	tree: Tree<I, BI>,
+	state: TreeState<I, BI, V>,
 	mapping: crate::rstd::BTreeMap<H, (I, BI)>,
 	touched_gc: bool,
-	current_gc: TreeGc<I, BI, V>,
-	neutral_element: Option<V>,
+	current_gc: TreeMigrate<I, BI, V>,
 	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
 }
 
 impl<H: Ord, I: Default + Ord, BI: Default, V> Default for TreeManagement<H, I, BI, V> {
 	fn default() -> Self {
 		TreeManagement {
-			tree: Tree::default(),
+			state: TreeState{
+				tree: Tree::default(),
+				neutral_element: None,
+			},
 			mapping: crate::rstd::BTreeMap::new(),
-			neutral_element: None,
 			touched_gc: false,
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
@@ -151,7 +164,7 @@ impl<
 	V,
 > TreeManagement<H, I, BI, V> {
 	pub fn define_neutral_element(mut self, n: V) -> Self {
-		self.neutral_element = Some(n);
+		self.state.neutral_element = Some(n);
 		self
 	}
 }
@@ -519,7 +532,7 @@ pub struct BranchGC<I, BI, V> {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct TreeGc<I, BI, V> {
+pub struct TreeMigrate<I, BI, V> {
 	/// Every modified branch.
 	/// Ordered by branch index.
 	pub changes: Vec<BranchGC<I, BI, V>>,
@@ -528,17 +541,17 @@ pub struct TreeGc<I, BI, V> {
 	// TODO add the key elements (as option to trigger registration or not).
 }
 
-impl<I, BI, V> Default for TreeGc<I, BI, V> {
+impl<I, BI, V> Default for TreeMigrate<I, BI, V> {
 	fn default() -> Self {
-		TreeGc {
+		TreeMigrate {
 			changes: Vec::new(),
 			neutral_element: None,
 		}
 	}
 }
 
-impl<I, BI, V> TreeGc<I, BI, V> {
-	fn applied(&mut self, gc_applied: TreeGc<I, BI, V>) {
+impl<I, BI, V> TreeMigrate<I, BI, V> {
+	fn applied(&mut self, gc_applied: TreeMigrate<I, BI, V>) {
 		unimplemented!("TODO run a delta to keep possible updates in between");
 	}
 }
@@ -551,12 +564,12 @@ impl<
 > ManagementRef<H> for TreeManagement<H, I, BI, V> {
 	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
-	type GC = TreeGc<I, BI, V>;
+	type GC = TreeMigrate<I, BI, V>;
 	/// TODO this needs some branch index mappings.
-	type Migrate = TreeGc<I, BI, V>;
+	type Migrate = TreeMigrate<I, BI, V>;
 
 	fn get_db_state(&self, state: &H) -> Option<Self::S> {
-		self.mapping.get(state).cloned().map(|i| self.tree.query_plan_at(i))
+		self.mapping.get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
 	}
 
 	fn get_gc(&self) -> Option<Self::GC> {
@@ -581,7 +594,7 @@ impl<
 	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
 		self.mapping.get(state).cloned().and_then(|(i, bi)| {
 			// enforce only latest
-			if let Some(result) = self.tree.latest_at(i) {
+			if let Some(result) = self.state.tree.latest_at(i) {
 				if result.latest().1 == bi {
 					return Some(result)
 				}
@@ -592,7 +605,7 @@ impl<
 
 	fn init() -> (Self, Self::S) {
 		let management = Self::default();
-		let init_plan = management.tree.query_plan(I::default());
+		let init_plan = management.state.tree.query_plan(I::default());
 		(management, init_plan)
 	}
 
@@ -639,8 +652,8 @@ impl<
 		let (branch_index, index) = at.latest();
 		let mut index = index.clone();
 		index += 1;
-		if let Some(branch_index) = self.tree.add_state(branch_index.clone(), index.clone()) {
-			let result = self.tree.query_plan(branch_index.clone());
+		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
+			let result = self.state.tree.query_plan(branch_index.clone());
 			self.last_in_use_index = (branch_index.clone(), index);
 			self.mapping.insert(state, self.last_in_use_index.clone());
 			Some(result)
@@ -651,7 +664,7 @@ impl<
 
 	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
 		self.mapping.get(at).and_then(|(branch_index, _index)| {
-			self.tree.branch_state(branch_index).map(|branch| {
+			self.state.tree.branch_state(branch_index).map(|branch| {
 				let mut index = branch.state.end.clone();
 				// TODO factor append_external state at +1 index
 				index -= 1;
