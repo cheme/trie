@@ -172,29 +172,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 	}
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
-		let at = at.latest();
-		loop {
-			if let Some(last) = self.0.last() {
-				// TODO this is rather unsafe: we expect that
-				// when changing value we use a state that is
-				// the latest from the state management.
-				// Their could be ways to enforce that, but nothing
-				// good at this point.
-				if &last.state > at {
-					self.0.pop();
-					continue;
-				} 
-				if at == &last.state {
-					if last.value == value {
-						return UpdateResult::Unchanged;
-					}
-					self.0.pop();
-				}
-			}
-			break;
-		}
-		self.0.push(HistoriedValue {value, state: at.clone()});
-		UpdateResult::Changed(())
+		self.set_mut(value, at).map(|v| ())
 	}
 
 	// TODO not sure discard is of any use (revert is most likely
@@ -323,6 +301,35 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOn
 		}
 		None
 	}
+
+	fn set_mut(&mut self, value: V, at: &Self::SE) -> UpdateResult<Option<V>> {
+		let mut result = None;
+		let at = at.latest();
+		loop {
+			if let Some(last) = self.0.last() {
+				// TODO this is rather unsafe: we expect that
+				// when changing value we use a state that is
+				// the latest from the state management.
+				// Their could be ways to enforce that, but nothing
+				// good at this point.
+				if &last.state > at {
+					self.0.pop();
+					continue;
+				} 
+				if at == &last.state {
+					if last.value == value {
+						return UpdateResult::Unchanged;
+					}
+					result = self.0.pop();
+				}
+			}
+			break;
+		}
+		self.0.push(HistoriedValue {value, state: at.clone()});
+		UpdateResult::Changed(result.map(|r| r.value))
+	}
+
+
 }
 
 #[derive(Debug, Clone)]

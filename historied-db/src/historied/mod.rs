@@ -90,6 +90,10 @@ pub trait Value<V>: ValueRef<V> {
 pub trait InMemoryValue<V>: Value<V> {
 	/// Get latest value, can apply updates.
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V>;
+
+	/// Similar to value set but returning a pointer on replaced or deleted value.
+	/// If the value is change but history is kept (new state), no pointer is returned.
+	fn set_mut(&mut self, value: V, at: &Self::SE) -> UpdateResult<Option<V>>;
 }
 
 /// An entry at a given history index.

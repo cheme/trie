@@ -140,25 +140,7 @@ impl<
 	}
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
-		let (branch_index, index) = at.latest();
-		let mut insert_at = self.branches.len();
-		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
-			if &branch.branch_index == branch_index {
-				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
-				return branch.history.set(value, &index);
-			}
-			if &branch.branch_index < branch_index {
-				insert_at = iter_index + 1;
-				break;
-			}
-		}
-		let branch = MemoryOnlyBranch::new(value, at);
-		if insert_at == self.branches.len() {
-			self.branches.push(branch);
-		} else {
-			self.branches.insert(insert_at, branch);
-		}
-		UpdateResult::Changed(())
+		self.set_mut(value, at).map(|v| ())
 	}
 
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>> {
@@ -255,6 +237,28 @@ impl<
 			}
 		}
 		None
+	}
+
+	fn set_mut(&mut self, value: V, at: &Self::SE) -> UpdateResult<Option<V>> {
+		let (branch_index, index) = at.latest();
+		let mut insert_at = self.branches.len();
+		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
+			if &branch.branch_index == branch_index {
+				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
+				return branch.history.set_mut(value, &index);
+			}
+			if &branch.branch_index < branch_index {
+				insert_at = iter_index + 1;
+				break;
+			}
+		}
+		let branch = MemoryOnlyBranch::new(value, at);
+		if insert_at == self.branches.len() {
+			self.branches.push(branch);
+		} else {
+			self.branches.insert(insert_at, branch);
+		}
+		UpdateResult::Changed(None)
 	}
 }
 

@@ -56,6 +56,17 @@ pub enum UpdateResult<T> {
 	Cleared(T),
 }
 
+impl<T> UpdateResult<T> {
+
+	pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> UpdateResult<U> {
+		match self {
+			UpdateResult::Unchanged => UpdateResult::Unchanged,
+			UpdateResult::Changed(v) => UpdateResult::Changed(f(v)),
+			UpdateResult::Cleared(v) => UpdateResult::Cleared(f(v)),
+		}
+	}
+}
+
 /// Trait for immutable reference of PlainDB.
 pub trait StateDBRef<K, V> {
 	/// State for this db.
