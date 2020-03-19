@@ -170,6 +170,36 @@ impl<
 }
 
 impl<
+	H: Ord,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	V,
+> TreeManagement<H, I, BI, V> {
+	pub fn apply_drop_state(&mut self, h: &H) {
+		if let Some(state) = self.mapping.get(h) {
+			let mut previous_index = state.1.clone();
+			previous_index -= 1;
+			let parent = self.state.tree.branch_state(&state.0)
+				.map(|s| if s.state.start <= previous_index {
+					(state.0.clone(), previous_index)
+				} else {
+					(s.parent_branch_index.clone(), previous_index)
+				}).unwrap_or_else(|| Default::default());
+			self.state.tree.apply_drop_state(&state.0, &state.1);
+			self.last_in_use_index = parent;
+		}
+	}
+
+	pub fn apply_drop_from_latest(&mut self, back: usize) -> bool {
+		let latest = self.last_in_use_index.clone();
+		let qp = self.state.tree.query_plan_at(latest);
+		// TODO get index from query plan, return false if none, then apply_drop_state (+ latest) and ret true
+		unimplemented!()
+	}
+
+}
+
+impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
 > Tree<I, BI> {
