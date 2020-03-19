@@ -127,6 +127,20 @@ impl<H, M: Management<H>> Migrate<H, M> {
 	}
 }
 
+pub enum Ref<'a, V> {
+	Borrowed(&'a V),
+	Owned(V),
+}
+
+impl<'a, V> AsRef<V> for Ref<'a, V> {
+	fn as_ref(&self) -> &V {
+		match self {
+			Ref::Borrowed(v) => v,
+			Ref::Owned(v) => &v,
+		}
+	}
+}
+
 /// Management maps a state with a db state.
 pub trait ManagementRef<H> {
 	/// attached db state
@@ -136,7 +150,7 @@ pub trait ManagementRef<H> {
 	type Migrate;
 	fn get_db_state(&self, state: &H) -> Option<Self::S>;
 	/// returns optional to avoid holding lock of do nothing GC.
-	fn get_gc(&self) -> Option<Self::GC>;
+	fn get_gc(&self) -> Option<Ref<Self::GC>>;
 }
 
 pub trait Management<H>: ManagementRef<H> + Sized {
@@ -149,11 +163,6 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	fn latest_state(&self) -> Self::SE;
 
 	fn reverse_lookup(&self, state: &Self::S) -> Option<H>;
-
-	/// report a gc did run successfully, this only update gc
-	/// information to not include these info.
-	fn applied_gc(&mut self, gc: Self::GC);
-
 
 	/// see migrate. When running thes making a backup of this management
 	/// state is usually a good idea (this method does not manage

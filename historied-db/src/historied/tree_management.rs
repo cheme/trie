@@ -564,7 +564,7 @@ impl<
 > ManagementRef<H> for TreeManagement<H, I, BI, V> {
 	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
-	type GC = TreeMigrate<I, BI, V>;
+	type GC = TreeState<I, BI, V>;
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeMigrate<I, BI, V>;
 
@@ -572,12 +572,8 @@ impl<
 		self.mapping.get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
 	}
 
-	fn get_gc(&self) -> Option<Self::GC> {
-		if self.touched_gc {
-			Some(self.current_gc.clone())
-		} else {
-			None
-		}
+	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
+		Some(crate::Ref::Borrowed(&self.state))
 	}
 }
 
@@ -627,17 +623,15 @@ impl<
 			.map(|(k, _v)| k.clone())
 	}
 
-	fn applied_gc(&mut self, gc: Self::GC) {
-		self.current_gc.applied(gc);
-		self.touched_gc = false;
-	}
-
 	fn get_migrate(self) -> Migrate<H, Self> {
 		unimplemented!()
 	}
 
 	fn applied_migrate(&mut self) {
-		unimplemented!()
+		
+	//	self.current_gc.applied(gc); TODO pass back this reference: put it in buf more likely
+	//	(remove the associated type)
+		self.touched_gc = false;
 	}
 }
 

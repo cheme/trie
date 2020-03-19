@@ -377,9 +377,9 @@ impl<H: Ord, S: Clone, V: Clone> ManagementRef<H> for LinearInMemoryManagement<H
 	fn get_db_state(&self, state: &H) -> Option<Self::S> {
 		self.mapping.get(state).cloned()
 	}
-	fn get_gc(&self) -> Option<Self::GC> {
+	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
 		if self.changed_treshold {
-			Some((self.start_treshold.clone(), self.neutral_element.clone()))
+			Some(crate::Ref::Owned((self.start_treshold.clone(), self.neutral_element.clone())))
 		} else {
 			None
 		}
@@ -431,16 +431,14 @@ V: Clone,
 			.map(|(k, _v)| k.clone())
 	}
 
-	fn applied_gc(&mut self, gc: Self::GC) {
-		self.changed_treshold = false;
-		self.start_treshold = gc.0;
-	}
-
 	fn get_migrate(self) -> Migrate<H, Self> {
 		unimplemented!()
 	}
 
 	fn applied_migrate(&mut self) {
+		self.changed_treshold = false;
+		//self.start_treshold = gc.0; // TODO from backed inner state
+
 		unimplemented!()
 	}
 }
