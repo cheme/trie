@@ -105,7 +105,7 @@ pub struct Tree<I, BI> {
 	/// roughly to last cannonical block branch index.
 	/// If at default state value, we go through simple storage.
 	/// TODO move in tree management??
-	pub(crate) composite_treshold: I,
+	pub(crate) composite_treshold: (I, BI),
 	// TODO some strategie to close a long branch that gets
 	// behind multiple fork? This should only be usefull
 	// for high number of modification, small number of
@@ -115,12 +115,12 @@ pub struct Tree<I, BI> {
 	// strategy and avoid fragmenting the history to much.
 }
 
-impl<I: Default + Ord, BI> Default for Tree<I, BI> {
+impl<I: Ord + Default, BI: Default> Default for Tree<I, BI> {
 	fn default() -> Self {
 		Tree {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
-			composite_treshold: I::default(),
+			composite_treshold: Default::default(),
 		}
 	}
 }
@@ -175,8 +175,8 @@ impl<
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V,
 > TreeManagement<H, I, BI, V> {
-	pub fn apply_drop_state(&mut self, h: &H) {
-		if let Some(state) = self.mapping.get(h) {
+	pub fn apply_drop_state(&mut self, h: &H, drop_mapping: bool) {
+		if let Some(state) = self.mapping.remove(h) {
 			let mut previous_index = state.1.clone();
 			previous_index -= 1;
 			let parent = self.state.tree.branch_state(&state.0)
@@ -188,15 +188,78 @@ impl<
 			self.state.tree.apply_drop_state(&state.0, &state.1);
 			self.last_in_use_index = parent;
 		}
+		if drop_mapping {
+			unimplemented!("Find a way to drop all mapping from tree
+				apply drop_state: probably a callback or full mapping
+				sync to trie or double mapping: maybe different strategie");
+		}
 	}
 
 	pub fn apply_drop_from_latest(&mut self, back: usize) -> bool {
 		let latest = self.last_in_use_index.clone();
+		let mut switch_index = latest.1.clone();
+		switch_index -= back;
 		let qp = self.state.tree.query_plan_at(latest);
-		// TODO get index from query plan, return false if none, then apply_drop_state (+ latest) and ret true
-		unimplemented!()
+		let mut branch_index = Default::default();
+		for b in qp.iter() {
+			if b.0.start <= switch_index {
+				branch_index = b.1;
+				break;
+			}
+		}
+		// this is the actual operation that should go in a trait TODO EMCH
+		self.canonicalize(qp, (branch_index, switch_index))
 	}
 
+	// TODO subfunction in tree (more tree related)?
+	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
+		// TODO move fork plan resolution in?? -> wrong fork plan usage can result in incorrect
+		// latest.
+
+		// TODO EMCH keep if branch start index is before switch index, keep
+		// only if part of fork plan (putting fork plan in a map as branch index are
+		// unrelated to their start).
+		// For branch that are in fork plan, if end index is more than the fork plan one (and less than
+		// switch index), align.
+
+		// TODO it may be reasonable most of the time to use forkplan index lookup up to some
+		// treshold: may need variant depending on number of branch in the forkplan, or
+		// have state trait and change name of `filter` to `cache` as it is a particular
+		// use case.
+		let mut filter: BTreeMap<_, _> = Default::default();
+		for h in branch.history.into_iter() {
+			if h.state.start < switch_index.1 {
+				filter.insert(h.branch_index, h.state);
+			}
+		}
+		let mut change = false;
+		let mut to_remove = Vec::new();
+		for (branch_ix, branch) in self.state.tree.storage.iter_mut() {
+			if branch.state.start < switch_index.1 {
+				if let Some(ref_range) = filter.get(branch_ix) {
+					debug_assert!(ref_range.start == branch.state.start);
+					debug_assert!(ref_range.end <= branch.state.end);
+					if ref_range.end < branch.state.end {
+						branch.state.end = ref_range.end.clone();
+						branch.can_append = false;
+						change = true;
+						// TODO EMCH clean mapping for ends shifts
+					}
+				} else {
+					to_remove.push(branch_ix.clone());
+				}
+			}
+		}
+		if to_remove.len() > 0 {
+			change = true;
+			for to_remove in to_remove {
+				self.state.tree.storage.remove(&to_remove);
+				// TODO EMCH clean mapping for range
+			}
+		}
+		self.state.tree.composite_treshold = switch_index;
+		change
+	}
 }
 
 impl<
@@ -211,7 +274,7 @@ impl<
 		branch_index: I,
 		number: BI,
 	) -> Option<I> {
-		if branch_index < self.composite_treshold {
+		if number < self.composite_treshold.1 {
 			return None;
 		}
 		let mut create_new = false;
@@ -263,7 +326,7 @@ impl<
 
 	fn query_plan_inner(&self, mut branch_index: I, mut parent_fork_branch_index: Option<BI>) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
-		while branch_index > self.composite_treshold {
+		while branch_index > self.composite_treshold.0 {
 			if let Some(branch) = self.storage.get(&branch_index) {
 				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
 					branch.query_plan_to(end)
@@ -774,7 +837,7 @@ pub(crate) mod test {
 		];
 		assert_eq!(states.query_plan(6).history, ref_6);
 
-		states.composite_treshold = 1;
+		states.composite_treshold = (1, 1);
 		let mut ref_6 = ref_6;
 		ref_6.remove(0);
 		assert_eq!(states.query_plan(6).history, ref_6);
