@@ -19,7 +19,7 @@
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, StateIndex};
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
-	Management, Migrate, LinearManagement};
+	Management, Migrate, LinearManagement, Latest};
 use crate::rstd::marker::PhantomData;
 use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
@@ -61,39 +61,6 @@ impl<S> LinearState for S where S:
 	+ AddAssign<usize>
 	+ PartialEq<usize>
 { }
-
-/// This is a rather simple way of managing state, as state should not be
-/// invalidated at all (can be change at latest state, also drop but not at 
-/// random state).
-///
-/// Note that it is only informational and does not guaranty the state
-/// is the latest.
-/// TODO move to module
-/// TODO repr Transparent and cast ptr for tree?
-#[derive(Clone, Debug)]
-pub struct Latest<S>(S);
-
-impl<S> Latest<S> {
-	/// This is only to be use by a `Management` or
-	/// a context where the state can be proven as
-	/// being the latest.
-	pub(crate) fn unchecked_latest(s: S) -> Self {
-		Latest(s)
-	}
-	/// Reference to inner state.
-	pub fn latest(&self) -> &S {
-		&self.0
-	}
-}
-
-impl<S: Clone> StateIndex<S> for Latest<S> {
-	fn index(&self) -> S {
-		self.latest().clone()
-	}
-	fn index_ref(&self) -> &S {
-		self.latest()
-	}
-}
 
 /// Size of preallocated history per element.
 /// Currently at two for committed and prospective only.

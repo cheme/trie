@@ -15,9 +15,10 @@
 //! Tree historied data historied db implementations.
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, Latest, LinearState, LinearGC};
+use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, LinearState, LinearGC};
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeState};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
+use crate::Latest;
 
 // TODO for not in memory we need some direct or indexed api, returning value
 // and the info if there can be lower value index (not just a direct index).

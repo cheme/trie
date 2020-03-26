@@ -20,8 +20,8 @@
 
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::BTreeMap;
-use crate::historied::linear::{Latest, LinearGC};
-use crate::{Management, ManagementRef, Migrate, ForkableManagement};
+use crate::historied::linear::LinearGC;
+use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding

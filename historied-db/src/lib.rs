@@ -47,6 +47,10 @@ use core::marker::PhantomData;
 /// using historied values
 pub mod historied;
 
+/// Minimal simple implementation.
+//#[cfg(test)] TODO EMCH restore when implemented
+pub mod test_impl;
+
 #[cfg_attr(test, derive(PartialEq, Debug))]
 ///  result to be able to proceed
 /// with further update if the value needs it.
@@ -81,6 +85,7 @@ pub trait StateDBRef<K, V> {
 }
 
 /// Variant of `StateDBRef` to return value without copy.
+/// TODO it should not need to be a StateDB (it involves additional bound on V)
 pub trait InMemoryStateDBRef<K, V>: StateDBRef<K, V> {
 	/// Look up a given hash into the bytes that hash to it, returning None if the
 	/// hash is not known.
@@ -276,4 +281,28 @@ pub trait ManagedDB {
 	fn get_collection(&self, collection: &Self::Collection) -> Option<Self::Handle>;
 	fn new_collection(&mut self, collection: &Self::Collection) -> Self::Handle;
 	fn delete_collection(&mut self, collection: &Self::Collection);
+}
+
+
+/// This is a rather simple way of managing state, as state should not be
+/// invalidated at all (can be change at latest state, also drop but not at 
+/// random state).
+///
+/// Note that it is only informational and does not guaranty the state
+/// is the latest.
+/// TODO repr Transparent and cast ptr for tree?
+#[derive(Clone, Debug)]
+pub struct Latest<S>(S);
+
+impl<S> Latest<S> {
+	/// This is only to be use by a `Management` or
+	/// a context where the state can be proven as
+	/// being the latest.
+	pub(crate) fn unchecked_latest(s: S) -> Self {
+		Latest(s)
+	}
+	/// Reference to inner state.
+	pub fn latest(&self) -> &S {
+		&self.0
+	}
 }

@@ -20,6 +20,7 @@ use crate::rstd::marker::PhantomData;
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
 	Management, Migrate, LinearManagement};
 use hash_db::{PlainDB, PlainDBRef};
+use crate::Latest;
 
 pub mod linear;
 pub mod tree_management;
@@ -44,12 +45,6 @@ pub trait ValueRef<V> {
 pub trait InMemoryValueRef<V>: ValueRef<V> {
 	/// Get reference to the value at this state.
 	fn get_ref(&self, at: &Self::S) -> Option<&V>;
-}
-
-/// Associate an index for a given state reference
-pub trait StateIndex<I> {
-	fn index(&self) -> I;
-	fn index_ref(&self) -> &I;
 }
 
 /// Trait for historied value.
@@ -301,5 +296,22 @@ impl<
 				}
 			}
 		}
+	}
+}
+
+/// Associate an index for a given state reference
+/// TODO this should be removable or rename (I is
+/// individual item index when state index is larger).
+pub trait StateIndex<I> {
+	fn index(&self) -> I;
+	fn index_ref(&self) -> &I;
+}
+
+impl<S: Clone> StateIndex<S> for Latest<S> {
+	fn index(&self) -> S {
+		self.latest().clone()
+	}
+	fn index_ref(&self) -> &S {
+		self.latest()
 	}
 }
