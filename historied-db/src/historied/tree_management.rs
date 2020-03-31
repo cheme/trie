@@ -734,9 +734,20 @@ impl<
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V: Clone,
 > ForkableManagement<H> for TreeManagement<H, I, BI, V> {
+
+	type SF = (I, BI);
+
+	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF> {
+		self.mapping.get(state).cloned()
+	}
+
+	fn latest_state_fork(&self) -> Self::SF {
+		self.last_in_use_index.clone()
+	}
+
 	// note that se must be valid.
-	fn append_external_state(&mut self, state: H, at: &Self::SE) -> Option<Self::S> {
-		let (branch_index, index) = at.latest();
+	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::S> {
+		let (branch_index, index) = at;
 		let mut index = index.clone();
 		index += 1;
 		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
@@ -750,15 +761,8 @@ impl<
 	}
 
 	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
-		self.mapping.get(at).and_then(|(branch_index, _index)| {
-			self.state.tree.branch_state(branch_index).map(|branch| {
-				let mut index = branch.state.end.clone();
-				// TODO factor append_external state at +1 index
-				index -= 1;
-				Latest::unchecked_latest((branch_index.clone(), index))
-			 })
-		})
-		.and_then(|at| self.append_external_state(state, &at))
+		self.mapping.get(at)
+			.and_then(|at| self.append_external_state(state, at))
 	}
 }
 

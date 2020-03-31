@@ -185,7 +185,14 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 
 /// This trait is for mapping a given state to the DB opaque inner state.
 pub trait ForkableManagement<H>: Management<H> {
-	fn append_external_state(&mut self, state: H, at: &Self::SE) -> Option<Self::S>;
+	/// Fork at any given internal state.
+	type SF;
+
+	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF>;
+
+	fn latest_state_fork(&self) -> Self::SF;
+
+	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::S>;
 
 	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S>;
 }
