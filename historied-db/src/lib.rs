@@ -48,8 +48,8 @@ use core::marker::PhantomData;
 pub mod historied;
 
 /// Minimal simple implementation.
-//#[cfg(test)] TODO EMCH restore when implemented
-pub mod test_impl;
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test;
 
 #[cfg_attr(test, derive(PartialEq, Debug))]
 ///  result to be able to proceed

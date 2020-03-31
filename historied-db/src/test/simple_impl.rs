@@ -15,7 +15,7 @@
 //! Test implementation that favor minimal non scalable in memory
 //! implementation.
 
-use super::*;
+use crate::*;
 use std::collections::HashMap;
 use std::hash::Hash;
 

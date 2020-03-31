@@ -13,6 +13,7 @@ smallvec = "1.2"
 hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
 
 [features]
-default = ["std"]
+default = ["std", "test-helpers"] # TODO remove test-helpers
 std = [
 ]
+test-helpers = []
