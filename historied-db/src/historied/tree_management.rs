@@ -175,6 +175,11 @@ impl<
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V,
 > TreeManagement<H, I, BI, V> {
+	/// Associate a state for the initial root (default index).
+	pub fn map_root_state(&mut self, root: H) {
+		self.mapping.insert(root, Default::default());
+	}
+
 	// TODO consider removing drop_mapping argument (is probably default)
 	pub fn apply_drop_state(
 		&mut self,
@@ -211,7 +216,8 @@ impl<
 				(state.0.clone(), previous_index)
 			} else {
 				(s.parent_branch_index.clone(), previous_index)
-			}) {
+			}) {		
+			call_back(&state.0, &state.1);
 			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
 			self.last_in_use_index = parent;
 		}
@@ -291,7 +297,7 @@ impl<
 
 impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 > Tree<I, BI> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
@@ -420,8 +426,23 @@ impl<
 		node_index: &BI,
 		call_back: &mut impl FnMut(&I, &BI),
 	) {
+		// Never remove default
 		let mut remove = false;
 		if let Some(branch) = self.storage.get_mut(branch_index) {
+			let o_one;
+			let node_index = if branch_index == &Default::default() {
+				if node_index == &Default::default() {
+					// we don't remove the initial index but we recurse on it.
+					let mut one = Default::default();
+					one += 1;
+					o_one = Some(one);
+					o_one.as_ref().expect("Initialized above")
+				} else {
+					node_index
+				}
+			} else {
+				node_index
+			};
 			while &branch.state.end > node_index {
 				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
@@ -688,7 +709,7 @@ impl<I, BI, V> TreeMigrate<I, BI, V> {
 impl<
 	H: Ord,
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V: Clone,
 > ManagementRef<H> for TreeManagement<H, I, BI, V> {
 	type S = ForkPlan<I, BI>;

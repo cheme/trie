@@ -36,8 +36,9 @@ pub struct Db<K, V> {
 /// state index.
 type StateIndex = usize;
 
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Clone)]
 /// State Input (aka hash).
-struct StateInput(usize);
+pub struct StateInput(pub usize);
 
 impl StateInput {
 	fn to_index(&self) -> StateIndex {
@@ -220,6 +221,44 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 	/// Warning this recurse over children and can be slow for some
 	/// implementations.
 	fn drop_state(&mut self, state: &Self::SF, return_dropped: bool) -> Option<Vec<StateInput>> {
-		unimplemented!("TODO support for drop");
+		let mut result = if return_dropped {
+			Some(Vec::new())
+		} else {
+			None
+		};
+		self.rec_drop_state(&mut result, *state);
+		self.latest_state = Latest::unchecked_latest(
+			self.db.get(*state).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.previous)).unwrap_or(0)
+		);
+		result
+	}
+}
+
+impl<K: Eq + Hash, V> Db<K, V> {
+	fn rec_drop_state(&mut self, result: &mut Option<Vec<StateInput>>, state: StateIndex) {
+		// initial state is not removable.
+		let skip = if state != Default::default() {
+			if let Some(o) = self.db.get_mut(state) {
+				if o.is_none() {
+					return;
+				}
+				*o = None;
+				result.as_mut().map(|r| r.push(StateInput(state)));
+			} else {
+				return;
+			}
+			0
+		} else {
+			1
+		};
+		let rec_calls: Vec<StateIndex> = self.db.iter().enumerate().skip(1)
+			.filter_map(|(ix, elt)| elt.as_ref().and_then(|elt| if elt.previous == state {
+			Some(ix)
+		} else {
+			None
+		})).collect();
+		for state in rec_calls {
+			self.rec_drop_state(result, state);
+		}
 	}
 }

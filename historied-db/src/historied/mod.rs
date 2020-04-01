@@ -110,6 +110,12 @@ impl<V, S> From<(V, S)> for HistoriedValue<V, S> {
 /// Implementation for plain db.
 pub struct BTreeMap<K, V, H>(crate::rstd::BTreeMap<K, H>, PhantomData<V>);
 
+impl<K: Ord, V, H> BTreeMap<K, V, H> {
+	pub fn new() -> Self {
+		BTreeMap(crate::rstd::BTreeMap::new(), PhantomData)
+	}
+}
+
 impl<K: Ord, V: Clone, H: ValueRef<V>> StateDBRef<K, V> for BTreeMap<K, V, H> {
 	type S = H::S;
 
