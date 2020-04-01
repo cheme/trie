@@ -14,25 +14,23 @@
 
 //! Test implementation that favor minimal non scalable in memory
 //! implementation.
+//!
+//! The unique state representation must be sequential (index of an array)
+//! and their corresponding mapped internal state is the same index.
 
 use crate::*;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-/// The main test Db.
-pub struct Db<K, V> {
-	db: Vec<HashMap<K, V>>,
-	management: Mgmt,
+struct DbElt<K, V> {
+	values: HashMap<K, V>,
+	previous: StateIndex,
 }
 
-impl<K: Eq + Hash, V> Db<K, V> {
-	pub fn init() -> (Self, Query) {
-		let (management, query) = Mgmt::init();
-		(Db {
-			db: vec![Default::default()],
-			management,
-		}, query)
-	}
+/// The main test Db.
+pub struct Db<K, V> {
+	db: Vec<Option<DbElt<K, V>>>,
+	latest_state: Latest<StateIndex>,
 }
 
 /// state index.
@@ -41,22 +39,19 @@ type StateIndex = usize;
 /// State Input (aka hash).
 struct StateInput(usize);
 
-/// The mananagement part.
-struct Mgmt {
-	/// contain a pointer to parent state for tree.
-	/// Representation is simply index of the array.
-	pub states: Vec<StateIndex>,
-	pub latest_state: Latest<StateIndex>,
-	// TODO if delete switch to (Option<StateIndex>, bool)
-	// where bool indicate if can append + a is last.
+impl StateInput {
+	fn to_index(&self) -> StateIndex {
+		self.0
+	}
 }
 
-impl Mgmt {
+impl<K, V> Db<K, V> {
 	fn is_latest(&self, ix: &StateIndex) -> bool {
-		!self.states.contains(&ix)
+		!self.db.iter().any(|elt| elt.as_ref().map(|elt| &elt.previous == ix).unwrap_or(false))
 	}
+
 	fn contains(&self, ix: &StateInput) -> bool {
-		self.states.len() > ix.0
+		self.db.get(ix.to_index()).map(|o_elt| o_elt.is_some()).unwrap_or(false)
 	}
 
 	fn get_state(&self, state: &StateInput) -> Option<StateIndex> {
@@ -69,6 +64,7 @@ impl Mgmt {
 }
 
 /// Query path, ordered by latest state first.
+/// Note that this could be simplified to just the index.
 type Query = Vec<StateIndex>;
 
 impl<K: Hash + Eq, V: Clone> StateDBRef<K, V> for Db<K, V> {
@@ -86,7 +82,8 @@ impl<K: Hash + Eq, V: Clone> StateDBRef<K, V> for Db<K, V> {
 impl<K: Hash + Eq, V: Clone> InMemoryStateDBRef<K, V> for Db<K, V> {
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
 		for s in at.iter() {
-			if let Some(v) = self.db.get(*s).and_then(|h| h.get(key)) {
+			if let Some(v) = self.db.get(*s)
+				.and_then(|o_elt| o_elt.as_ref().and_then(|elt| elt.values.get(key))) {
 				return Some(v)
 			}
 		}
@@ -100,15 +97,15 @@ impl<K: Hash + Eq, V: Clone> StateDB<K, V> for Db<K, V> {
 	type Migrate = ();
 
 	fn emplace(&mut self, key: K, value: V, at: &Self::SE) {
-		debug_assert!(self.management.is_latest(at.latest()));
-		self.db.get_mut(at.0)
-			.expect("no removal and no random SE")
+		debug_assert!(self.is_latest(at.latest()));
+		self.db.get_mut(at.0).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
+			.expect("state should be valid TODO need a return type to emplace")
 			.insert(key, value);
 	}
 
 	fn remove(&mut self, key: &K, at: &Self::SE) {
-		debug_assert!(self.management.is_latest(at.latest()));
-		self.db.get_mut(at.0)
+		debug_assert!(self.is_latest(at.latest()));
+		self.db.get_mut(at.0).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
 			.expect("no removal and no random SE")
 			.remove(key);
 	}
@@ -118,15 +115,16 @@ impl<K: Hash + Eq, V: Clone> StateDB<K, V> for Db<K, V> {
 	fn migrate(&mut self, _mig: &Self::Migrate) { }
 }
 
-impl ManagementRef<StateInput> for Mgmt {
+impl<K: Eq + Hash, V> ManagementRef<StateInput> for Db<K, V> {
 	type S = Query;
 	type GC = ();
 	type Migrate = ();
+
 	fn get_db_state(&self, state: &StateInput) -> Option<Self::S> {
 		if let Some(mut ix) = self.get_state(state) {
 			let mut query = vec![ix];
 			loop {
-				let next = self.states[ix];
+				let next = self.db[ix].as_ref().map(|elt| elt.previous).unwrap_or(ix);
 				if next == ix {
 					break;
 				} else {
@@ -145,13 +143,18 @@ impl ManagementRef<StateInput> for Mgmt {
 	}
 }
 
-impl Management<StateInput> for Mgmt {
+impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 	type SE = Latest<StateIndex>;
 
 	fn init() -> (Self, Self::S) {
 		// 0 is defined
-		(Mgmt {
-			states: vec![0],
+		(Db {
+			db: vec![
+				Some(DbElt {
+					values: Default::default(),
+					previous: 0,
+				})
+			],
 			latest_state: Latest::unchecked_latest(0),
 		}, vec![0])
 	}
@@ -171,8 +174,9 @@ impl Management<StateInput> for Mgmt {
 
 	fn reverse_lookup(&self, state: &Self::S) -> Option<StateInput> {
 		if let Some(state) = state.first() {
-			if &self.states.len() > state {
-				Some(StateInput(*state))
+			let state = StateInput(*state);
+			if self.contains(&state) {
+				Some(state)
 			} else {
 				None
 			}
@@ -188,7 +192,7 @@ impl Management<StateInput> for Mgmt {
 	fn applied_migrate(&mut self) { }
 }
 
-impl ForkableManagement<StateInput> for Mgmt {
+impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 	type SF = StateIndex;
 
 	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
@@ -200,9 +204,15 @@ impl ForkableManagement<StateInput> for Mgmt {
 	}
 
 	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {
-		debug_assert!(state.0 == self.states.len());
-		self.states.push(*at);
-		self.latest_state = Latest::unchecked_latest(self.states.len() - 1);
+		debug_assert!(state.to_index() == self.db.len(), "Test simple implementation only allow sequential new identifier");
+		if self.db.get(*at).and_then(|v| v.as_ref()).is_none() {
+			return None;
+		}
+		self.db.push(Some(DbElt {
+			values: Default::default(),
+			previous: *at,
+		}));
+		self.latest_state = Latest::unchecked_latest(self.db.len() - 1);
 
 		self.get_db_state(&state)
 	}
