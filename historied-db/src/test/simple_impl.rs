@@ -25,6 +25,16 @@ pub struct Db<K, V> {
 	management: Mgmt,
 }
 
+impl<K: Eq + Hash, V> Db<K, V> {
+	pub fn init() -> (Self, Query) {
+		let (management, query) = Mgmt::init();
+		(Db {
+			db: vec![Default::default()],
+			management,
+		}, query)
+	}
+}
+
 /// state index.
 type StateIndex = usize;
 
@@ -49,13 +59,6 @@ impl Mgmt {
 		self.states.len() > ix.0
 	}
 
-	fn init() -> (Self, Query) {
-		// 0 is defined
-		(Mgmt {
-			states: vec![0],
-			latest_state: Latest::unchecked_latest(0),
-		}, vec![0])
-	}
 	fn get_state(&self, state: &StateInput) -> Option<StateIndex> {
 		if self.contains(state) {
 			Some(state.0)
@@ -115,15 +118,15 @@ impl<K: Hash + Eq, V: Clone> StateDB<K, V> for Db<K, V> {
 	fn migrate(&mut self, _mig: &Self::Migrate) { }
 }
 
-impl<K, V> ManagementRef<StateInput> for Db<K, V> {
+impl ManagementRef<StateInput> for Mgmt {
 	type S = Query;
 	type GC = ();
 	type Migrate = ();
 	fn get_db_state(&self, state: &StateInput) -> Option<Self::S> {
-		if let Some(mut ix) = self.management.get_state(state) {
+		if let Some(mut ix) = self.get_state(state) {
 			let mut query = vec![ix];
 			loop {
-				let next = self.management.states[ix];
+				let next = self.states[ix];
 				if next == ix {
 					break;
 				} else {
@@ -142,20 +145,20 @@ impl<K, V> ManagementRef<StateInput> for Db<K, V> {
 	}
 }
 
-impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
+impl Management<StateInput> for Mgmt {
 	type SE = Latest<StateIndex>;
 
 	fn init() -> (Self, Self::S) {
-		let (management, query) = Mgmt::init();
-		(Db {
-			db: vec![Default::default()],
-			management,
-		}, query)
+		// 0 is defined
+		(Mgmt {
+			states: vec![0],
+			latest_state: Latest::unchecked_latest(0),
+		}, vec![0])
 	}
 
 	fn get_db_state_mut(&self, state: &StateInput) -> Option<Self::SE> {
-		if let Some(s) = self.management.get_state(state) {
-			if self.management.is_latest(&s) {
+		if let Some(s) = self.get_state(state) {
+			if self.is_latest(&s) {
 				return Some(Latest::unchecked_latest(s))
 			}
 		}
@@ -163,12 +166,12 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 	}
 
 	fn latest_state(&self) -> Self::SE {
-		self.management.latest_state.clone()
+		self.latest_state.clone()
 	}
 
 	fn reverse_lookup(&self, state: &Self::S) -> Option<StateInput> {
 		if let Some(state) = state.first() {
-			if &self.management.states.len() > state {
+			if &self.states.len() > state {
 				Some(StateInput(*state))
 			} else {
 				None
@@ -183,4 +186,30 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 	}
 
 	fn applied_migrate(&mut self) { }
+}
+
+impl ForkableManagement<StateInput> for Mgmt {
+	type SF = StateIndex;
+
+	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
+		self.get_state(state)
+	}
+
+	fn latest_state_fork(&self) -> Self::SF {
+		self.latest_state.latest().clone()
+	}
+
+	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {
+		debug_assert!(state.0 == self.states.len());
+		self.states.push(*at);
+		self.latest_state = Latest::unchecked_latest(self.states.len() - 1);
+
+		self.get_db_state(&state)
+	}
+
+	/// Warning this recurse over children and can be slow for some
+	/// implementations.
+	fn drop_state(&mut self, state: &Self::SF, return_dropped: bool) -> Option<Vec<StateInput>> {
+		unimplemented!("TODO support for drop");
+	}
 }

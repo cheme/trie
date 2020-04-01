@@ -170,31 +170,55 @@ impl<
 }
 
 impl<
-	H: Ord,
+	H: Clone + Ord,
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
 	V,
 > TreeManagement<H, I, BI, V> {
-	pub fn apply_drop_state(&mut self, h: &H, drop_mapping: bool) {
-		if let Some(state) = self.mapping.remove(h) {
-			let mut previous_index = state.1.clone();
-			previous_index -= 1;
-			let parent = self.state.tree.branch_state(&state.0)
-				.map(|s| if s.state.start <= previous_index {
-					(state.0.clone(), previous_index)
-				} else {
-					(s.parent_branch_index.clone(), previous_index)
-				}).unwrap_or_else(|| Default::default());
-			self.state.tree.apply_drop_state(&state.0, &state.1);
-			self.last_in_use_index = parent;
+	// TODO consider removing drop_mapping argument (is probably default)
+	pub fn apply_drop_state(
+		&mut self,
+		state: &(I, BI),
+		mut drop_mapping: bool,
+		mut collect_dropped: Option<&mut Vec<H>>,
+	) {
+		drop_mapping |= collect_dropped.is_some();
+		// TODO optimized drop from I, BI == 0, 0 and ignore x, 0
+		let mapping = &mut self.mapping;
+		let collect_dropped = &mut collect_dropped;
+		let mut call_back = move |i: &I, bi: &BI| {
+			if drop_mapping {
+				let state = (i.clone(), bi.clone());
+				// TODO again cost of reverse lookup: consider double mapping
+				if let Some(h) = mapping.iter() 
+					.find(|(_k, v)| v == &&state)
+					.map(|(k, _v)| k.clone()) {
+					mapping.remove(&h);
+					collect_dropped.as_mut().map(|collect| collect.push(h));
+				}
+			}
+		};
+		if state.1 == Default::default() {
+			debug_assert!(state.0 == Default::default());
+			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
+			self.last_in_use_index = Default::default();
+			return;
 		}
-		if drop_mapping {
-			unimplemented!("Find a way to drop all mapping from tree
-				apply drop_state: probably a callback or full mapping
-				sync to trie or double mapping: maybe different strategie");
+		let mut previous_index = state.1.clone();
+		previous_index -= 1;
+		if let Some(parent) = self.state.tree.branch_state(&state.0)
+			.map(|s| if s.state.start <= previous_index {
+				(state.0.clone(), previous_index)
+			} else {
+				(s.parent_branch_index.clone(), previous_index)
+			}) {
+			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
+			self.last_in_use_index = parent;
 		}
 	}
 
+	// TODO rename to canonicalize or similar naming
+	// TOdO update last_in_use_index
 	pub fn apply_drop_from_latest(&mut self, back: usize) -> bool {
 		let latest = self.last_in_use_index.clone();
 		let mut switch_index = latest.1.clone();
@@ -213,6 +237,9 @@ impl<
 
 	// TODO subfunction in tree (more tree related)?
 	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
+
+		// TODO makes last index the end of this canonicalize branch
+
 		// TODO move fork plan resolution in?? -> wrong fork plan usage can result in incorrect
 		// latest.
 
@@ -354,6 +381,7 @@ impl<
 	/// Return anchor index for this branch history:
 	/// - same index as input if branch is not empty
 	/// - parent index if branch is empty
+	/// TODO is it of any use, we probably want to recurse.
 	pub fn drop_state(
 		&mut self,
 		branch_index: &I,
@@ -387,27 +415,35 @@ impl<
 	/// this function can go into deep recursion with full scan, it indicates
 	/// that the tree model use here should only be use for small data or
 	/// tests.
-	pub fn apply_drop_state(&mut self, branch_index: &I, node_index: &BI) {
-		let mut to_delete = Vec::new();
+	pub fn apply_drop_state(&mut self,
+		branch_index: &I,
+		node_index: &BI,
+		call_back: &mut impl FnMut(&I, &BI),
+	) {
 		let mut remove = false;
 		if let Some(branch) = self.storage.get_mut(branch_index) {
 			while &branch.state.end > node_index {
+				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
 					remove = true;
 					break;
 				}
 			}
+		} else {
+			return;
 		}
 		if remove {
 			self.storage.remove(branch_index);
 		}
+		let mut to_delete = Vec::new();
 		for (i, s) in self.storage.iter() {
 			if &s.parent_branch_index == branch_index && &s.state.start >= node_index {
 				to_delete.push(i.clone());
 			}
 		}
 		for i in to_delete.into_iter() {
-			self.apply_drop_state(&i, node_index)
+			call_back(&i, node_index);
+			self.apply_drop_state(&i, node_index, call_back);
 		}
 	}
 }
@@ -702,6 +738,7 @@ impl<
 		Latest::unchecked_latest(self.last_in_use_index.clone())
 	}
 
+	// TODO the state parameter may not be the correct one.
 	fn reverse_lookup(&self, state: &Self::S) -> Option<H> {
 		// TODO should be the closest valid and return non optional!!!! TODO
 		let state = state.history.last()
@@ -760,9 +797,14 @@ impl<
 		}
 	}
 
-	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
-		self.mapping.get(at)
-			.and_then(|at| self.append_external_state(state, at))
+	fn drop_state(&mut self, state: &Self::SF, return_dropped: bool) -> Option<Vec<H>> {
+		let mut result = if return_dropped {
+			Some(Vec::new())
+		} else {
+			None
+		};
+		self.apply_drop_state(state, true, result.as_mut());
+		result
 	}
 }
 
@@ -806,7 +848,7 @@ pub(crate) mod test {
 		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.drop_state()));
 		assert!(states.branch_state(&3).unwrap().state.exists(&3));
 		assert!(states.branch_state(&4).unwrap().state.exists(&3));
-		states.apply_drop_state(&1, &2);
+		states.apply_drop_state(&1, &2, &mut |_i, _bi| {});
 		assert_eq!(states.branch_state(&3), None);
 		assert_eq!(states.branch_state(&4), None);
 	}

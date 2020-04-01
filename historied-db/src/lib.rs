@@ -194,7 +194,21 @@ pub trait ForkableManagement<H>: Management<H> {
 
 	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::S>;
 
-	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S>;
+	/// Note that this trait could be simplified to this function only.
+	/// But SF can generally be extracted from an SE or an S so it is one less query.
+	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
+		self.get_db_state_for_fork(&state)
+			.and_then(|at| self.append_external_state(state, &at))
+	}
+
+	/// Warning this recurse over children and can be slow for some
+	/// implementations.
+	fn drop_state(&mut self, state: &Self::SF, return_dropped: bool) -> Option<Vec<H>>;
+
+	fn try_drop_state(&mut self, state: &H, return_dropped: bool) -> Option<Vec<H>> {
+		self.get_db_state_for_fork(state)
+			.and_then(|at| self.drop_state(&at, return_dropped))
+	}
 }
 
 pub trait LinearManagement<H>: ManagementRef<H> {
