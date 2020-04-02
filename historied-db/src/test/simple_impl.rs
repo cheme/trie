@@ -48,7 +48,9 @@ impl StateInput {
 
 impl<K, V> Db<K, V> {
 	fn is_latest(&self, ix: &StateIndex) -> bool {
-		!self.db.iter().any(|elt| elt.as_ref().map(|elt| &elt.previous == ix).unwrap_or(false))
+		!self.db.iter().enumerate().any(|(self_ix, elt)|
+			elt.as_ref().map(|elt| &elt.previous == ix && ix != &self_ix).unwrap_or(false)
+		)
 	}
 
 	fn contains(&self, ix: &StateInput) -> bool {

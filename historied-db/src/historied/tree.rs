@@ -118,6 +118,18 @@ impl<
 				index -= 1;
 			}
 		}
+
+		// composite part.
+		while index > 0 {
+			let branch_index = &self.branches[index - 1].branch_index;
+			if branch_index <= &at.composite_treshold.0 {
+				if let Some(result) = self.branches[index - 1].history.get_ref(&at.composite_treshold.1) {
+					return Some(result)
+				}
+			}
+			index -= 1;
+		}
+	
 		None
 	}
 }

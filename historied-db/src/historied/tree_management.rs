@@ -247,7 +247,8 @@ impl<
 		self.canonicalize(qp, (branch_index, switch_index))
 	}
 
-	// TODO subfunction in tree (more tree related)?
+	// TODO subfunction in tree (more tree related)? This is a migrate (we change
+	// composite_treshold).
 	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
 
 		// TODO makes last index the end of this canonicalize branch
@@ -386,7 +387,8 @@ impl<
 			}
 		}
 		ForkPlan {
-			history
+			history,
+			composite_treshold: self.composite_treshold.clone(),
 		}
 	}
 
@@ -505,11 +507,15 @@ impl<
 /// TODO add I treshold (everything valid starting at this one)?
 pub struct ForkPlan<I, BI> {
 	history: Vec<BranchPlan<I, BI>>,
+	pub composite_treshold: (I, BI),
 }
 
-impl<I, BI> Default for ForkPlan<I, BI> {
+impl<I: Default, BI: Default> Default for ForkPlan<I, BI> {
 	fn default() -> Self {
-		ForkPlan{ history: Vec::new() }
+		ForkPlan {
+			history: Vec::new(),
+			composite_treshold: Default::default(),
+		}
 	}
 }
 
