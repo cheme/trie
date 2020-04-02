@@ -49,7 +49,7 @@ impl StateInput {
 impl<K, V> Db<K, V> {
 	fn is_latest(&self, ix: &StateIndex) -> bool {
 		!self.db.iter().enumerate().any(|(self_ix, elt)|
-			elt.as_ref().map(|elt| &elt.previous == ix && ix != &self_ix).unwrap_or(false)
+			elt.as_ref().map(|elt| &elt.previous == ix && elt.previous != self_ix).unwrap_or(false)
 		)
 	}
 

@@ -389,7 +389,7 @@ impl<
 			}
 		}
 		self.storage.get(&branch_index).and_then(|branch| {
-			if branch.is_latest {
+			if !branch.is_latest {
 				None
 			} else {
 				let mut end = branch.state.end.clone();
