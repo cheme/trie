@@ -203,20 +203,26 @@ impl<
 				}
 			}
 		};
-		if state.1 == Default::default() {
-			debug_assert!(state.0 == Default::default());
-			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
-			self.last_in_use_index = Default::default();
+		// Less than composite do not contain a 
+		if state.1 <= self.state.tree.composite_treshold.1 {
+			// No branch delete (the implementation guaranty branch 0 is a single element)
+			self.state.tree.apply_drop_state_rec_call(&state.0, &state.1, &mut call_back, true);
+			self.last_in_use_index = self.state.tree.composite_treshold.clone();
 			return;
 		}
 		let mut previous_index = state.1.clone();
 		previous_index -= 1;
-		if let Some(parent) = self.state.tree.branch_state(&state.0)
+		if let Some((parent, branch_end)) = self.state.tree.branch_state(&state.0)
 			.map(|s| if s.state.start <= previous_index {
-				(state.0.clone(), previous_index)
+				((state.0.clone(), previous_index), &s.state.end)
 			} else {
-				(s.parent_branch_index.clone(), previous_index)
-			}) {		
+				((s.parent_branch_index.clone(), previous_index), &s.state.end)
+			}) {
+			let mut bi = state.1.clone();
+			while &bi < branch_end {
+				call_back(&state.0, &bi);
+				bi += 1;
+			}
 			call_back(&state.0, &state.1);
 			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
 			self.last_in_use_index = parent;
@@ -429,20 +435,6 @@ impl<
 		// Never remove default
 		let mut remove = false;
 		if let Some(branch) = self.storage.get_mut(branch_index) {
-			let o_one;
-			let node_index = if branch_index == &Default::default() {
-				if node_index == &Default::default() {
-					// we don't remove the initial index but we recurse on it.
-					let mut one = Default::default();
-					one += 1;
-					o_one = Some(one);
-					o_one.as_ref().expect("Initialized above")
-				} else {
-					node_index
-				}
-			} else {
-				node_index
-			};
 			while &branch.state.end > node_index {
 				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
@@ -456,15 +448,41 @@ impl<
 		if remove {
 			self.storage.remove(branch_index);
 		}
+		self.apply_drop_state_rec_call(branch_index, node_index, call_back, false);
+	}
+
+	pub fn apply_drop_state_rec_call(&mut self,
+		branch_index: &I,
+		node_index: &BI,
+		call_back: &mut impl FnMut(&I, &BI),
+		composite: bool,
+	) {
 		let mut to_delete = Vec::new();
-		for (i, s) in self.storage.iter() {
-			if &s.parent_branch_index == branch_index && &s.state.start >= node_index {
-				to_delete.push(i.clone());
+		if composite {
+			for (i, s) in self.storage.iter() {
+				if &s.state.start >= node_index {
+					to_delete.push((i.clone(), s.clone()));
+				}
+			}
+		} else {
+			for (i, s) in self.storage.iter() {
+				if &s.parent_branch_index == branch_index && &s.state.start >= node_index {
+					to_delete.push((i.clone(), s.clone()));
+				}
 			}
 		}
-		for i in to_delete.into_iter() {
-			call_back(&i, node_index);
-			self.apply_drop_state(&i, node_index, call_back);
+		for (i, s) in to_delete.into_iter() {
+			// TODO these drop is a full branch drop: we could recurse on ourselves
+			// into calling function and this function rec on itself and do its own drop
+			let mut bi = s.state.start.clone();
+			while bi < s.state.end {
+				call_back(&i, &bi);
+				bi += 1;
+			}
+			// TODO the store and remove patern is ugly (could use a retain implementation)
+			self.storage.remove(&i);
+			// composite to false, as no in composite branch are stored.
+			self.apply_drop_state_rec_call(&i, &s.state.start, call_back, false);
 		}
 	}
 }

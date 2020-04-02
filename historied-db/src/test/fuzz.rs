@@ -252,7 +252,7 @@ pub fn inmemory_forkable(data: &[u8]) {
 fn inmemory_forkable_no_regression() {
 	let inputs = [
 		&[][..],
-		//&[32, 50, 244, 0][..],
+		&[32, 50, 244, 0][..],
 		&[32, 5, 0, 65][..], // drop at 0 do net delete rec.
 	];
 	for input in inputs.iter() {
