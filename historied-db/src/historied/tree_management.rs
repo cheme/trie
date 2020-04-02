@@ -57,7 +57,10 @@ pub trait BranchContainer<I> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchState<I, BI> {
 	state: BranchRange<BI>,
+	/// does a state get rollback.
 	can_append: bool,
+	/// is the branch latest.
+	is_latest: bool,
 	parent_branch_index: I,
 }
 
@@ -106,6 +109,9 @@ pub struct Tree<I, BI> {
 	/// If at default state value, we go through simple storage.
 	/// TODO move in tree management??
 	pub(crate) composite_treshold: (I, BI),
+	/// Is composite latest, so can we write its last state (only
+	/// possible on new or after a migration).
+	pub(crate) composite_latest: bool,
 	// TODO some strategie to close a long branch that gets
 	// behind multiple fork? This should only be usefull
 	// for high number of modification, small number of
@@ -121,6 +127,7 @@ impl<I: Ord + Default, BI: Default> Default for Tree<I, BI> {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
 			composite_treshold: Default::default(),
+			composite_latest: true,
 		}
 	}
 }
@@ -207,6 +214,7 @@ impl<
 		if state.1 <= self.state.tree.composite_treshold.1 {
 			// No branch delete (the implementation guaranty branch 0 is a single element)
 			self.state.tree.apply_drop_state_rec_call(&state.0, &state.1, &mut call_back, true);
+			self.state.tree.composite_latest = true;
 			self.last_in_use_index = self.state.tree.composite_treshold.clone();
 			return;
 		}
@@ -318,8 +326,16 @@ impl<
 			return None;
 		}
 		let mut create_new = false;
-		if branch_index == I::default()  {
-			create_new = true;
+		if branch_index <= self.composite_treshold.0 {
+			// only allow terminal append
+			let mut next = self.composite_treshold.1.clone();
+			next += 1;
+			if number == next {
+				self.composite_latest = false;
+				create_new = true;
+			} else {
+				return None;
+			}
 		} else {
 			let branch_state = self.storage.get_mut(&branch_index)
 				.expect("Inconsistent state on new block");
@@ -329,6 +345,7 @@ impl<
 				if !branch_state.can_fork(&number) {
 					return None;
 				} else {
+					branch_state.is_latest = false;
 					create_new = true;
 				}
 			}
@@ -346,10 +363,22 @@ impl<
 	}
 
 	pub fn latest_at(&self, branch_index : I) -> Option<Latest<(I, BI)>> {
-		self.storage.get(&branch_index).map(|branch| {
-			let mut end = branch.state.end.clone();
-			end -= 1;
-			Latest::unchecked_latest((branch_index, end))
+		if self.composite_latest {
+			// composite
+			if branch_index <= self.composite_treshold.0 {
+				return Some(Latest::unchecked_latest(self.composite_treshold.clone()));
+			} else {
+				return None;
+			}
+		}
+		self.storage.get(&branch_index).and_then(|branch| {
+			if branch.is_latest {
+				None
+			} else {
+				let mut end = branch.state.end.clone();
+				end -= 1;
+				Some(Latest::unchecked_latest((branch_index, end)))
+			}
 		})
 	}
 	
@@ -437,6 +466,7 @@ impl<
 		// Never remove default
 		let mut remove = false;
 		if let Some(branch) = self.storage.get_mut(branch_index) {
+			branch.is_latest = true;
 			while &branch.state.end > node_index {
 				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
@@ -629,6 +659,7 @@ impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> 
 				end,
 			},
 			can_append: true,
+			is_latest: true,
 			parent_branch_index: Default::default(),
 		}
 	}
@@ -657,6 +688,7 @@ impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<
 				end,
 			},
 			can_append: true,
+			is_latest: true,
 			parent_branch_index,
 		}
 	}
