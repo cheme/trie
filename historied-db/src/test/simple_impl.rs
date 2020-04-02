@@ -25,6 +25,7 @@ use std::hash::Hash;
 struct DbElt<K, V> {
 	values: HashMap<K, V>,
 	previous: StateIndex,
+	is_latest: bool,
 }
 
 /// The main test Db.
@@ -48,9 +49,7 @@ impl StateInput {
 
 impl<K, V> Db<K, V> {
 	fn is_latest(&self, ix: &StateIndex) -> bool {
-		!self.db.iter().enumerate().any(|(self_ix, elt)|
-			elt.as_ref().map(|elt| &elt.previous == ix && elt.previous != self_ix).unwrap_or(false)
-		)
+		self.db.get(*ix).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.is_latest)).unwrap_or(false)
 	}
 
 	fn contains(&self, ix: &StateInput) -> bool {
@@ -156,6 +155,7 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 				Some(DbElt {
 					values: Default::default(),
 					previous: 0,
+					is_latest: true,
 				})
 			],
 			latest_state: Latest::unchecked_latest(0),
@@ -163,11 +163,11 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 	}
 
 	fn get_db_state_mut(&self, state: &StateInput) -> Option<Self::SE> {
-		if let Some(s) = self.get_state(state) {
-			if self.is_latest(&s) {
-				return Some(Latest::unchecked_latest(s))
-			}
+//		if let Some(s) = self.get_state(state) {
+		if self.is_latest(&state.to_index()) {
+			return Some(Latest::unchecked_latest(state.to_index()))
 		}
+//		}
 		None
 	}
 
@@ -208,12 +208,16 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 
 	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {
 		debug_assert!(state.to_index() == self.db.len(), "Test simple implementation only allow sequential new identifier");
-		if self.db.get(*at).and_then(|v| v.as_ref()).is_none() {
+		if self.db.get_mut(*at).and_then(|v| v.as_mut().map(|v| {
+			v.is_latest = false;
+			()
+		})).is_none() {
 			return None;
 		}
 		self.db.push(Some(DbElt {
 			values: Default::default(),
 			previous: *at,
+			is_latest: true,
 		}));
 		self.latest_state = Latest::unchecked_latest(self.db.len() - 1);
 
