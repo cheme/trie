@@ -163,6 +163,9 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	type SE;
 	fn init() -> (Self, Self::S);
 
+	/// Return state mut for state but only if state exists and is
+	/// a terminal writeable leaf (if not you need to create new branch 
+	/// from previous state to write).
 	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE>;
 
 	fn latest_state(&self) -> Self::SE;

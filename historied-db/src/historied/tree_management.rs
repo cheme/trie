@@ -362,10 +362,27 @@ impl<
 		})
 	}
 
-	pub fn latest_at(&self, branch_index : I) -> Option<Latest<(I, BI)>> {
+	#[cfg(test)]
+	pub fn unchecked_latest_at(&self, branch_index : I) -> Option<Latest<(I, BI)>> {
 		if self.composite_latest {
 			// composite
 			if branch_index <= self.composite_treshold.0 {
+				return Some(Latest::unchecked_latest(self.composite_treshold.clone()));
+			} else {
+				return None;
+			}
+		}
+		self.storage.get(&branch_index).map(|branch| {
+			let mut end = branch.state.end.clone();
+			end -= 1;
+			Latest::unchecked_latest((branch_index, end))
+		})
+	}
+	
+	pub fn if_latest_at(&self, branch_index: I, seq_index: BI) -> Option<Latest<(I, BI)>> {
+		if self.composite_latest {
+			// composite
+			if branch_index <= self.composite_treshold.0 && seq_index == self.composite_treshold.1 {
 				return Some(Latest::unchecked_latest(self.composite_treshold.clone()));
 			} else {
 				return None;
@@ -377,7 +394,11 @@ impl<
 			} else {
 				let mut end = branch.state.end.clone();
 				end -= 1;
-				Some(Latest::unchecked_latest((branch_index, end)))
+				if seq_index == end {
+					Some(Latest::unchecked_latest((branch_index, end)))
+				} else {
+					None
+				}
 			}
 		})
 	}
@@ -796,12 +817,7 @@ impl<
 	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
 		self.mapping.get(state).cloned().and_then(|(i, bi)| {
 			// enforce only latest
-			if let Some(result) = self.state.tree.latest_at(i) {
-				if result.latest().1 == bi {
-					return Some(result)
-				}
-			}
-			None
+			self.state.tree.if_latest_at(i, bi)
 		})
 	}
 

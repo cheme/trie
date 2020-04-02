@@ -359,7 +359,7 @@ mod test {
 
 		// setting value respecting branch build order
 		for i in 1..6 {
-			item.set(i, &states.latest_at(i).unwrap());
+			item.set(i, &states.unchecked_latest_at(i).unwrap());
 		}
 
 		for i in 1..6 {
@@ -372,7 +372,7 @@ mod test {
 		let ref_1_bis = states.query_plan(1);
 		assert_eq!(item.get(&ref_1), Some(1));
 		assert_eq!(item.get(&ref_1_bis), None);
-		item.set(11, &states.latest_at(1).unwrap());
+		item.set(11, &states.unchecked_latest_at(1).unwrap());
 		// lazy linear clean of drop state on insert
 		assert_eq!(item.get(&ref_1), Some(11));
 		assert_eq!(item.get(&ref_1_bis), Some(11));
@@ -389,7 +389,7 @@ mod test {
 		];
 		for r in disordered.iter() {
 			for i in r {
-				item.set(*i, &states.latest_at(*i).unwrap());
+				item.set(*i, &states.unchecked_latest_at(*i).unwrap());
 			}
 			for i in r {
 				assert_eq!(item.get_ref(&states.query_plan(*i)), Some(i));
