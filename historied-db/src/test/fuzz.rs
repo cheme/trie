@@ -95,7 +95,6 @@ impl FuzzerState {
 			let new_state = StateInput(self.next_hash as usize);
 			// keep in range
 			let at = StateInput((at % self.next_hash) as usize);
-			self.next_hash += 1;
 			let at_simple = self.simple.get_db_state_for_fork(&at);
 			let at = self.in_memory_mgmt.get_db_state_for_fork(&at);
 			assert_eq!(at.is_some(), at_simple.is_some());
@@ -256,6 +255,7 @@ fn inmemory_forkable_no_regression() {
 		&[32, 5, 0, 65][..],
 		&[30, 65, 161][..],
 		&[181, 226, 244, 157][..],
+		&[219, 50, 32, 50][..],
 	];
 	for input in inputs.iter() {
 		println!("{:?}", FuzzerAction::into_actions(input));
