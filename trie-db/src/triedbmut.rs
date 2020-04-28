@@ -600,6 +600,7 @@ where
 		key: &mut NibbleFullKey,
 		value: DBValue,
 		old_val: &mut Option<DBValue>,
+		attach: Option<(NodeHandle<TrieHash<L>>, &mut bool)>,
 	) -> Result<(StorageHandle, bool), TrieHash<L>, CError<L>> {
 		let h = match handle {
 			NodeHandle::InMemory(h) => h,
@@ -608,7 +609,7 @@ where
 		// cache then destroy for hash handle (handle being root in most case)
 		let stored = self.storage.destroy(h);
 		let (new_stored, changed) = self.inspect(stored, key, move |trie, stored, key| {
-			trie.insert_inspector(stored, key, value, old_val).map(|a| a.into_action())
+			trie.insert_inspector(stored, key, value, old_val, attach).map(|a| a.into_action())
 		})?.expect("Insertion never deletes.");
 
 		Ok((self.storage.alloc(new_stored), changed))
@@ -621,6 +622,7 @@ where
 		key: &mut NibbleFullKey,
 		value: DBValue,
 		old_val: &mut Option<DBValue>,
+		attach: Option<(NodeHandle<TrieHash<L>>, &mut bool)>,
 	) -> Result<InsertAction<TrieHash<L>>, TrieHash<L>, CError<L>> {
 		let partial = key.clone();
 
@@ -652,7 +654,7 @@ where
 					key.advance(1);
 					if let Some(child) = children[idx].take() {
 						// Original had something there. recurse down into it.
-						let (new_child, changed) = self.insert_at(child, key, value, old_val)?;
+						let (new_child, changed) = self.insert_at(child, key, value, old_val, attach)?;
 						children[idx] = Some(new_child.into());
 						if !changed {
 							// The new node we composed didn't change.
@@ -740,7 +742,7 @@ where
 					key.advance(common + 1);
 					if let Some(child) = children[idx].take() {
 						// Original had something there. recurse down into it.
-						let (new_child, changed) = self.insert_at(child, key, value, old_val)?;
+						let (new_child, changed) = self.insert_at(child, key, value, old_val, attach)?;
 						children[idx] = Some(new_child.into());
 						if !changed {
 							// The new node we composed didn't change.
@@ -814,7 +816,7 @@ where
 
 					// always replace because whatever we get out here
 					// is not the branch we started with.
-					let branch_action = self.insert_inspector(branch, key, value, old_val)?
+					let branch_action = self.insert_inspector(branch, key, value, old_val, attach)?
 						.unwrap_node();
 					InsertAction::Replace(branch_action)
 				} else if !L::USE_EXTENSION {
@@ -829,7 +831,7 @@ where
 						Some(stored_value),
 					);
 					// augment the new branch.
-					let branch = self.insert_inspector(branch, key, value, old_val)?
+					let branch = self.insert_inspector(branch, key, value, old_val, attach)?
 						.unwrap_node();
 
 					InsertAction::Replace(branch)
@@ -844,7 +846,7 @@ where
 					let branch = Node::Branch(empty_children(), Some(stored_value));
 					// augment the new branch.
 					key.advance(common);
-					let branch = self.insert_inspector(branch, key, value, old_val)?.unwrap_node();
+					let branch = self.insert_inspector(branch, key, value, old_val, attach)?.unwrap_node();
 
 					// always replace since we took a leaf and made an extension.
 					let branch_handle = self.storage.alloc(Stored::New(branch)).into();
@@ -868,7 +870,7 @@ where
 					// augment it. this will result in the Leaf -> common == 0 routine,
 					// which creates a branch.
 					key.advance(common);
-					let augmented_low = self.insert_inspector(low, key, value, old_val)?
+					let augmented_low = self.insert_inspector(low, key, value, old_val, attach)?
 						.unwrap_node();
 					// make an extension using it. this is a replacement.
 					InsertAction::Replace(Node::Extension(
@@ -912,6 +914,7 @@ where
 						key,
 						value,
 						old_val,
+						attach,
 					)?.unwrap_node();
 					InsertAction::Replace(branch_action)
 				} else if common == existing_key.len() {
@@ -922,7 +925,7 @@ where
 
 					// insert into the child node.
 					key.advance(common);
-					let (new_child, changed) = self.insert_at(child_branch, key, value, old_val)?;
+					let (new_child, changed) = self.insert_at(child_branch, key, value, old_val, attach)?;
 					let new_ext = Node::Extension(existing_key.to_stored(), new_child.into());
 
 					// if the child branch wasn't changed, meaning this extension remains the same.
@@ -946,7 +949,7 @@ where
 					// augment the extension. this will take the common == 0 path,
 					// creating a branch.
 					key.advance(common);
-					let augmented_low = self.insert_inspector(low, key, value, old_val)?
+					let augmented_low = self.insert_inspector(low, key, value, old_val, attach)?
 						.unwrap_node();
 
 					// always replace, since this extension is not the one we started with.
@@ -966,6 +969,7 @@ where
 		handle: NodeHandle<TrieHash<L>>,
 		key: &mut NibbleFullKey,
 		old_val: &mut Option<DBValue>,
+		detach: Option<&mut Option<NodeHandle<TrieHash<L>>>>,
 	) -> Result<Option<(StorageHandle, bool)>, TrieHash<L>, CError<L>> {
 		let stored = match handle {
 			NodeHandle::InMemory(h) => self.storage.destroy(h),
@@ -978,7 +982,7 @@ where
 		let opt = self.inspect(
 			stored,
 			key,
-			move |trie, node, key| trie.remove_inspector(node, key, old_val),
+			move |trie, node, key| trie.remove_inspector(node, key, old_val, detach),
 		)?;
 
 		Ok(opt.map(|(new, changed)| (self.storage.alloc(new), changed)))
@@ -990,6 +994,7 @@ where
 		node: Node<TrieHash<L>>,
 		key: &mut NibbleFullKey,
 		old_val: &mut Option<DBValue>,
+		detach: Option<&mut Option<NodeHandle<TrieHash<L>>>>,
 	) -> Result<Action<TrieHash<L>>, TrieHash<L>, CError<L>> {
 		let partial = key.clone();
 		Ok(match (node, partial.is_empty()) {
@@ -1018,7 +1023,7 @@ where
 					);
 					let prefix = key.clone();
 					key.advance(1);
-					match self.remove_at(child, key, old_val)? {
+					match self.remove_at(child, key, old_val, detach)? {
 						Some((new, changed)) => {
 							children[idx] = Some(new.into());
 							let branch = Node::Branch(children, value);
@@ -1074,7 +1079,7 @@ where
 						);
 						let prefix = key.clone();
 						key.advance(common + 1);
-						match self.remove_at(child, key, old_val)? {
+						match self.remove_at(child, key, old_val, detach)? {
 							Some((new, changed)) => {
 								children[idx] = Some(new.into());
 								let branch = Node::NibbledBranch(encoded, children, value);
@@ -1133,7 +1138,7 @@ where
 					trace!(target: "trie", "removing from extension child, partial={:?}", partial);
 					let prefix = key.clone();
 					key.advance(common);
-					match self.remove_at(child_branch, key, old_val)? {
+					match self.remove_at(child_branch, key, old_val, detach)? {
 						Some((new_child, changed)) => {
 							let new_child = new_child.into();
 
@@ -1501,8 +1506,112 @@ where
 			NodeHandle::InMemory(StorageHandle(x)) => NodeHandle::InMemory(StorageHandle(x)),
 		}
 	}
+
+	/// Detach a branch portion at a given node index.
+	/// Detach node keys may need post process to be usable in a trie, and this is doable
+	/// with the optional key mapping parameter, it will optionally parse all detached trie
+	/// encoded node and apply key change with optionally a different target db.
+	/// Can return None when nothing can be dettached.
+	pub fn detach(
+		&mut self,
+		db: &'a mut dyn HashDB<L::Hash, DBValue>,
+		at: &[u8], 
+		dest_db: Option<&'a mut dyn HashDB<L::Hash, DBValue>>,
+		post_action: AttachKeyAction,
+	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		#[cfg(feature = "std")]
+		trace!(target: "trie", "dettach: at={:#x?}", at);
+
+		let root_handle = self.root_handle();
+		let mut key = NibbleSlice::new(at);
+		let mut old_val = None;
+		let mut dettach_handle = None;
+
+		match self.remove_at(root_handle, &mut key, &mut old_val, Some(&mut dettach_handle))? {
+			Some((handle, _changed)) => {
+				#[cfg(feature = "std")]
+				trace!(target: "trie", "dettach: altered trie={}", _changed);
+				self.root_handle = NodeHandle::InMemory(handle);
+			}
+			None => {
+				#[cfg(feature = "std")]
+				trace!(target: "trie", "dettach: obliterated trie");
+				self.root_handle = NodeHandle::Hash(L::Codec::hashed_null_node());
+				*self.root = L::Codec::hashed_null_node();
+			}
+		}
+
+		unimplemented!()
+	}
+
+	/// Attach a trie into another.
+	/// Return false if there is already content at the attachment
+	/// point.
+	pub fn attach(
+		&mut self,
+		db: &'a mut dyn HashDB<L::Hash, DBValue>,
+		root_to_attach: &'a TrieHash<L>,
+		at: &[u8], 
+		mut origin_db: Option<&'a mut dyn HashDB<L::Hash, DBValue>>,
+		post_action: AttachKeyAction,
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+
+		let mut old_val = None;
+		let mut attach_success = false;
+
+		#[cfg(feature = "std")]
+		trace!(target: "trie", "attach: at={:#x?}, root={:?}", at, ToHex(root_to_attach.as_ref()));
+
+		// possibly convert to inline node
+		let first_encoded = if let Some(origin_db) = origin_db.as_mut() {
+			origin_db.get(root_to_attach, EMPTY_PREFIX)
+		} else {
+			db.get(root_to_attach, EMPTY_PREFIX)
+		};
+		let handle_to_add = if let Some(first_encoded) = first_encoded {
+			if first_encoded.len() >= L::Hash::LENGTH {
+				NodeHandle::Hash(*root_to_attach)
+			} else {
+				let mut h = <TrieHash<L>>::default();
+				let len = first_encoded.len();
+				h.as_mut()[..len].copy_from_slice(&first_encoded[..len]);
+				NodeHandle::Hash(h)
+			}
+		} else {
+			return Err(Box::new(TrieError::InvalidStateRoot(*root_to_attach)));
+		};
+
+		let root_handle = self.root_handle();
+		let (new_handle, _changed) = self.insert_at(
+			root_handle,
+			&mut NibbleSlice::new(at),
+			Vec::new(),	
+			&mut old_val,
+			Some((handle_to_add, &mut attach_success)),
+		)?;
+
+		#[cfg(feature = "std")]
+		trace!(target: "trie", "attach: altered trie={}", _changed);
+		self.root_handle = NodeHandle::InMemory(new_handle);
+
+		unimplemented!()
+	}
 }
 
+/// Action for dettached content when attaching or
+/// detaching a node.
+pub enum AttachKeyAction {
+	/// Do not change backend.
+	/// Keep is only suitable for unprefixed
+	/// origin or target.
+	Keep,
+	/// Keep existing and prefix origin or target.
+	KeepPrefix,
+	/// Unprefix origin or target. Remove origin elements.
+	Unprefix,
+	/// Prefix origin or target. Remove origin elements.
+	Prefix,
+}
 
 impl<'a, L> TrieMut<L> for TrieDBMut<'a, L>
 where
@@ -1547,6 +1656,7 @@ where
 			&mut NibbleSlice::new(key),
 			value.to_vec(),
 			&mut old_val,
+			None,
 		)?;
 
 		#[cfg(feature = "std")]
@@ -1564,7 +1674,7 @@ where
 		let mut key = NibbleSlice::new(key);
 		let mut old_val = None;
 
-		match self.remove_at(root_handle, &mut key, &mut old_val)? {
+		match self.remove_at(root_handle, &mut key, &mut old_val, None)? {
 			Some((handle, _changed)) => {
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "remove: altered trie={}", _changed);
