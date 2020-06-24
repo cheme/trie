@@ -867,12 +867,12 @@ impl<
 
 	type SF = (I, BI);
 
-	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF> {
-		self.mapping.get(state).cloned()
+	fn inner_fork_state(&self, s: Self::SE) -> Self::SF {
+		s.0
 	}
 
-	fn latest_state_fork(&self) -> Self::SF {
-		self.last_in_use_index.clone()
+	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF> {
+		self.mapping.get(state).cloned()
 	}
 
 	// note that se must be valid.

@@ -61,7 +61,6 @@ pub enum UpdateResult<T> {
 }
 
 impl<T> UpdateResult<T> {
-
 	pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> UpdateResult<U> {
 		match self {
 			UpdateResult::Unchanged => UpdateResult::Unchanged,
@@ -71,7 +70,7 @@ impl<T> UpdateResult<T> {
 	}
 }
 
-/// Trait for immutable reference of PlainDB.
+/// Trait for immutable reference of a plain key value db.
 pub trait StateDBRef<K, V> {
 	/// State for this db.
 	type S;
@@ -85,8 +84,10 @@ pub trait StateDBRef<K, V> {
 }
 
 /// Variant of `StateDBRef` to return value without copy.
-/// TODO it should not need to be a StateDB (it involves additional bound on V)
-pub trait InMemoryStateDBRef<K, V>: StateDBRef<K, V> {
+pub trait InMemoryStateDBRef<K, V> {
+	/// State for this db.
+	type S;
+
 	/// Look up a given hash into the bytes that hash to it, returning None if the
 	/// hash is not known.
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V>;
@@ -120,6 +121,7 @@ pub trait StateDB<K, V>: StateDBRef<K, V> {
 	fn migrate(&mut self, mig: &Self::Migrate);
 }
 
+/// Type holding a state db to lock the management.
 pub struct Migrate<H, M>(M, PhantomData<H>);
 
 impl<H, M: Management<H>> Migrate<H, M> {
@@ -146,27 +148,28 @@ impl<'a, V> AsRef<V> for Ref<'a, V> {
 	}
 }
 
-/// Management maps a state with a db state.
+/// Management maps a historical tag of type `H` with its different db states representation.
 pub trait ManagementRef<H> {
-	/// attached db state
+	/// attached db state needed for query.
 	type S;
 	/// attached db gc strategy.
 	type GC;
 	type Migrate;
-	fn get_db_state(&self, state: &H) -> Option<Self::S>;
+	/// Returns the historical state representation for a given historical tag.
+	fn get_db_state(&self, tag: &H) -> Option<Self::S>;
 	/// returns optional to avoid holding lock of do nothing GC.
 	fn get_gc(&self) -> Option<Ref<Self::GC>>;
 }
 
 pub trait Management<H>: ManagementRef<H> + Sized {
-	/// attached db state for actual modification
-	type SE;
+	/// attached db state needed for update.
+	type SE; // TODO rename to latest or pending???
 	fn init() -> (Self, Self::S);
 
 	/// Return state mut for state but only if state exists and is
 	/// a terminal writeable leaf (if not you need to create new branch 
 	/// from previous state to write).
-	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE>;
+	fn get_db_state_mut(&self, tag: &H) -> Option<Self::SE>;
 
 	fn latest_state(&self) -> Self::SE;
 
@@ -187,14 +190,22 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 }
 
 /// This trait is for mapping a given state to the DB opaque inner state.
+// TODO is only ManagementRef
 pub trait ForkableManagement<H>: Management<H> {
 	/// Fork at any given internal state.
 	type SF;
 
-	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF>;
+	/// SF is a state with 
+	fn inner_fork_state(&self, s: Self::SE) -> Self::SF;
 
-	fn latest_state_fork(&self) -> Self::SF;
+	fn get_db_state_for_fork(&self, tag: &H) -> Option<Self::SF>;
 
+	fn latest_state_fork(&self) -> Self::SF {
+		let se= self.latest_state();
+		self.inner_fork_state(se)
+	}
+
+	/// This only succeed valid `at`.
 	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::S>;
 
 	/// Note that this trait could be simplified to this function only.
@@ -204,12 +215,13 @@ pub trait ForkableManagement<H>: Management<H> {
 			.and_then(|at| self.append_external_state(state, &at))
 	}
 
-	/// Warning this recurse over children and can be slow for some
+	/// Warning this should cover all children recursively and can be slow for some
 	/// implementations.
+	/// Return all dropped tag.
 	fn drop_state(&mut self, state: &Self::SF, return_dropped: bool) -> Option<Vec<H>>;
 
-	fn try_drop_state(&mut self, state: &H, return_dropped: bool) -> Option<Vec<H>> {
-		self.get_db_state_for_fork(state)
+	fn try_drop_state(&mut self, tag: &H, return_dropped: bool) -> Option<Vec<H>> {
+		self.get_db_state_for_fork(tag)
 			.and_then(|at| self.drop_state(&at, return_dropped))
 	}
 }
@@ -237,16 +249,7 @@ pub trait ForkableHeadManagement<H>: ManagementRef<H> {
 	}
 }
 
-/// Hybrid that apply linear over a defined fork (usually the root one).
-/// So a linear substate is short for these fork.
-pub trait CompositeRef<H>: ManagementRef<H> {
-	// linear state TODO rewrite as sub state
-	type LS;
-	// here also report an error non linear state in case it is defined. 
-	fn get_db_linear_state(&self, state: &H) -> Result<Self::LS, Option<Self::S>>;
-}
-
-pub trait CompositeManagement<H>: Management<H> {
+pub trait CompositeManagement<H>: ForkableManagement<H> {
 	// join existing linear fork with this state
 	// for a canonicalisation it therefore apply before
 	// this state

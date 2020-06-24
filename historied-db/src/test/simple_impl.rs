@@ -81,7 +81,9 @@ impl<K: Hash + Eq, V: Clone> StateDBRef<K, V> for Db<K, V> {
 	}
 }
 
-impl<K: Hash + Eq, V: Clone> InMemoryStateDBRef<K, V> for Db<K, V> {
+impl<K: Hash + Eq, V> InMemoryStateDBRef<K, V> for Db<K, V> {
+	type S = Query;
+
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
 		for s in at.iter() {
 			if let Some(v) = self.db.get(*s)
@@ -198,12 +200,12 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 	type SF = StateIndex;
 
-	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
-		self.get_state(state)
+	fn inner_fork_state(&self, s: Self::SE) -> Self::SF {
+		s.0
 	}
 
-	fn latest_state_fork(&self) -> Self::SF {
-		self.latest_state.latest().clone()
+	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
+		self.get_state(state)
 	}
 
 	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {

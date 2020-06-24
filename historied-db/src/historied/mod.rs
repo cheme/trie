@@ -132,7 +132,9 @@ impl<K: Ord, V: Clone, H: ValueRef<V>> StateDBRef<K, V> for BTreeMap<K, V, H> {
 }
 
 // note that the constraint on state db ref for the associated type is bad (forces V as clonable).
-impl<K: Ord, V: Clone, H: InMemoryValueRef<V>> InMemoryStateDBRef<K, V> for BTreeMap<K, V, H> {
+impl<K: Ord, V, H: InMemoryValueRef<V>> InMemoryStateDBRef<K, V> for BTreeMap<K, V, H> {
+	type S = H::S;
+
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
 		self.0.get(key)
 			.and_then(|h| h.get_ref(at))
