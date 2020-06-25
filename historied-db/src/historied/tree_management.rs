@@ -252,7 +252,6 @@ impl<
 				break;
 			}
 		}
-		panic!("{:?}", (branch_index, switch_index));
 		// this is the actual operation that should go in a trait TODO EMCH
 		self.canonicalize(qp, (branch_index, switch_index))
 	}
@@ -308,6 +307,7 @@ impl<
 			}
 		}
 		self.state.tree.composite_treshold = switch_index;
+		panic!("{:?}, {:?}", self.state.tree.composite_treshold, change);
 		change
 	}
 }
