@@ -307,6 +307,7 @@ impl<
 			}
 		}
 		self.state.tree.composite_treshold = switch_index;
+		println!("new ct: {:?}", &self.state.tree.composite_treshold);
 		change
 	}
 }
