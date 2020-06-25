@@ -260,6 +260,7 @@ impl<
 	// composite_treshold).
 	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
 
+		println!("cano : {:?} {:?}", &branch, &switch_index);
 		// TODO makes last index the end of this canonicalize branch
 
 		// TODO move fork plan resolution in?? -> wrong fork plan usage can result in incorrect
