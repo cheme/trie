@@ -204,6 +204,9 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 		s.0
 	}
 
+	fn ref_state_fork(&self, s: &Self::S) -> Self::SF {
+		s.first().cloned().unwrap_or_default()
+	}
 	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
 		self.get_state(state)
 	}

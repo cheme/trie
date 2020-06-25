@@ -171,6 +171,7 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	/// from previous state to write).
 	fn get_db_state_mut(&self, tag: &H) -> Option<Self::SE>;
 
+	/// Get a cursor over the last change of ref (when adding or removing).
 	fn latest_state(&self) -> Self::SE;
 
 	fn reverse_lookup(&self, state: &Self::S) -> Option<H>;
@@ -197,6 +198,9 @@ pub trait ForkableManagement<H>: Management<H> {
 
 	/// SF is a state with 
 	fn inner_fork_state(&self, s: Self::SE) -> Self::SF;
+
+	/// SF from a S (usually the head of S)
+	fn ref_state_fork(&self, s: &Self::S) -> Self::SF;
 
 	fn get_db_state_for_fork(&self, tag: &H) -> Option<Self::SF>;
 

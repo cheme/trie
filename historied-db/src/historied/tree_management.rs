@@ -561,6 +561,18 @@ pub struct ForkPlan<I, BI> {
 	pub composite_treshold: (I, BI),
 }
 
+impl<I: Clone, BI: Clone + SubAssign<usize>> ForkPlan<I, BI> {
+	fn latest(&self) -> (I, BI) {
+		if let Some(branch_plan) = self.history.last() {
+			let mut index = branch_plan.state.end.clone();
+			index -= 1;
+			(branch_plan.branch_index.clone(), index)
+		} else {
+			self.composite_treshold.clone()
+		}
+	}
+}
+
 impl<I: Default, BI: Default> Default for ForkPlan<I, BI> {
 	fn default() -> Self {
 		ForkPlan {
@@ -869,6 +881,10 @@ impl<
 
 	fn inner_fork_state(&self, s: Self::SE) -> Self::SF {
 		s.0
+	}
+
+	fn ref_state_fork(&self, s: &Self::S) -> Self::SF {
+		s.latest()
 	}
 
 	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF> {
