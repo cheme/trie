@@ -277,7 +277,7 @@ impl<
 		// use case.
 		let mut filter: BTreeMap<_, _> = Default::default();
 		for h in branch.history.into_iter() {
-			if h.state.start < switch_index.1 {
+			if h.state.end > switch_index.1 {
 				filter.insert(h.branch_index, h.state);
 			}
 		}
