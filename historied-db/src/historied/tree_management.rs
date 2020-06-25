@@ -430,7 +430,7 @@ impl<
 
 	fn query_plan_inner(&self, mut branch_index: I, mut parent_fork_branch_index: Option<BI>) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
-		while branch_index > self.composite_treshold.0 {
+		while branch_index >= self.composite_treshold.0 {
 			if let Some(branch) = self.storage.get(&branch_index) {
 				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
 					branch.query_plan_to(end)
@@ -1006,7 +1006,7 @@ pub(crate) mod test {
 		];
 		assert_eq!(states.query_plan(6).history, ref_6);
 
-		states.composite_treshold = (1, 1);
+		states.composite_treshold = (2, 1);
 		let mut ref_6 = ref_6;
 		ref_6.remove(0);
 		assert_eq!(states.query_plan(6).history, ref_6);
