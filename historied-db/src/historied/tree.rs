@@ -177,6 +177,7 @@ impl<
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
 		let mut gc_iter = gc.tree.storage.iter().rev();
+		let start_composite = gc.tree.composite_treshold.1.clone();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
@@ -185,6 +186,11 @@ impl<
 				// TODO using linear gc does not make sense here (no sense of delta: TODO change
 				// linear to use a simple range with neutral).
 				let (start, end) = gc.1.range();
+				let start = if start < start_composite {
+					start_composite.clone()
+				} else {
+					start
+				};
 				let gc = LinearGC {
 					new_start: Some(start),
 					new_end:  Some(end),
