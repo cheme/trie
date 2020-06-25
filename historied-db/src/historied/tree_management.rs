@@ -247,7 +247,7 @@ impl<
 		let qp = self.state.tree.query_plan_at(latest);
 		let mut branch_index = self.state.tree.composite_treshold.0.clone();
 		for b in qp.iter() {
-			if b.0.start <= switch_index {
+			if b.0.end <= switch_index {
 				branch_index = b.1;
 				break;
 			}
