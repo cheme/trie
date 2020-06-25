@@ -279,12 +279,14 @@ impl<
 		let mut filter: BTreeMap<_, _> = Default::default();
 		for h in branch.history.into_iter() {
 			if h.state.end > switch_index.1 {
+				println!("ins {:?}", h.branch_index);
 				filter.insert(h.branch_index, h.state);
 			}
 		}
 		let mut change = false;
 		let mut to_remove = Vec::new();
 		for (branch_ix, branch) in self.state.tree.storage.iter_mut() {
+				println!("it {:?}", branch_ix);
 			if branch.state.start < switch_index.1 {
 				if let Some(ref_range) = filter.get(branch_ix) {
 					debug_assert!(ref_range.start == branch.state.start);
@@ -296,6 +298,7 @@ impl<
 						// TODO EMCH clean mapping for ends shifts
 					}
 				} else {
+				println!("rem {:?}", branch_ix);
 					to_remove.push(branch_ix.clone());
 				}
 			}
