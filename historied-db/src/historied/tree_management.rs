@@ -245,7 +245,7 @@ impl<
 		let mut switch_index = latest.1.clone();
 		switch_index -= back;
 		let qp = self.state.tree.query_plan_at(latest);
-		let mut branch_index = Default::default();
+		let mut branch_index = self.state.tree.composite_treshold.0.clone();
 		for b in qp.iter() {
 			if b.0.start <= switch_index {
 				branch_index = b.1;
@@ -306,7 +306,10 @@ impl<
 				// TODO EMCH clean mapping for range
 			}
 		}
-		self.state.tree.composite_treshold = switch_index;
+		if switch_index != self.state.tree.composite_treshold {
+			self.state.tree.composite_treshold = switch_index;
+			change = true;
+		}
 		println!("new ct: {:?}", &self.state.tree.composite_treshold);
 		change
 	}
