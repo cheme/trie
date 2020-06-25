@@ -20,6 +20,7 @@
 
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::BTreeMap;
+use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
 
@@ -178,8 +179,8 @@ impl<
 
 impl<
 	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V,
 > TreeManagement<H, I, BI, V> {
 	/// Associate a state for the initial root (default index).
@@ -251,6 +252,7 @@ impl<
 				break;
 			}
 		}
+		panic!("{:?}", (branch_index, switch_index));
 		// this is the actual operation that should go in a trait TODO EMCH
 		self.canonicalize(qp, (branch_index, switch_index))
 	}
@@ -872,8 +874,8 @@ impl<
 
 impl<
 	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
 > ForkableManagement<H> for TreeManagement<H, I, BI, V> {
 
