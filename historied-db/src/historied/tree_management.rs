@@ -307,14 +307,13 @@ impl<
 			}
 		}
 		self.state.tree.composite_treshold = switch_index;
-		panic!("{:?}, {:?}", self.state.tree.composite_treshold, change);
 		change
 	}
 }
 
 impl<
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 > Tree<I, BI> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
@@ -340,7 +339,12 @@ impl<
 			}
 		} else {
 			let branch_state = self.storage.get_mut(&branch_index)
-				.expect("Inconsistent state on new block");
+				.expect(format!(
+					"Inconsistent state on new block: {:?} {:?}, {:?}",
+					branch_index,
+					number,
+					self.composite_treshold,
+				).as_str());
 			if branch_state.can_append && branch_state.can_add(&number) {
 				branch_state.add_state();
 			} else {
@@ -799,8 +803,8 @@ impl<I, BI, V> TreeMigrate<I, BI, V> {
 
 impl<
 	H: Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
 > ManagementRef<H> for TreeManagement<H, I, BI, V> {
 	type S = ForkPlan<I, BI>;
@@ -820,8 +824,8 @@ impl<
 
 impl<
 	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default,
+	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
 > Management<H> for TreeManagement<H, I, BI, V> {
 	// TODO attach gc infos to allow some lazy cleanup (make it optional)
