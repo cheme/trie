@@ -319,6 +319,8 @@ impl<
 			if &branch.branch_index < branch_index {
 				insert_at = iter_index + 1;
 				break;
+			} else {
+				insert_at = iter_index;
 			}
 		}
 		let branch = MemoryOnlyBranch::new(value, at);
