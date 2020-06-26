@@ -23,6 +23,30 @@ use crate::rstd::BTreeMap;
 use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
+use codec::{Decode, Encode};
+
+/// simple serialize trait, could be a noop.
+pub trait KVSerialize {
+	const SYNCH_VALUES: bool;
+	type Iter: Iterator<Item = (Vec<u8>, Vec<u8>)>;
+	fn write_kv<V: Encode>(&mut self, p: &[u8], k: &[u8], v: &V);
+	fn remove(&mut self, p: &[u8], k: &[u8]);
+	fn read_kv<V: Decode>(&self, p: &[u8], k: &[u8], v: &[u8]) -> Option<Option<V>>;
+	fn iter(&self, p: &[u8]) -> Self::Iter;
+}
+
+impl KVSerialize for () {
+	const SYNCH_VALUES: bool = false;
+	type Iter = crate::rstd::iter::Empty<(Vec<u8>, Vec<u8>)>;
+	fn write_kv<V: Encode>(&mut self, p: &[u8], k: &[u8], v: &V) { }
+	fn remove(&mut self, p: &[u8], k: &[u8]) { }
+	fn read_kv<V: Decode>(&self, p: &[u8], k: &[u8], v: &[u8]) -> Option<Option<V>> {
+		None
+	}
+	fn iter(&self, p: &[u8]) -> Self::Iter {
+		crate::rstd::iter::empty()
+	}
+}
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
@@ -102,8 +126,11 @@ pub struct BranchRange<I> {
 /// exist by convention.
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct Tree<I, BI> {
+pub struct Tree<I, BI, S> {
+	// TODO this could probably be cleared depending on S::SYNCH_VALUES.
+	// -> on gc ?
 	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
+	// TODO pub(crate) storage: SerializeMap<I, BranchState<I, BI>>,
 	pub(crate) last_index: I,
 	/// treshold for possible node value, correspond
 	/// roughly to last cannonical block branch index.
@@ -113,6 +140,8 @@ pub struct Tree<I, BI> {
 	/// Is composite latest, so can we write its last state (only
 	/// possible on new or after a migration).
 	pub(crate) composite_latest: bool,
+	/// serialize implementation
+	pub(crate) serialize: Option<S>,
 	// TODO some strategie to close a long branch that gets
 	// behind multiple fork? This should only be usefull
 	// for high number of modification, small number of
@@ -122,35 +151,49 @@ pub struct Tree<I, BI> {
 	// strategy and avoid fragmenting the history to much.
 }
 
-impl<I: Ord + Default, BI: Default> Default for Tree<I, BI> {
+#[derive(Debug, Clone)]
+pub struct SerializeMap<I, V>(BTreeMap<I, Option<V>>);
+
+// TODO implement for serializemap: get get_mut remove iter & new
+
+impl<I: Ord + Default, BI: Default, S> Default for Tree<I, BI, S> {
 	fn default() -> Self {
 		Tree {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
 			composite_treshold: Default::default(),
 			composite_latest: true,
+			serialize: None,
 		}
+	}
+}
+
+impl<I, BI, S: KVSerialize> Tree<I, BI, S> {
+	pub fn use_serialize(&mut self, state: S) {
+		self.serialize = Some(state);
+		unimplemented!("TODO fetch fieldse");
 	}
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct TreeState<I, BI, V> {
-	pub(crate) tree: Tree<I, BI>,
+pub struct TreeState<I, BI, V, S> {
+	pub(crate) tree: Tree<I, BI, S>,
 	pub(crate) neutral_element: Option<V>,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct TreeManagement<H, I, BI, V> {
-	state: TreeState<I, BI, V>,
+pub struct TreeManagement<H, I, BI, V, S> {
+	state: TreeState<I, BI, V, S>,
 	mapping: crate::rstd::BTreeMap<H, (I, BI)>,
 	touched_gc: bool,
 	current_gc: TreeMigrate<I, BI, V>,
 	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
+	serialize: Option<S>,
 }
 
-impl<H: Ord, I: Default + Ord, BI: Default, V> Default for TreeManagement<H, I, BI, V> {
+impl<H: Ord, I: Default + Ord, BI: Default, V, S> Default for TreeManagement<H, I, BI, V, S> {
 	fn default() -> Self {
 		TreeManagement {
 			state: TreeState{
@@ -161,6 +204,7 @@ impl<H: Ord, I: Default + Ord, BI: Default, V> Default for TreeManagement<H, I, 
 			touched_gc: false,
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
+			serialize: Default::default(),
 		}
 	}
 }
@@ -170,10 +214,25 @@ impl<
 	I,
 	BI,
 	V,
-> TreeManagement<H, I, BI, V> {
+	S,
+> TreeManagement<H, I, BI, V, S> {
 	pub fn define_neutral_element(mut self, n: V) -> Self {
 		self.state.neutral_element = Some(n);
 		self
+	}
+}
+
+impl<
+	H,
+	I,
+	BI,
+	V,
+	S: KVSerialize,
+> TreeManagement<H, I, BI, V, S> {
+	pub fn use_serialize(&mut self, management: S, state: S) {
+		self.serialize = Some(management);
+		unimplemented!("TODO fetch content");
+		self.state.tree.use_serialize(state);
 	}
 }
 
@@ -182,7 +241,8 @@ impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V,
-> TreeManagement<H, I, BI, V> {
+	S,
+> TreeManagement<H, I, BI, V, S> {
 	/// Associate a state for the initial root (default index).
 	pub fn map_root_state(&mut self, root: H) {
 		self.mapping.insert(root, Default::default());
@@ -322,7 +382,8 @@ impl<
 impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
-> Tree<I, BI> {
+	S,
+> Tree<I, BI, S> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
 	/// - new index in case of branch range creation
@@ -822,10 +883,11 @@ impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
-> ManagementRef<H> for TreeManagement<H, I, BI, V> {
+	S,
+> ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
 	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
-	type GC = TreeState<I, BI, V>;
+	type GC = TreeState<I, BI, V, S>;
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeMigrate<I, BI, V>;
 
@@ -843,7 +905,8 @@ impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
-> Management<H> for TreeManagement<H, I, BI, V> {
+	S,
+> Management<H> for TreeManagement<H, I, BI, V, S> {
 	// TODO attach gc infos to allow some lazy cleanup (make it optional)
 	// on set and on get_mut
 	type SE = Latest<(I, BI)>;
@@ -897,7 +960,8 @@ impl<
 	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
 	V: Clone,
-> ForkableManagement<H> for TreeManagement<H, I, BI, V> {
+	S,
+> ForkableManagement<H> for TreeManagement<H, I, BI, V, S> {
 
 	type SF = (I, BI);
 
@@ -946,7 +1010,7 @@ pub(crate) mod test {
 	use super::*;
 
 	// TODO switch to management function?
-	pub(crate) fn test_states() -> Tree<usize, usize> {
+	pub(crate) fn test_states() -> Tree<usize, usize, ()> {
 		let mut states = Tree::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.

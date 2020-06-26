@@ -11,9 +11,11 @@ edition = "2018"
 [dependencies]
 smallvec = "1.2"
 hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
+codec = { package = "parity-scale-codec", version = "1.3.0", default-features = false, features = ["derive"] }
 
 [features]
 default = ["std", "test-helpers"] # TODO remove test-helpers
 std = [
+  "codec/std",
 ]
 test-helpers = []

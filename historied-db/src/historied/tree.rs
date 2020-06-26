@@ -141,7 +141,7 @@ impl<
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
-	type GC = TreeState<I, BI, V>;
+	type GC = TreeState<I, BI, V, ()>;
 	type Migrate = (BI, TreeMigrate<I, BI, V>);
 
 	fn new(value: V, at: &Self::SE) -> Self {

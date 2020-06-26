@@ -21,7 +21,7 @@ use crate::{
 };
 use crate::test::simple_impl::StateInput;
 
-type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, usize, usize, u16>;
+type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, usize, usize, u16, ()>;
 struct FuzzerState {
 	/// in memory historied datas to test
 	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::MemoryOnly<usize, usize, u16>>,
