@@ -359,7 +359,9 @@ impl<
 				if !branch_state.can_fork(&number) {
 					return None;
 				} else {
-					branch_state.is_latest = false;
+					if branch_state.state.end == number {
+						branch_state.is_latest = false;
+					}
 					create_new = true;
 				}
 			}
