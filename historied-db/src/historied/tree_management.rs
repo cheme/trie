@@ -228,7 +228,7 @@ impl<
 				((s.parent_branch_index.clone(), previous_index), &s.state.end)
 			}) {
 			let mut bi = state.1.clone();
-			while &bi < branch_end {
+			while &bi < branch_end { // TODO should be < branch_end - 1
 				call_back(&state.0, &bi);
 				bi += 1;
 			}
@@ -393,6 +393,7 @@ impl<
 		})
 	}
 	
+	// TODO this and is_latest is borderline useless, for management implementation only.
 	pub fn if_latest_at(&self, branch_index: I, seq_index: BI) -> Option<Latest<(I, BI)>> {
 		if self.composite_latest {
 			// composite
@@ -492,7 +493,7 @@ impl<
 
 	/// this function can go into deep recursion with full scan, it indicates
 	/// that the tree model use here should only be use for small data or
-	/// tests.
+	/// tests. TODO should apply call back here and remove from caller!!
 	pub fn apply_drop_state(&mut self,
 		branch_index: &I,
 		node_index: &BI,
@@ -500,8 +501,10 @@ impl<
 	) {
 		// Never remove default
 		let mut remove = false;
+		let mut last;
 		if let Some(branch) = self.storage.get_mut(branch_index) {
 			branch.is_latest = true;
+			last = branch.state.end.clone();
 			while &branch.state.end > node_index {
 				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
@@ -515,7 +518,10 @@ impl<
 		if remove {
 			self.storage.remove(branch_index);
 		}
-		self.apply_drop_state_rec_call(branch_index, node_index, call_back, false);
+		while &last > node_index {
+			last -= 1;
+			self.apply_drop_state_rec_call(branch_index, &last, call_back, false);
+		}
 	}
 
 	pub fn apply_drop_state_rec_call(&mut self,
@@ -533,7 +539,7 @@ impl<
 			}
 		} else {
 			for (i, s) in self.storage.iter() {
-				if &s.parent_branch_index == branch_index && &s.state.start >= node_index {
+				if &s.parent_branch_index == branch_index && &s.state.start > node_index {
 					to_delete.push((i.clone(), s.clone()));
 				}
 			}
@@ -969,11 +975,16 @@ pub(crate) mod test {
 	fn test_remove_attached() {
 		let mut states = test_states();
 		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.drop_state()));
+		// does not recurse
 		assert!(states.branch_state(&3).unwrap().state.exists(&3));
 		assert!(states.branch_state(&4).unwrap().state.exists(&3));
+		assert!(states.branch_state(&5).unwrap().state.exists(&2));
+		let mut states = test_states();
 		states.apply_drop_state(&1, &2, &mut |_i, _bi| {});
+		// does recurse
 		assert_eq!(states.branch_state(&3), None);
 		assert_eq!(states.branch_state(&4), None);
+		assert!(states.branch_state(&5).unwrap().state.exists(&2));
 	}
 
 	#[test]
