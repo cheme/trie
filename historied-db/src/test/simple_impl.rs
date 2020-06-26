@@ -48,7 +48,7 @@ impl StateInput {
 }
 
 impl<K, V> Db<K, V> {
-	fn is_latest(&self, ix: &StateIndex) -> bool {
+	pub fn is_latest(&self, ix: &StateIndex) -> bool {
 		self.db.get(*ix).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.is_latest)).unwrap_or(false)
 	}
 

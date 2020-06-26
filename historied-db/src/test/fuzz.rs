@@ -58,22 +58,29 @@ impl FuzzerState {
 
 	fn set_value_latest(&mut self, key: u8, value: u16) {
 		let at_simple = self.simple.latest_state();
-		self.simple.emplace(vec![key], value, &at_simple);
-		let at = self.in_memory_mgmt.latest_state();
-		self.in_memory_db.emplace(vec![key], value, &at);
+		// we only allow insert at terminal.
+		if self.simple.is_latest(at_simple.latest()) {
+			self.simple.emplace(vec![key], value, &at_simple);
+			let at = self.in_memory_mgmt.latest_state();
+			self.in_memory_db.emplace(vec![key], value, &at);
+		}
 	}
 
 	fn set_value_at(&mut self, key: u8, value: u16, at: u8) {
-		let state = StateInput((at % self.next_hash) as usize);
-		let at_simple = self.simple.get_db_state_mut(&state);
-		let at = self.in_memory_mgmt.get_db_state_mut(&state);
-		assert_eq!(at.is_some(), at_simple.is_some());
-		at_simple.map(|at_simple|
-			self.simple.emplace(vec![key], value, &at_simple)
-		);
-		at.map(|at|
-			self.in_memory_db.emplace(vec![key], value, &at)
-		);
+		let at = (at % self.next_hash) as usize;
+		// we only allow insert at terminal.
+		if self.simple.is_latest(&at) {
+			let state = StateInput(at);
+			let at_simple = self.simple.get_db_state_mut(&state);
+			let at = self.in_memory_mgmt.get_db_state_mut(&state);
+			assert_eq!(at.is_some(), at_simple.is_some());
+			at_simple.map(|at_simple|
+				self.simple.emplace(vec![key], value, &at_simple)
+			);
+			at.map(|at|
+				self.in_memory_db.emplace(vec![key], value, &at)
+			);
+		}
 	}
 
 	fn append_latest(&mut self) {

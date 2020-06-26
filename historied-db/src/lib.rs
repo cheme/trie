@@ -205,7 +205,7 @@ pub trait ForkableManagement<H>: Management<H> {
 	fn get_db_state_for_fork(&self, tag: &H) -> Option<Self::SF>;
 
 	fn latest_state_fork(&self) -> Self::SF {
-		let se= self.latest_state();
+		let se = self.latest_state();
 		self.inner_fork_state(se)
 	}
 
