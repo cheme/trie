@@ -237,10 +237,10 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 		} else {
 			None
 		};
-		self.rec_drop_state(&mut result, *state);
 		self.latest_state = Latest::unchecked_latest(
 			self.db.get(*state).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.previous)).unwrap_or(0)
 		);
+		self.rec_drop_state(&mut result, *state);
 		result
 	}
 }

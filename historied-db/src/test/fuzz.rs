@@ -266,6 +266,7 @@ fn inmemory_forkable_no_regression() {
 		&[242, 7, 4, 2, 117, 125][..],
 		&[122, 244, 1, 0, 0, 0][..],
 		&[122, 244, 244, 6, 116, 122][..],
+		&[242, 32, 122, 250, 16, 4][..],
 	];
 	for input in inputs.iter() {
 		println!("{:?}", FuzzerAction::into_actions(input));
