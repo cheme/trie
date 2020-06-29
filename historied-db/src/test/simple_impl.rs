@@ -21,6 +21,7 @@
 use crate::*;
 use std::collections::HashMap;
 use std::hash::Hash;
+use codec::{Encode, Decode};
 
 struct DbElt<K, V> {
 	values: HashMap<K, V>,
@@ -35,11 +36,11 @@ pub struct Db<K, V> {
 }
 
 /// state index.
-type StateIndex = usize;
+type StateIndex = u32;
 
-#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Clone, Encode, Decode)]
 /// State Input (aka hash).
-pub struct StateInput(pub usize);
+pub struct StateInput(pub u32);
 
 impl StateInput {
 	fn to_index(&self) -> StateIndex {
@@ -49,16 +50,16 @@ impl StateInput {
 
 impl<K, V> Db<K, V> {
 	pub fn is_latest(&self, ix: &StateIndex) -> bool {
-		self.db.get(*ix).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.is_latest)).unwrap_or(false)
+		self.db.get(*ix as usize).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.is_latest)).unwrap_or(false)
 	}
 
 	fn contains(&self, ix: &StateInput) -> bool {
-		self.db.get(ix.to_index()).map(|o_elt| o_elt.is_some()).unwrap_or(false)
+		self.db.get(ix.to_index() as usize).map(|o_elt| o_elt.is_some()).unwrap_or(false)
 	}
 
 	fn get_state(&self, state: &StateInput) -> Option<StateIndex> {
 		if self.contains(state) {
-			Some(state.0)
+			Some(state.to_index())
 		} else {
 			None
 		}
@@ -86,7 +87,7 @@ impl<K: Hash + Eq, V> InMemoryStateDBRef<K, V> for Db<K, V> {
 
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
 		for s in at.iter() {
-			if let Some(v) = self.db.get(*s)
+			if let Some(v) = self.db.get(*s as usize)
 				.and_then(|o_elt| o_elt.as_ref().and_then(|elt| elt.values.get(key))) {
 				return Some(v)
 			}
@@ -102,14 +103,14 @@ impl<K: Hash + Eq, V: Clone> StateDB<K, V> for Db<K, V> {
 
 	fn emplace(&mut self, key: K, value: V, at: &Self::SE) {
 		debug_assert!(self.is_latest(at.latest()));
-		self.db.get_mut(at.0).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
+		self.db.get_mut(at.0 as usize).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
 			.expect("state should be valid TODO need a return type to emplace")
 			.insert(key, value);
 	}
 
 	fn remove(&mut self, key: &K, at: &Self::SE) {
 		debug_assert!(self.is_latest(at.latest()));
-		self.db.get_mut(at.0).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
+		self.db.get_mut(at.0 as usize).and_then(|o_elt| o_elt.as_mut().map(|elt| &mut elt.values))
 			.expect("no removal and no random SE")
 			.remove(key);
 	}
@@ -124,11 +125,11 @@ impl<K: Eq + Hash, V> ManagementRef<StateInput> for Db<K, V> {
 	type GC = ();
 	type Migrate = ();
 
-	fn get_db_state(&self, state: &StateInput) -> Option<Self::S> {
+	fn get_db_state(&mut self, state: &StateInput) -> Option<Self::S> {
 		if let Some(mut ix) = self.get_state(state) {
 			let mut query = vec![ix];
 			loop {
-				let next = self.db[ix].as_ref().map(|elt| elt.previous).unwrap_or(ix);
+				let next = self.db[ix as usize].as_ref().map(|elt| elt.previous).unwrap_or(ix);
 				if next == ix {
 					break;
 				} else {
@@ -164,7 +165,7 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 		}, vec![0])
 	}
 
-	fn get_db_state_mut(&self, state: &StateInput) -> Option<Self::SE> {
+	fn get_db_state_mut(&mut self, state: &StateInput) -> Option<Self::SE> {
 //		if let Some(s) = self.get_state(state) {
 		if self.is_latest(&state.to_index()) {
 			return Some(Latest::unchecked_latest(state.to_index()))
@@ -177,9 +178,10 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 		self.latest_state.clone()
 	}
 
-	fn reverse_lookup(&self, state: &Self::S) -> Option<StateInput> {
+	fn reverse_lookup(&mut self, state: &Self::S) -> Option<StateInput> {
 		if let Some(state) = state.first() {
-			let state = StateInput(*state);
+			// TODO wrong cast.
+			let state = StateInput(*state as u32);
 			if self.contains(&state) {
 				Some(state)
 			} else {
@@ -207,13 +209,13 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 	fn ref_state_fork(&self, s: &Self::S) -> Self::SF {
 		s.first().cloned().unwrap_or_default()
 	}
-	fn get_db_state_for_fork(&self, state: &StateInput) -> Option<Self::SF> {
+	fn get_db_state_for_fork(&mut self, state: &StateInput) -> Option<Self::SF> {
 		self.get_state(state)
 	}
 
 	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {
-		debug_assert!(state.to_index() == self.db.len(), "Test simple implementation only allow sequential new identifier");
-		if self.db.get_mut(*at).and_then(|v| v.as_mut().map(|v| {
+		debug_assert!(state.to_index() as usize == self.db.len(), "Test simple implementation only allow sequential new identifier");
+		if self.db.get_mut(*at as usize).and_then(|v| v.as_mut().map(|v| {
 			v.is_latest = false;
 			()
 		})).is_none() {
@@ -224,7 +226,7 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 			previous: *at,
 			is_latest: true,
 		}));
-		self.latest_state = Latest::unchecked_latest(self.db.len() - 1);
+		self.latest_state = Latest::unchecked_latest(self.db.len() as u32 - 1);
 
 		self.get_db_state(&state)
 	}
@@ -238,7 +240,7 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 			None
 		};
 		self.latest_state = Latest::unchecked_latest(
-			self.db.get(*state).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.previous)).unwrap_or(0)
+			self.db.get(*state as usize).and_then(|o_elt| o_elt.as_ref().map(|elt| elt.previous)).unwrap_or(0)
 		);
 		self.rec_drop_state(&mut result, *state);
 		result
@@ -249,12 +251,13 @@ impl<K: Eq + Hash, V> Db<K, V> {
 	fn rec_drop_state(&mut self, result: &mut Option<Vec<StateInput>>, state: StateIndex) {
 		// initial state is not removable.
 		let skip = if state != Default::default() {
-			if let Some(o) = self.db.get_mut(state) {
+			if let Some(o) = self.db.get_mut(state as usize) {
 				if o.is_none() {
 					return;
 				}
 				*o = None;
-				result.as_mut().map(|r| r.push(StateInput(state)));
+				// TODO wrong cast
+				result.as_mut().map(|r| r.push(StateInput(state as u32)));
 			} else {
 				return;
 			}
@@ -264,7 +267,7 @@ impl<K: Eq + Hash, V> Db<K, V> {
 		};
 		let rec_calls: Vec<StateIndex> = self.db.iter().enumerate().skip(1)
 			.filter_map(|(ix, elt)| elt.as_ref().and_then(|elt| if elt.previous == state {
-			Some(ix)
+			Some(ix as u32)
 		} else {
 			None
 		})).collect();

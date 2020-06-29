@@ -145,6 +145,10 @@ pub trait SerializeInstance: Default + Clone {
 	const STATIC_COL: &'static [u8];
 }
 
+impl SerializeInstance for () {
+	const STATIC_COL: &'static [u8] = &[];
+}
+
 /// Dynamic collection can be change.
 /// Static and dynamic collection are mutually exclusive, yet instance using both trait should run
 /// dynamic first.
@@ -184,17 +188,20 @@ impl SerializeDB for () {
 
 use codec::{Codec, Encode, Decode};
 
-#[derive(Derivative)]
 #[derive(Debug, Clone)]
+#[derive(Derivative)]
+#[cfg_attr(any(test, feature = "test"), derivative(PartialEq, Eq))]
+#[derivative(Default(bound="I: Default"))]
 /// Lazy loading serialized map with cache.
 /// Updates happens immediatelly.
-pub struct SerializeMap<K, V, S, I> {
+pub struct SerializeMap<K: Ord, V, S, I> {
 	inner: BTreeMap<K, Option<V>>,
 	instance: I,
+	#[derivative(PartialEq="ignore")]
 	_ph: PhantomData<S>,
 }
 
-impl<'a, K, V, S, I> SerializeMap<K, V, S, I> {
+impl<'a, K: Ord, V, S, I> SerializeMap<K, V, S, I> {
 	pub fn handle(&'a mut self, db: &'a mut S) -> SerializeMapHandle<'a, K, V, S, I> {
 		SerializeMapHandle {
 			cache: &mut self.inner,
@@ -230,19 +237,16 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		S: SerializeDB,
 		I: SerializeInstance,
 {
-	pub fn get(&mut self, k: &K) -> Option<V> {
-		match self.cache.get(k) {
-			Some(v) => v.clone(),
-			None => {
-				if S::ACTIVE {
+	pub fn get(&mut self, k: &K) -> Option<&V> {
+		if S::ACTIVE {
+			let collection = &self.collection;
+			self.cache.entry(k.clone())
+				.or_insert_with(|| {
 					let enc_k = k.encode();
-					let value = self.collection.read(&enc_k).and_then(|v| V::decode(&mut v.as_slice()).ok());
-					self.cache.insert(k.clone(), value.clone());
-					value
-				} else {
-					None
-				}
-			},
+					collection.read(&enc_k).and_then(|v| V::decode(&mut v.as_slice()).ok())
+				}).as_ref()
+		} else {
+			None
 		}
 	}
 	pub fn remove(&mut self, k: &K) -> Option<V> {
@@ -264,6 +268,14 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		self.collection.remove(k.as_slice());
 		value
 	}
+	pub fn insert(&'a mut self, k: K, v: V) -> &V {
+		self.collection.write(k.encode().as_slice(), v.encode().as_slice());
+		let res = self.cache.entry(k)
+			.and_modify(|old| *old = Some(v.clone()))
+			.or_insert_with(|| Some(v));
+		res.as_ref().expect("Init to some")
+	}
+
 	pub fn entry(&'a mut self, k: &K) -> EntryMap<'a, K, V, S, I> {
 		let mut is_fetch = true;
 		if !self.cache.contains_key(k) {
@@ -285,6 +297,7 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		}
 	}
 }
+
 impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 	where
 		K: Codec + Clone + Ord,
@@ -324,7 +337,7 @@ impl<'a, K, V, S> Iterator for SerializeMapIter<'a, K, V, S>
 			SerializeMapIter::Cache(i) => loop {
 				match i.next() {
 					Some((k, Some(v))) => return Some((k.clone(), v.clone())),
-					Some((k, None)) => (),
+					Some((_k, None)) => (),
 					None => return None,
 				}
 			},

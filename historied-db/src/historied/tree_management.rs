@@ -23,8 +23,23 @@ use crate::rstd::BTreeMap;
 use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
-use codec::{Decode, Encode};
-use crate::simple_db::{SerializeDB, SerializeMap};
+use codec::{Codec, Encode, Decode};
+use crate::simple_db::{SerializeDB, SerializeMap, SerializeInstance};
+
+pub trait TreeManagementStorage: Sized {
+	type Storage: SerializeDB;
+	type Mapping: SerializeInstance;
+
+	fn init() -> Self::Storage;
+}
+
+fn default_noop_storage() -> () { }
+
+impl TreeManagementStorage for () {
+	type Storage = ();
+	type Mapping = ();
+	fn init() -> Self { }
+}
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
@@ -140,7 +155,7 @@ impl<I: Ord + Default, BI: Default, S> Default for Tree<I, BI, S> {
 	}
 }
 
-impl<I, BI, S: SerializeDB> Tree<I, BI, S> {
+impl<I, BI, S: TreeManagementStorage> Tree<I, BI, S> {
 	pub fn use_serialize(&mut self, state: S) {
 		self.serialize = Some(state);
 		unimplemented!("TODO fetch fieldse");
@@ -156,37 +171,37 @@ pub struct TreeState<I, BI, V, S> {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct TreeManagement<H, I, BI, V, S> {
+pub struct TreeManagement<H: Ord, I, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
-	mapping: crate::rstd::BTreeMap<H, (I, BI)>,
+	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
 	touched_gc: bool,
 	current_gc: TreeMigrate<I, BI, V>,
 	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
-	serialize: Option<S>,
+	serialize: S::Storage,
 }
 
-impl<H: Ord, I: Default + Ord, BI: Default, V, S> Default for TreeManagement<H, I, BI, V, S> {
+impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default for TreeManagement<H, I, BI, V, S> {
 	fn default() -> Self {
 		TreeManagement {
-			state: TreeState{
+			state: TreeState {
 				tree: Tree::default(),
 				neutral_element: None,
 			},
-			mapping: crate::rstd::BTreeMap::new(),
+			mapping: Default::default(),
 			touched_gc: false,
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
-			serialize: Default::default(),
+			serialize: S::init(),
 		}
 	}
 }
 
 impl<
-	H,
+	H: Ord,
 	I,
 	BI,
 	V,
-	S,
+	S: TreeManagementStorage,
 > TreeManagement<H, I, BI, V, S> {
 	pub fn define_neutral_element(mut self, n: V) -> Self {
 		self.state.neutral_element = Some(n);
@@ -195,29 +210,15 @@ impl<
 }
 
 impl<
-	H,
-	I,
-	BI,
+	H: Clone + Ord + Codec,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
 	V,
-	S: SerializeDB,
-> TreeManagement<H, I, BI, V, S> {
-	pub fn use_serialize(&mut self, management: S, state: S) {
-		self.serialize = Some(management);
-		unimplemented!("TODO fetch content");
-		self.state.tree.use_serialize(state);
-	}
-}
-
-impl<
-	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
-	V,
-	S,
+	S: TreeManagementStorage,
 > TreeManagement<H, I, BI, V, S> {
 	/// Associate a state for the initial root (default index).
 	pub fn map_root_state(&mut self, root: H) {
-		self.mapping.insert(root, Default::default());
+		self.mapping.handle(&mut self.serialize).insert(root, Default::default());
 	}
 
 	// TODO consider removing drop_mapping argument (is probably default)
@@ -229,14 +230,14 @@ impl<
 	) {
 		drop_mapping |= collect_dropped.is_some();
 		// TODO optimized drop from I, BI == 0, 0 and ignore x, 0
-		let mapping = &mut self.mapping;
+		let mut mapping = self.mapping.handle(&mut self.serialize);
 		let collect_dropped = &mut collect_dropped;
 		let mut call_back = move |i: &I, bi: &BI| {
 			if drop_mapping {
 				let state = (i.clone(), bi.clone());
 				// TODO again cost of reverse lookup: consider double mapping
 				if let Some(h) = mapping.iter() 
-					.find(|(_k, v)| v == &&state)
+					.find(|(_k, v)| v == &state)
 					.map(|(k, _v)| k.clone()) {
 					mapping.remove(&h);
 					collect_dropped.as_mut().map(|collect| collect.push(h));
@@ -275,7 +276,7 @@ impl<
 	pub fn apply_drop_from_latest(&mut self, back: usize) -> bool {
 		let latest = self.last_in_use_index.clone();
 		let mut switch_index = latest.1.clone();
-		switch_index -= back;
+		switch_index -= back as u32;
 		let qp = self.state.tree.query_plan_at(latest);
 		let mut branch_index = self.state.tree.composite_treshold.0.clone();
 		for b in qp.iter() {
@@ -352,8 +353,8 @@ impl<
 }
 
 impl<
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug,
 	S,
 > Tree<I, BI, S> {
 	/// Return anchor index for this branch history:
@@ -616,7 +617,7 @@ pub struct ForkPlan<I, BI> {
 	pub composite_treshold: (I, BI),
 }
 
-impl<I: Clone, BI: Clone + SubAssign<usize>> ForkPlan<I, BI> {
+impl<I: Clone, BI: Clone + SubAssign<u32>> ForkPlan<I, BI> {
 	fn latest(&self) -> (I, BI) {
 		if let Some(branch_plan) = self.history.last() {
 			let mut index = branch_plan.state.end.clone();
@@ -645,7 +646,7 @@ pub struct BranchPlan<I, BI> {
 	pub state: BranchRange<BI>,
 }
 
-impl<'a, I: Default + Eq + Ord + Clone, BI: SubAssign<usize> + Ord + Clone> BranchesContainer<I, BI> for &'a ForkPlan<I, BI> {
+impl<'a, I: Default + Eq + Ord + Clone, BI: SubAssign<u32> + Ord + Clone> BranchesContainer<I, BI> for &'a ForkPlan<I, BI> {
 	type Branch = &'a BranchRange<BI>;
 	type Iter = ForkPlanIter<'a, I, BI>;
 
@@ -693,7 +694,7 @@ impl<'a, I: Clone, BI> Iterator for ForkPlanIter<'a, I, BI> {
 	}
 }
 
-impl<I: Ord + SubAssign<usize> + Clone> BranchContainer<I> for BranchRange<I> {
+impl<I: Ord + SubAssign<u32> + Clone> BranchContainer<I> for BranchRange<I> {
 
 	fn exists(&self, i: &I) -> bool {
 		i >= &self.start && i < &self.end
@@ -735,7 +736,7 @@ impl<'a, I: Clone + Ord> BranchContainer<I> for I {
 
 }
 */
-impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> {
+impl<I: Default, BI: Default + AddAssign<u32>> Default for BranchState<I, BI> {
 
 	// initialize with one element
 	fn default() -> Self {
@@ -753,7 +754,7 @@ impl<I: Default, BI: Default + AddAssign<usize>> Default for BranchState<I, BI> 
 	}
 }
 
-impl<I, BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone> BranchState<I, BI> {
+impl<I, BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone> BranchState<I, BI> {
 
 	pub fn query_plan(&self) -> BranchRange<BI> {
 		self.state.clone()
@@ -851,11 +852,11 @@ impl<I, BI, V> TreeMigrate<I, BI, V> {
 }
 
 impl<
-	H: Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
+	H: Ord + Clone + Codec,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
 	V: Clone,
-	S,
+	S: TreeManagementStorage,
 > ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
 	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
@@ -863,8 +864,8 @@ impl<
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeMigrate<I, BI, V>;
 
-	fn get_db_state(&self, state: &H) -> Option<Self::S> {
-		self.mapping.get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
+	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
+		self.mapping.handle(&mut self.serialize).get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
 	}
 
 	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
@@ -873,18 +874,18 @@ impl<
 }
 
 impl<
-	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
+	H: Clone + Ord + Codec,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
 	V: Clone,
-	S,
+	S: TreeManagementStorage,
 > Management<H> for TreeManagement<H, I, BI, V, S> {
 	// TODO attach gc infos to allow some lazy cleanup (make it optional)
 	// on set and on get_mut
 	type SE = Latest<(I, BI)>;
 
-	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
-		self.mapping.get(state).cloned().and_then(|(i, bi)| {
+	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
+		self.mapping.handle(&mut self.serialize).get(state).cloned().and_then(|(i, bi)| {
 			// enforce only latest
 			self.state.tree.if_latest_at(i, bi)
 		})
@@ -901,7 +902,7 @@ impl<
 	}
 
 	// TODO the state parameter may not be the correct one.
-	fn reverse_lookup(&self, state: &Self::S) -> Option<H> {
+	fn reverse_lookup(&mut self, state: &Self::S) -> Option<H> {
 		// TODO should be the closest valid and return non optional!!!! TODO
 		let state = state.history.last()
 			.map(|b| (b.branch_index.clone(), b.state.end.clone()))
@@ -910,8 +911,8 @@ impl<
 				b
 			})
 			.unwrap_or((Default::default(), Default::default()));
-		self.mapping.iter()
-			.find(|(_k, v)| v == &&state)
+		self.mapping.handle(&mut self.serialize).iter()
+			.find(|(_k, v)| v == &state)
 			.map(|(k, _v)| k.clone())
 	}
 
@@ -928,11 +929,11 @@ impl<
 }
 
 impl<
-	H: Clone + Ord,
-	I: Clone + Default + SubAssign<usize> + AddAssign<usize> + Ord + Debug,
-	BI: Ord + Eq + SubAssign<usize> + AddAssign<usize> + Clone + Default + Debug,
+	H: Clone + Ord + Codec,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
 	V: Clone,
-	S,
+	S: TreeManagementStorage,
 > ForkableManagement<H> for TreeManagement<H, I, BI, V, S> {
 
 	type SF = (I, BI);
@@ -945,8 +946,8 @@ impl<
 		s.latest()
 	}
 
-	fn get_db_state_for_fork(&self, state: &H) -> Option<Self::SF> {
-		self.mapping.get(state).cloned()
+	fn get_db_state_for_fork(&mut self, state: &H) -> Option<Self::SF> {
+		self.mapping.handle(&mut self.serialize).get(state).cloned()
 	}
 
 	// note that se must be valid.
@@ -957,7 +958,7 @@ impl<
 		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
 			let result = self.state.tree.query_plan(branch_index.clone());
 			self.last_in_use_index = (branch_index.clone(), index);
-			self.mapping.insert(state, self.last_in_use_index.clone());
+			self.mapping.handle(&mut self.serialize).insert(state, self.last_in_use_index.clone());
 			Some(result)
 		} else {
 			None
@@ -982,7 +983,7 @@ pub(crate) mod test {
 	use super::*;
 
 	// TODO switch to management function?
-	pub(crate) fn test_states() -> Tree<usize, usize, ()> {
+	pub(crate) fn test_states() -> Tree<u32, u32, ()> {
 		let mut states = Tree::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.

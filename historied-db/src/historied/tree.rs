@@ -70,7 +70,7 @@ impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> MemoryOnlyBranch<
 
 impl<
 	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<usize>, // TODO consider subassing usize or minus one trait...
+	BI: LinearState + SubAssign<u32>, // TODO consider subassing usize or minus one trait...
 	V: Clone,
 > ValueRef<V> for MemoryOnly<I, BI, V> {
 	type S = ForkPlan<I, BI>;
@@ -90,7 +90,7 @@ impl<
 }
 impl<
 	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<usize>,
+	BI: LinearState + SubAssign<u32>,
 	V: Clone,
 > InMemoryValueRef<V> for MemoryOnly<I, BI, V> {
 	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
@@ -136,7 +136,7 @@ impl<
 
 impl<
 	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<usize> + SubAssign<BI>,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
@@ -291,7 +291,7 @@ impl<
 
 impl<
 	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<usize> + SubAssign<BI>,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 > InMemoryValue<V> for MemoryOnly<I, BI, V> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
@@ -333,7 +333,7 @@ impl<
 	}
 }
 
-impl MemoryOnly<usize, usize, Option<Vec<u8>>> {
+impl MemoryOnly<u32, u32, Option<Vec<u8>>> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {
@@ -359,7 +359,7 @@ mod test {
 		// |		 |> 5: 1
 		// |> 2: _
 		let mut states = test_states();
-		let mut item: MemoryOnly<usize, usize, usize> = Default::default();
+		let mut item: MemoryOnly<u32, u32, u32> = Default::default();
 
 		for i in 0..6 {
 			assert_eq!(item.get(&states.query_plan(i)), None);

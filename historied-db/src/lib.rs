@@ -160,7 +160,7 @@ pub trait ManagementRef<H> {
 	type GC;
 	type Migrate;
 	/// Returns the historical state representation for a given historical tag.
-	fn get_db_state(&self, tag: &H) -> Option<Self::S>;
+	fn get_db_state(&mut self, tag: &H) -> Option<Self::S>;
 	/// returns optional to avoid holding lock of do nothing GC.
 	fn get_gc(&self) -> Option<Ref<Self::GC>>;
 }
@@ -173,12 +173,12 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	/// Return state mut for state but only if state exists and is
 	/// a terminal writeable leaf (if not you need to create new branch 
 	/// from previous state to write).
-	fn get_db_state_mut(&self, tag: &H) -> Option<Self::SE>;
+	fn get_db_state_mut(&mut self, tag: &H) -> Option<Self::SE>;
 
 	/// Get a cursor over the last change of ref (when adding or removing).
 	fn latest_state(&self) -> Self::SE;
 
-	fn reverse_lookup(&self, state: &Self::S) -> Option<H>;
+	fn reverse_lookup(&mut self, state: &Self::S) -> Option<H>;
 
 	/// see migrate. When running thes making a backup of this management
 	/// state is usually a good idea (this method does not manage
@@ -206,7 +206,7 @@ pub trait ForkableManagement<H>: Management<H> {
 	/// SF from a S (usually the head of S)
 	fn ref_state_fork(&self, s: &Self::S) -> Self::SF;
 
-	fn get_db_state_for_fork(&self, tag: &H) -> Option<Self::SF>;
+	fn get_db_state_for_fork(&mut self, tag: &H) -> Option<Self::SF>;
 
 	fn latest_state_fork(&self) -> Self::SF {
 		let se = self.latest_state();

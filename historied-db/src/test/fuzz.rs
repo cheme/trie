@@ -21,10 +21,10 @@ use crate::{
 };
 use crate::test::simple_impl::StateInput;
 
-type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, usize, usize, u16, ()>;
+type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
 struct FuzzerState {
 	/// in memory historied datas to test
-	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::MemoryOnly<usize, usize, u16>>,
+	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::MemoryOnly<u32, u32, u16>>,
 	/// in memory state management
 	in_memory_mgmt: InMemoryMgmt,
 	/// simple reference
@@ -67,7 +67,7 @@ impl FuzzerState {
 	}
 
 	fn set_value_at(&mut self, key: u8, value: u16, at: u8) {
-		let at = (at % self.next_hash) as usize;
+		let at = (at % self.next_hash) as u32;
 		// we only allow insert at terminal.
 		if self.simple.is_latest(&at) {
 			let state = StateInput(at);
@@ -85,7 +85,7 @@ impl FuzzerState {
 
 	fn append_latest(&mut self) {
 		if self.next_hash < NUMBER_POSSIBLE_STATES {
-			let new_state = StateInput(self.next_hash as usize);
+			let new_state = StateInput(self.next_hash as u32);
 			let at_simple = self.simple.latest_state_fork();
 			let s_simple = self.simple.append_external_state(new_state.clone(), &at_simple);
 			let at = self.in_memory_mgmt.latest_state_fork();
@@ -99,9 +99,9 @@ impl FuzzerState {
 
 	fn append_at(&mut self, at: u8) {
 		if self.next_hash < NUMBER_POSSIBLE_STATES {
-			let new_state = StateInput(self.next_hash as usize);
+			let new_state = StateInput(self.next_hash as u32);
 			// keep in range
-			let at = StateInput((at % self.next_hash) as usize);
+			let at = StateInput((at % self.next_hash) as u32);
 			let at_simple = self.simple.get_db_state_for_fork(&at);
 			let at = self.in_memory_mgmt.get_db_state_for_fork(&at);
 			assert_eq!(at.is_some(), at_simple.is_some());
@@ -125,7 +125,7 @@ impl FuzzerState {
 	}
 
 	fn drop_at(&mut self, at: u8) {
-		let at = StateInput((at % self.next_hash) as usize);
+		let at = StateInput((at % self.next_hash) as u32);
 		let at_simple = self.simple.get_db_state_for_fork(&at);
 		let at = self.in_memory_mgmt.get_db_state_for_fork(&at);
 		assert_eq!(at.is_some(), at_simple.is_some());
@@ -136,9 +136,9 @@ impl FuzzerState {
 		assert_eq!(dropped, dropped_simple)
 	}
 
-	fn compare(&self) {
+	fn compare(&mut self) {
 		for state in 0..self.next_hash {
-			let state = StateInput(state as usize);
+			let state = StateInput(state as u32);
 			let query_simple = self.simple.get_db_state(&state);
 			let query = self.in_memory_mgmt.get_db_state(&state);
 			assert_eq!(query.is_some(), query_simple.is_some());

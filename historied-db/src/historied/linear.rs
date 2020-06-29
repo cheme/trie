@@ -38,9 +38,9 @@ pub trait LinearState:
 	+ Clone
 	+ Ord
 	+ PartialOrd
-	+ TryFrom<usize>
-	+ AddAssign<usize> // TODO can remove ??
-	+ PartialEq<usize>
+	+ TryFrom<u32>
+	+ AddAssign<u32> // TODO can remove ??
+	+ PartialEq<u32>
 {
 	// stored state and query state are
 	// the same for linear state.
@@ -57,9 +57,9 @@ impl<S> LinearState for S where S:
 	+ Clone
 	+ Ord
 	+ PartialOrd
-	+ TryFrom<usize>
-	+ AddAssign<usize>
-	+ PartialEq<usize>
+	+ TryFrom<u32>
+	+ AddAssign<u32>
+	+ PartialEq<u32>
 { }
 
 /// Size of preallocated history per element.
@@ -330,10 +330,10 @@ impl<H, S, V> LinearInMemoryManagement<H, S, V> {
 	}
 }
 
-impl<H, S: AddAssign<usize>, V> LinearInMemoryManagement<H, S, V> {
+impl<H, S: AddAssign<u32>, V> LinearInMemoryManagement<H, S, V> {
 	pub fn prune(&mut self, nb: usize) {
 		self.changed_treshold = true;
-		self.start_treshold += nb
+		self.start_treshold += nb as u32
 	}
 }
 
@@ -341,7 +341,7 @@ impl<H: Ord, S: Clone, V: Clone> ManagementRef<H> for LinearInMemoryManagement<H
 	type S = S;
 	type GC = (S, Option<V>);
 	type Migrate = (S, Self::GC);
-	fn get_db_state(&self, state: &H) -> Option<Self::S> {
+	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
 		self.mapping.get(state).cloned()
 	}
 	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
@@ -355,7 +355,7 @@ impl<H: Ord, S: Clone, V: Clone> ManagementRef<H> for LinearInMemoryManagement<H
 
 impl<
 H: Ord + Clone,
-S: Default + Clone + AddAssign<usize> + Ord,
+S: Default + Clone + AddAssign<u32> + Ord,
 V: Clone,
 > Management<H> for LinearInMemoryManagement<H, S, V> {
 	type SE = Latest<S>;
@@ -374,7 +374,7 @@ V: Clone,
 		}, state)
 	}
 
-	fn get_db_state_mut(&self, state: &H) -> Option<Self::SE> {
+	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
 		if let Some(state) = self.mapping.get(state) {
 			let latest = self.latest_state();
 			if state == latest.latest() {
@@ -391,7 +391,7 @@ V: Clone,
 			.unwrap_or(S::default()))
 	}
 
-	fn reverse_lookup(&self, state: &Self::S) -> Option<H> {
+	fn reverse_lookup(&mut self, state: &Self::S) -> Option<H> {
 		// TODO could be the closest valid and return non optional!!!! TODO
 		self.mapping.iter()
 			.find(|(_k, v)| v == &state)
@@ -412,7 +412,7 @@ V: Clone,
 
 impl<
 H: Ord + Clone,
-S: Default + Clone + SubAssign<S> + AddAssign<usize> + Ord,
+S: Default + Clone + SubAssign<S> + AddAssign<u32> + Ord,
 V: Clone,
 > LinearManagement<H> for LinearInMemoryManagement<H, S, V> {
 	fn append_external_state(&mut self, state: H) -> Option<Self::S> {
@@ -436,7 +436,7 @@ V: Clone,
 	}
 }
 
-impl MemoryOnly<Option<Vec<u8>>, usize> {
+impl MemoryOnly<Option<Vec<u8>>, u32> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {
