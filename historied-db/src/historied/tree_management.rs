@@ -24,29 +24,7 @@ use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
 use codec::{Decode, Encode};
-
-/// simple serialize trait, could be a noop.
-pub trait KVSerialize {
-	const SYNCH_VALUES: bool;
-	type Iter: Iterator<Item = (Vec<u8>, Vec<u8>)>;
-	fn write_kv<V: Encode>(&mut self, p: &[u8], k: &[u8], v: &V);
-	fn remove(&mut self, p: &[u8], k: &[u8]);
-	fn read_kv<V: Decode>(&self, p: &[u8], k: &[u8], v: &[u8]) -> Option<Option<V>>;
-	fn iter(&self, p: &[u8]) -> Self::Iter;
-}
-
-impl KVSerialize for () {
-	const SYNCH_VALUES: bool = false;
-	type Iter = crate::rstd::iter::Empty<(Vec<u8>, Vec<u8>)>;
-	fn write_kv<V: Encode>(&mut self, p: &[u8], k: &[u8], v: &V) { }
-	fn remove(&mut self, p: &[u8], k: &[u8]) { }
-	fn read_kv<V: Decode>(&self, p: &[u8], k: &[u8], v: &[u8]) -> Option<Option<V>> {
-		None
-	}
-	fn iter(&self, p: &[u8]) -> Self::Iter {
-		crate::rstd::iter::empty()
-	}
-}
+use crate::simple_db::{SerializeDB, SerializeMap};
 
 /// Trait defining a state for querying or modifying a tree.
 /// This is a collection of branches index, corresponding
@@ -108,7 +86,6 @@ pub struct BranchRange<I> {
 	pub end: I,
 }
 
-
 /// Full state of current tree layout.
 /// It contains all layout information for branches
 /// states.
@@ -127,7 +104,7 @@ pub struct BranchRange<I> {
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Tree<I, BI, S> {
-	// TODO this could probably be cleared depending on S::SYNCH_VALUES.
+	// TODO this could probably be cleared depending on S::ACTIVE.
 	// -> on gc ?
 	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
 	// TODO pub(crate) storage: SerializeMap<I, BranchState<I, BI>>,
@@ -151,11 +128,6 @@ pub struct Tree<I, BI, S> {
 	// strategy and avoid fragmenting the history to much.
 }
 
-#[derive(Debug, Clone)]
-pub struct SerializeMap<I, V>(BTreeMap<I, Option<V>>);
-
-// TODO implement for serializemap: get get_mut remove iter & new
-
 impl<I: Ord + Default, BI: Default, S> Default for Tree<I, BI, S> {
 	fn default() -> Self {
 		Tree {
@@ -168,7 +140,7 @@ impl<I: Ord + Default, BI: Default, S> Default for Tree<I, BI, S> {
 	}
 }
 
-impl<I, BI, S: KVSerialize> Tree<I, BI, S> {
+impl<I, BI, S: SerializeDB> Tree<I, BI, S> {
 	pub fn use_serialize(&mut self, state: S) {
 		self.serialize = Some(state);
 		unimplemented!("TODO fetch fieldse");
@@ -227,7 +199,7 @@ impl<
 	I,
 	BI,
 	V,
-	S: KVSerialize,
+	S: SerializeDB,
 > TreeManagement<H, I, BI, V, S> {
 	pub fn use_serialize(&mut self, management: S, state: S) {
 		self.serialize = Some(management);

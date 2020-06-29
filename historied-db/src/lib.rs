@@ -27,7 +27,7 @@ extern crate alloc;
 mod rstd {
 	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
 	pub use std::collections::VecDeque;
-	pub use std::collections::{BTreeMap, BTreeSet};
+	pub use std::collections::{BTreeMap, BTreeSet, btree_map};
 	pub use std::error::Error;
 }
 
@@ -36,7 +36,7 @@ mod rstd {
 	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
-	pub use alloc::collections::BTreeMap;
+	pub use alloc::collections::{BTreeMap, BTreeSet, btreemap};
 	pub trait Error {}
 	impl<T> Error for T {}
 }
@@ -46,6 +46,10 @@ use core::marker::PhantomData;
 /// Implementation of historied-db traits
 /// using historied values
 pub mod historied;
+
+/// Tools to work with simple key value
+/// collection based dbs (non historied).
+pub mod simple_db;
 
 /// Minimal simple implementation.
 #[cfg(any(test, feature = "test-helpers"))]

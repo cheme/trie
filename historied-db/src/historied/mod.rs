@@ -25,6 +25,7 @@ use crate::Latest;
 pub mod linear;
 pub mod tree_management;
 pub mod tree;
+// TODO move to top (use linear logic).
 pub mod encoded_array;
 
 /// Trait for historied value
