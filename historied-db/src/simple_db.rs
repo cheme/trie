@@ -246,7 +246,7 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 					collection.read(&enc_k).and_then(|v| V::decode(&mut v.as_slice()).ok())
 				}).as_ref()
 		} else {
-			None
+			self.cache.get(k).and_then(|r|r.as_ref())
 		}
 	}
 	pub fn remove(&mut self, k: &K) -> Option<V> {
