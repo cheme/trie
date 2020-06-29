@@ -285,6 +285,63 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		}
 	}
 }
+impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
+	where
+		K: Codec + Clone + Ord,
+		V: Codec + Clone,
+		S: SerializeDB,
+		I: SerializeInstance,
+{
+	pub fn iter(&'a self) -> SerializeMapIter<'a, K, V, S> {
+		if !S::ACTIVE {
+			SerializeMapIter::Cache(self.cache.iter())
+		} else {
+			SerializeMapIter::Collection(self.collection.iter())
+		}
+	}
+}
+
+pub enum SerializeMapIter<'a, K, V, S>
+	where
+		K: Codec + Ord + Clone,
+		V: Codec + Clone,
+		S: SerializeDB,
+{
+	Cache(crate::rstd::btree_map::Iter<'a, K, Option<V>>),
+	Collection(S::Iter),
+}
+
+impl<'a, K, V, S> Iterator for SerializeMapIter<'a, K, V, S>
+	where
+		K: Codec + Ord + Clone,
+		V: Codec + Clone,
+		S: SerializeDB,
+{
+	type Item = (K, V);
+
+	fn next(&mut self) -> Option<Self::Item> {
+		match self {
+			SerializeMapIter::Cache(i) => loop {
+				match i.next() {
+					Some((k, Some(v))) => return Some((k.clone(), v.clone())),
+					Some((k, None)) => (),
+					None => return None,
+				}
+			},
+			SerializeMapIter::Collection(i) => loop {
+				match i.next() {
+					Some((k, v)) => {
+						match (K::decode(&mut k.as_slice()), V::decode(&mut v.as_slice())) {
+							(Ok(k), Ok(v)) => return Some((k, v)),
+							_ => (),
+						}
+					},
+					None => return None,
+				}
+			},
+		}
+	}
+}
 
 // TODO add Eq check to avoid useless write (store the orig value and check on write only)
 // (replacing is_fetch by value)
@@ -302,7 +359,6 @@ impl<'a, K, V, S, I> EntryMap<'a, K, V, S, I>
 	pub fn and_modify<F>(mut self, f: impl FnOnce(&mut V)) -> Self {
 		self.fetch();
 
-		let mut need_write = self.need_write;
 		if let Some(v) = self.entry.get_mut() {
 			self.need_write = true;
 			f(v)
@@ -415,7 +471,7 @@ impl<'a, V, S, I> SerializeVariable<V, S, I>
 		V: Codec + Default,
 {
 	pub fn handle(&'a mut self, db: &'a mut S) -> SerializeVariableHandle<'a, V, S, I> {
-		let mut collection = CollectionMut { db, instance: &self.instance };
+		let collection = CollectionMut { db, instance: &self.instance };
 		if self.inner.is_none() {
 			self.inner = Some(collection.read(I::PATH).and_then(|v| V::decode(&mut v.as_slice()).ok()).unwrap_or_default());
 		}
