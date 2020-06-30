@@ -16,6 +16,7 @@
 
 use derivative::Derivative;
 use crate::rstd::{BTreeMap, btree_map::Entry, marker::PhantomData, vec::Vec};
+use crate::rstd::fmt::Debug;
 
 /// simple serialize trait, could be a noop.
 pub trait SerializeDB: Sized {
@@ -30,12 +31,12 @@ pub trait SerializeDB: Sized {
 	fn read(&self, c: &'static [u8], k: &[u8]) -> Option<Vec<u8>>;
 	fn iter(&self, c: &'static [u8]) -> Self::Iter;
 
-	fn contains_collection(collection: &[u8]) -> bool;
+	fn contains_collection(collection: &'static [u8]) -> bool;
 
-	// TODO remove ?
-	fn read_collection<'a, DB, I>(db: &'a DB, collection: &'static[u8]) -> Option<Collection<'a, Self, I>>;
-	// TODO remove ?
-	fn write_collection<'a, DB, I>(db: &'a mut DB, collection: &'static[u8]) -> Option<CollectionMut<'a, Self, I>>;
+//	// TODO remove ?
+//	fn read_collection<'a, DB, I>(db: &'a DB, collection: &'static[u8]) -> Option<Collection<'a, Self, I>>;
+//	// TODO remove ?
+//	fn write_collection<'a, DB, I>(db: &'a mut DB, collection: &'static[u8]) -> Option<CollectionMut<'a, Self, I>>;
 }
 
 pub struct Collection<'a, DB, Instance> {
@@ -84,6 +85,7 @@ pub trait DynSerializeDB: SerializeDB {
 	fn dyn_read(&self, c: &[u8], k: &[u8]) -> Option<Vec<u8>>;
 	fn dyn_iter(&self, c: &[u8]) -> Self::Iter;
 
+	fn dyn_contains_collection(collection: &[u8]) -> bool;
 //	fn dyn_read_collection<'a, DB, I>(db: &'a DB, collection: &'static[u8]) -> Option<DynCollection<'a, Self, I>>;
 //	fn dyn_write_collection<'a, DB, I>(db: &'a mut DB, collection: &'static[u8]) -> Option<DynCollectionMut<'a, Self, I>>;
 }
@@ -177,27 +179,31 @@ impl SerializeDB for () {
 	fn contains_collection(_collection: &[u8]) -> bool {
 		false
 	}
-	fn read_collection<'a, DB, I>(_db: &'a DB, _collection: &'static[u8]) -> Option<Collection<'a, Self, I>> {
-		None
-	}
-	fn write_collection<'a, DB, I>(_db: &'a mut DB, _collection: &'static[u8]) -> Option<CollectionMut<'a, Self, I>> {
-		None
-	}
+//	fn read_collection<'a, DB, I>(_db: &'a DB, _collection: &'static[u8]) -> Option<Collection<'a, Self, I>> {
+//		None
+//	}
+//	fn write_collection<'a, DB, I>(_db: &'a mut DB, _collection: &'static[u8]) -> Option<CollectionMut<'a, Self, I>> {
+//		None
+//	}
 }
 
 
 use codec::{Codec, Encode, Decode};
 
-#[derive(Debug, Clone)]
 #[derive(Derivative)]
-#[cfg_attr(any(test, feature = "test"), derivative(PartialEq, Eq))]
+#[derivative(Clone(bound="K: Clone, V: Clone, I: Clone"))]
+#[derivative(Debug(bound="K: Debug, V: Debug"))]
 #[derivative(Default(bound="I: Default"))]
+#[cfg_attr(test, derivative(PartialEq(bound="K: PartialEq, V: PartialEq")))]
 /// Lazy loading serialized map with cache.
 /// Updates happens immediatelly.
 pub struct SerializeMap<K: Ord, V, S, I> {
 	inner: BTreeMap<K, Option<V>>,
+	#[derivative(Debug="ignore")]
+	#[derivative(PartialEq="ignore")]
 	instance: I,
 	#[derivative(PartialEq="ignore")]
+	#[derivative(Debug="ignore")]
 	_ph: PhantomData<S>,
 }
 
@@ -526,3 +532,6 @@ impl<'a, V, S, I> Drop for SerializeVariableHandle<'a, V, S, I>
 		self.flush()
 	}
 }
+
+
+

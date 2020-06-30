@@ -326,7 +326,7 @@ pub trait ManagedDB {
 /// Note that it is only informational and does not guaranty the state
 /// is the latest.
 /// TODO repr Transparent and cast ptr for tree?
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Latest<S>(S);
 
 impl<S> Latest<S> {

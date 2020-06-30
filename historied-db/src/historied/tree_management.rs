@@ -25,6 +25,7 @@ use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
 use codec::{Codec, Encode, Decode};
 use crate::simple_db::{SerializeDB, SerializeMap, SerializeInstance};
+use derivative::Derivative;
 
 pub trait TreeManagementStorage: Sized {
 	type Storage: SerializeDB;
@@ -116,9 +117,11 @@ pub struct BranchRange<I> {
 /// NOTE that the single element branch at default index
 /// containing the default branch index element does always
 /// exist by convention.
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct Tree<I, BI, S> {
+#[derive(Derivative)]
+#[derivative(Debug(bound="I: Debug, BI: Debug, S::Storage: Debug"))]
+#[derivative(Clone(bound="I: Clone, BI: Clone, S::Storage: Clone"))]
+#[cfg_attr(test, derivative(PartialEq(bound="I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
+pub struct Tree<I, BI, S: TreeManagementStorage> {
 	// TODO this could probably be cleared depending on S::ACTIVE.
 	// -> on gc ?
 	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
@@ -133,7 +136,7 @@ pub struct Tree<I, BI, S> {
 	/// possible on new or after a migration).
 	pub(crate) composite_latest: bool,
 	/// serialize implementation
-	pub(crate) serialize: Option<S>,
+	pub(crate) serialize: S::Storage,
 	// TODO some strategie to close a long branch that gets
 	// behind multiple fork? This should only be usefull
 	// for high number of modification, small number of
@@ -143,41 +146,55 @@ pub struct Tree<I, BI, S> {
 	// strategy and avoid fragmenting the history to much.
 }
 
-impl<I: Ord + Default, BI: Default, S> Default for Tree<I, BI, S> {
+impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Default for Tree<I, BI, S> {
 	fn default() -> Self {
 		Tree {
 			storage: BTreeMap::new(),
 			last_index: I::default(),
 			composite_treshold: Default::default(),
 			composite_latest: true,
-			serialize: None,
+			serialize: S::init(),
 		}
 	}
 }
 
-impl<I, BI, S: TreeManagementStorage> Tree<I, BI, S> {
-	pub fn use_serialize(&mut self, state: S) {
-		self.serialize = Some(state);
-		unimplemented!("TODO fetch fieldse");
+impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Tree<I, BI, S> {
+	pub fn from_ser(serialize: S::Storage) -> Self {
+		Tree {
+			storage: BTreeMap::new(),
+			last_index: I::default(),
+			composite_treshold: Default::default(),
+			composite_latest: true,
+			serialize,
+		}
 	}
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
-pub struct TreeState<I, BI, V, S> {
+#[derive(Derivative)]
+#[derivative(Debug(bound="V: Debug, I: Debug, BI: Debug, S::Storage: Debug"))]
+#[derivative(Clone(bound="V: Clone, I: Clone, BI: Clone, S::Storage: Clone"))]
+#[cfg_attr(test, derivative(PartialEq(bound="V: PartialEq, I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
+pub struct TreeState<I, BI, V, S: TreeManagementStorage> {
 	pub(crate) tree: Tree<I, BI, S>,
 	pub(crate) neutral_element: Option<V>,
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+impl<I, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
+	pub fn ser(&mut self) -> &mut S::Storage {
+		&mut self.tree.serialize
+	}
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound="H: Debug, V: Debug, I: Debug, BI: Debug, S::Storage: Debug"))]
+#[derivative(Clone(bound="H: Clone, V: Clone, I: Clone, BI: Clone, S::Storage: Clone"))]
+#[cfg_attr(test, derivative(PartialEq(bound="H: PartialEq, V: PartialEq, I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
 pub struct TreeManagement<H: Ord, I, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
 	touched_gc: bool,
 	current_gc: TreeMigrate<I, BI, V>,
 	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
-	serialize: S::Storage,
 }
 
 impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default for TreeManagement<H, I, BI, V, S> {
@@ -191,9 +208,34 @@ impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default
 			touched_gc: false,
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
-			serialize: S::init(),
 		}
 	}
+}
+
+impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> TreeManagement<H, I, BI, V, S> {
+	/// Initialize from a default ser
+	pub fn from_ser(serialize: S::Storage) -> Self {
+		TreeManagement {
+			state: TreeState {
+				tree: Tree::from_ser(serialize),
+				neutral_element: None,
+			},
+			mapping: Default::default(),
+			touched_gc: false,
+			current_gc: Default::default(),
+			last_in_use_index: Default::default(),
+		}
+	}
+
+	/// Also should guaranty to flush change (but currently implementation
+	/// writes synchronously).
+	pub fn extract_ser(self) -> S::Storage {
+		self.state.tree.serialize
+	}
+
+/*	pub fn ser(&mut self) -> &mut S::Storage {
+		&mut self.state.tree.serialize
+	}*/
 }
 
 impl<
@@ -218,7 +260,7 @@ impl<
 > TreeManagement<H, I, BI, V, S> {
 	/// Associate a state for the initial root (default index).
 	pub fn map_root_state(&mut self, root: H) {
-		self.mapping.handle(&mut self.serialize).insert(root, Default::default());
+		self.mapping.handle(self.state.ser()).insert(root, Default::default());
 	}
 
 	// TODO consider removing drop_mapping argument (is probably default)
@@ -230,9 +272,10 @@ impl<
 	) {
 		drop_mapping |= collect_dropped.is_some();
 		// TODO optimized drop from I, BI == 0, 0 and ignore x, 0
-		let mut mapping = self.mapping.handle(&mut self.serialize);
+		let mapping = &mut self.mapping;
 		let collect_dropped = &mut collect_dropped;
-		let mut call_back = move |i: &I, bi: &BI| {
+		let mut call_back = move |i: &I, bi: &BI, ser: &mut S::Storage| {
+			let mut mapping = mapping.handle(ser);
 			if drop_mapping {
 				let state = (i.clone(), bi.clone());
 				// TODO again cost of reverse lookup: consider double mapping
@@ -254,18 +297,18 @@ impl<
 		}
 		let mut previous_index = state.1.clone();
 		previous_index -= 1;
-		if let Some((parent, branch_end)) = self.state.tree.branch_state(&state.0)
+		if let Some((parent, branch_end)) = self.state.tree.branch_state(&state.0).cloned()
 			.map(|s| if s.state.start <= previous_index {
-				((state.0.clone(), previous_index), &s.state.end)
+				((state.0.clone(), previous_index), s.state.end)
 			} else {
-				((s.parent_branch_index.clone(), previous_index), &s.state.end)
+				((s.parent_branch_index.clone(), previous_index), s.state.end)
 			}) {
 			let mut bi = state.1.clone();
-			while &bi < branch_end { // TODO should be < branch_end - 1
-				call_back(&state.0, &bi);
+			while bi < branch_end { // TODO should be < branch_end - 1
+				call_back(&state.0, &bi, self.state.ser());
 				bi += 1;
 			}
-			call_back(&state.0, &state.1);
+			call_back(&state.0, &state.1, self.state.ser());
 			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
 			self.last_in_use_index = parent;
 		}
@@ -355,7 +398,7 @@ impl<
 impl<
 	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug,
 	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug,
-	S,
+	S: TreeManagementStorage,
 > Tree<I, BI, S> {
 	/// Return anchor index for this branch history:
 	/// - same index as input if the branch was modifiable
@@ -533,7 +576,7 @@ impl<
 	pub fn apply_drop_state(&mut self,
 		branch_index: &I,
 		node_index: &BI,
-		call_back: &mut impl FnMut(&I, &BI),
+		call_back: &mut impl FnMut(&I, &BI, &mut S::Storage),
 	) {
 		// Never remove default
 		let mut remove = false;
@@ -563,7 +606,7 @@ impl<
 	pub fn apply_drop_state_rec_call(&mut self,
 		branch_index: &I,
 		node_index: &BI,
-		call_back: &mut impl FnMut(&I, &BI),
+		call_back: &mut impl FnMut(&I, &BI, &mut S::Storage),
 		composite: bool,
 	) {
 		let mut to_delete = Vec::new();
@@ -585,7 +628,7 @@ impl<
 			// into calling function and this function rec on itself and do its own drop
 			let mut bi = s.state.start.clone();
 			while bi < s.state.end {
-				call_back(&i, &bi);
+				call_back(&i, &bi, &mut self.serialize);
 				bi += 1;
 			}
 			// TODO the store and remove patern is ugly (could use a retain implementation)
@@ -865,7 +908,7 @@ impl<
 	type Migrate = TreeMigrate<I, BI, V>;
 
 	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
-		self.mapping.handle(&mut self.serialize).get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
+		self.mapping.handle(self.state.ser()).get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
 	}
 
 	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
@@ -885,7 +928,7 @@ impl<
 	type SE = Latest<(I, BI)>;
 
 	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
-		self.mapping.handle(&mut self.serialize).get(state).cloned().and_then(|(i, bi)| {
+		self.mapping.handle(self.state.ser()).get(state).cloned().and_then(|(i, bi)| {
 			// enforce only latest
 			self.state.tree.if_latest_at(i, bi)
 		})
@@ -911,7 +954,7 @@ impl<
 				b
 			})
 			.unwrap_or((Default::default(), Default::default()));
-		self.mapping.handle(&mut self.serialize).iter()
+		self.mapping.handle(self.state.ser()).iter()
 			.find(|(_k, v)| v == &state)
 			.map(|(k, _v)| k.clone())
 	}
@@ -947,7 +990,7 @@ impl<
 	}
 
 	fn get_db_state_for_fork(&mut self, state: &H) -> Option<Self::SF> {
-		self.mapping.handle(&mut self.serialize).get(state).cloned()
+		self.mapping.handle(self.state.ser()).get(state).cloned()
 	}
 
 	// note that se must be valid.
@@ -958,7 +1001,7 @@ impl<
 		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
 			let result = self.state.tree.query_plan(branch_index.clone());
 			self.last_in_use_index = (branch_index.clone(), index);
-			self.mapping.handle(&mut self.serialize).insert(state, self.last_in_use_index.clone());
+			self.mapping.handle(self.state.ser()).insert(state, self.last_in_use_index.clone());
 			Some(result)
 		} else {
 			None
@@ -982,8 +1025,11 @@ impl<
 pub(crate) mod test {
 	use super::*;
 
-	// TODO switch to management function?
 	pub(crate) fn test_states() -> Tree<u32, u32, ()> {
+		test_states_inner()
+	}
+	// TODO switch to management function?
+	pub(crate) fn test_states_inner<T: TreeManagementStorage>() -> Tree<u32, u32, T> {
 		let mut states = Tree::default();
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.
@@ -1019,7 +1065,7 @@ pub(crate) mod test {
 		assert!(states.branch_state(&4).unwrap().state.exists(&3));
 		assert!(states.branch_state(&5).unwrap().state.exists(&2));
 		let mut states = test_states();
-		states.apply_drop_state(&1, &2, &mut |_i, _bi| {});
+		states.apply_drop_state(&1, &2, &mut |_i, _bi, _ser| {});
 		// does recurse
 		assert_eq!(states.branch_state(&3), None);
 		assert_eq!(states.branch_state(&4), None);

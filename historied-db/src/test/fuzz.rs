@@ -22,11 +22,16 @@ use crate::{
 use crate::test::simple_impl::StateInput;
 
 type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
+type InMemoryMgmtSer = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
 struct FuzzerState {
 	/// in memory historied datas to test
 	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::MemoryOnly<u32, u32, u16>>,
 	/// in memory state management
 	in_memory_mgmt: InMemoryMgmt,
+	/// in memory state management with serialize
+	in_memory_mgmt_ser: InMemoryMgmtSer,
+	/// shall we test serialize
+	with_ser: bool,
 	/// simple reference
 	simple: crate::test::simple_impl::Db<Vec<u8>, u16>, 
 	/// limit of state to u8, hash from 1 to 255 are valid.
@@ -36,10 +41,14 @@ struct FuzzerState {
 impl FuzzerState {
 	fn new() -> Self {
 		let mut in_memory_mgmt = InMemoryMgmt::default();
+		let mut in_memory_mgmt_ser = InMemoryMgmtSer::default();
 		in_memory_mgmt.map_root_state(StateInput(0));
+		in_memory_mgmt_ser.map_root_state(StateInput(0));
 		FuzzerState {
 			in_memory_db: crate::historied::BTreeMap::new(),
 			in_memory_mgmt,
+			in_memory_mgmt_ser,
+			with_ser: false,
 			simple: crate::test::simple_impl::Db::init().0,
 			next_hash: 1,
 		}
@@ -73,6 +82,10 @@ impl FuzzerState {
 			let state = StateInput(at);
 			let at_simple = self.simple.get_db_state_mut(&state);
 			let at = self.in_memory_mgmt.get_db_state_mut(&state);
+			if self.with_ser {
+				let at_ser = self.in_memory_mgmt_ser.get_db_state_mut(&state);
+				assert_eq!(at, at_ser);
+			}
 			assert_eq!(at.is_some(), at_simple.is_some());
 			at_simple.map(|at_simple|
 				self.simple.emplace(vec![key], value, &at_simple)
@@ -89,6 +102,11 @@ impl FuzzerState {
 			let at_simple = self.simple.latest_state_fork();
 			let s_simple = self.simple.append_external_state(new_state.clone(), &at_simple);
 			let at = self.in_memory_mgmt.latest_state_fork();
+			if self.with_ser {
+				let ser_at = self.in_memory_mgmt_ser.latest_state_fork();
+				assert_eq!(at, ser_at); 
+				self.in_memory_mgmt_ser.append_external_state(new_state.clone(), &at);
+			}
 			let s = self.in_memory_mgmt.append_external_state(new_state, &at);
 			if s.is_some() {
 				self.next_hash += 1;
@@ -101,12 +119,21 @@ impl FuzzerState {
 		if self.next_hash < NUMBER_POSSIBLE_STATES {
 			let new_state = StateInput(self.next_hash as u32);
 			// keep in range
-			let at = StateInput((at % self.next_hash) as u32);
-			let at_simple = self.simple.get_db_state_for_fork(&at);
-			let at = self.in_memory_mgmt.get_db_state_for_fork(&at);
+			let at_input = StateInput((at % self.next_hash) as u32);
+			let at_simple = self.simple.get_db_state_for_fork(&at_input);
+			let at = self.in_memory_mgmt.get_db_state_for_fork(&at_input);
+			if self.with_ser {
+				let ser_at = self.in_memory_mgmt_ser.get_db_state_for_fork(&at_input);
+				assert_eq!(at, ser_at); 
+			}
 			assert_eq!(at.is_some(), at_simple.is_some());
 			let s_simple = at_simple.and_then(|at| self.simple.append_external_state(new_state.clone(), &at));
-			let s = at.and_then(|at| self.in_memory_mgmt.append_external_state(new_state, &at));
+			let s = at.and_then(|at| {
+				if self.with_ser {
+					self.in_memory_mgmt_ser.append_external_state(new_state.clone(), &at);
+				}
+				self.in_memory_mgmt.append_external_state(new_state, &at)
+			});
 			if s.is_some() {
 				self.next_hash += 1;
 			}
@@ -119,6 +146,9 @@ impl FuzzerState {
 		let mut dropped_simple = self.simple.drop_state(&at_simple, true);
 		let at = self.in_memory_mgmt.latest_state_fork();
 		let mut dropped = self.in_memory_mgmt.drop_state(&at, true);
+		if self.with_ser {
+			self.in_memory_mgmt_ser.drop_state(&at, true);
+		}
 		dropped_simple.as_mut().map(|d| d.sort());
 		dropped.as_mut().map(|d| d.sort());
 		assert_eq!(dropped, dropped_simple)
@@ -130,17 +160,33 @@ impl FuzzerState {
 		let at = self.in_memory_mgmt.get_db_state_for_fork(&at);
 		assert_eq!(at.is_some(), at_simple.is_some());
 		let mut dropped_simple = at_simple.and_then(|at| self.simple.drop_state(&at, true));
-		let mut dropped = at.and_then(|at| self.in_memory_mgmt.drop_state(&at, true));
+		let mut dropped = at.and_then(|at| {
+			if self.with_ser {
+				self.in_memory_mgmt_ser.drop_state(&at, true);
+			}
+			self.in_memory_mgmt.drop_state(&at, true)
+		});
 		dropped_simple.as_mut().map(|d| d.sort());
 		dropped.as_mut().map(|d| d.sort());
 		assert_eq!(dropped, dropped_simple)
 	}
 
 	fn compare(&mut self) {
+		if self.with_ser {
+			let old = std::mem::replace(&mut self.in_memory_mgmt_ser, Default::default());
+			let inner = old.extract_ser();
+			let restore = InMemoryMgmtSer::from_ser(inner);
+			let _ = std::mem::replace(&mut self.in_memory_mgmt_ser, restore);
+		}
 		for state in 0..self.next_hash {
 			let state = StateInput(state as u32);
 			let query_simple = self.simple.get_db_state(&state);
 			let query = self.in_memory_mgmt.get_db_state(&state);
+			if self.with_ser {
+//				let query_ser = self.in_memory_mgmt_ser.get_db_state(&state);
+//				assert_eq!(query, query_ser);
+			}
+
 			assert_eq!(query.is_some(), query_simple.is_some());
 			if query.is_some() {
 				let query = query.unwrap();
@@ -245,8 +291,9 @@ impl FuzzerAction {
 }
 
 /// Entry point for fuzzing in memory forkable scenario.
-pub fn inmemory_forkable(data: &[u8]) {
+pub fn inmemory_forkable(data: &[u8], with_ser: bool) {
 	let mut fuzz_state = FuzzerState::new();
+	fuzz_state.with_ser = with_ser;
 	let data = &mut &data[..];
 	while let Some(action) = FuzzerAction::next_action(data) {
 		fuzz_state.apply(action);
@@ -273,6 +320,6 @@ fn inmemory_forkable_no_regression() {
 	];
 	for input in inputs.iter() {
 		println!("{:?}", FuzzerAction::into_actions(input));
-		inmemory_forkable(input);
+		inmemory_forkable(input, true);
 	}
 }
