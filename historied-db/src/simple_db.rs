@@ -482,6 +482,24 @@ impl<'a, K, V, S, I> Drop for EntryMap<'a, K, V, S, I>
 /// Is db variable or default if undefined.
 pub struct SerializeVariable<V, S, I> {
 	// None indicate we did not fetch.
+	inner: V,
+	#[derivative(Debug="ignore")]
+	#[derivative(PartialEq="ignore")]
+	instance: I,
+	#[derivative(Debug="ignore")]
+	#[derivative(PartialEq="ignore")]
+	_ph: PhantomData<S>,
+}
+
+
+#[derive(Derivative)]
+#[derivative(Clone(bound="V: Clone, I: Clone"))]
+#[derivative(Debug(bound="V: Debug"))]
+#[derivative(Default(bound="V: Default, I: Default"))]
+#[cfg_attr(test, derivative(PartialEq(bound="V: PartialEq")))]
+/// Is db variable or default if undefined.
+pub struct SerializeVariableLazy<V, S, I> {
+	// None indicate we did not fetch.
 	inner: Option<V>,
 	#[derivative(Debug="ignore")]
 	#[derivative(PartialEq="ignore")]
@@ -491,7 +509,7 @@ pub struct SerializeVariable<V, S, I> {
 	_ph: PhantomData<S>,
 }
 
-pub struct SerializeVariableHandle<'a, V, S, I>
+pub struct SerializeVariableHandleLazy<'a, V, S, I>
 	where
 		I: SerializeInstanceVariable,
 		S: SerializeDB,
@@ -502,6 +520,33 @@ pub struct SerializeVariableHandle<'a, V, S, I>
 	need_write: bool,
 }
 
+pub struct SerializeVariableHandle<'a, V, S, I>
+	where
+		I: SerializeInstanceVariable,
+		S: SerializeDB,
+		V: Default + Codec,
+{
+	inner: &'a mut V,
+	collection: CollectionMut<'a, S, I>,
+	need_write: bool,
+}
+
+impl<'a, V, S, I> SerializeVariableLazy<V, S, I>
+	where
+		I: SerializeInstanceVariable,
+		S: SerializeDB,
+		V: Default + Codec,
+{
+	pub fn handle(&'a mut self, db: &'a mut S) -> SerializeVariableHandleLazy<'a, V, S, I> {
+		let collection = CollectionMut { db, instance: &self.instance };
+		SerializeVariableHandleLazy {
+			inner: &mut self.inner,
+			collection,
+			need_write: false,
+		}
+	}
+}
+
 impl<'a, V, S, I> SerializeVariable<V, S, I>
 	where
 		I: SerializeInstanceVariable,
@@ -509,12 +554,10 @@ impl<'a, V, S, I> SerializeVariable<V, S, I>
 		V: Default + Codec,
 {
 	pub fn from_ser(db: &S) -> Self {
-		let mut var = SerializeVariable { inner: None, instance: Default::default(), _ph: PhantomData };
-		let collection = Collection { db, instance: &var.instance };
-		if !I::LAZY {
-			var.inner = Some(collection.read(I::PATH).and_then(|v| V::decode(&mut v.as_slice()).ok()).unwrap_or_default());
-		}
-		var
+		let instance: I = Default::default();
+		let collection = Collection { db, instance: &instance };
+		let inner = collection.read(I::PATH).and_then(|v| V::decode(&mut v.as_slice()).ok()).unwrap_or_default();
+		SerializeVariable { inner, instance: Default::default(), _ph: PhantomData }
 	}
 
 	pub fn handle(&'a mut self, db: &'a mut S) -> SerializeVariableHandle<'a, V, S, I> {
@@ -525,9 +568,45 @@ impl<'a, V, S, I> SerializeVariable<V, S, I>
 			need_write: false,
 		}
 	}
+	pub fn get(&self) -> &V {
+		&self.inner
+	}
 }
 
 impl<'a, V, S, I> SerializeVariableHandle<'a, V, S, I>
+	where
+		I: SerializeInstanceVariable,
+		S: SerializeDB,
+		V: Default + Codec,
+{
+	pub fn get(&mut self) -> &V {
+		&self.inner
+	}
+	pub fn set(&mut self, value: V) {
+		*self.inner = value;
+		self.need_write = true;
+	}
+	pub fn flush(&mut self) {
+		if self.need_write {
+			let encoded = self.inner.encode();
+			self.collection.write(I::PATH, encoded.as_slice());
+			self.need_write = false;
+		}
+	}
+}
+
+impl<'a, V, S, I> Drop for SerializeVariableHandle<'a, V, S, I>
+	where
+		I: SerializeInstanceVariable,
+		S: SerializeDB,
+		V: Default + Codec,
+{
+	fn drop(&mut self) {
+		self.flush()
+	}
+}
+
+impl<'a, V, S, I> SerializeVariableHandleLazy<'a, V, S, I>
 	where
 		I: SerializeInstanceVariable,
 		S: SerializeDB,
@@ -544,13 +623,15 @@ impl<'a, V, S, I> SerializeVariableHandle<'a, V, S, I>
 		self.need_write = true;
 	}
 	pub fn flush(&mut self) {
-		let encoded = self.inner.encode();
-		self.collection.write(I::PATH, encoded.as_slice());
-		self.need_write = false;
+		if self.need_write {
+			let encoded = self.inner.as_ref().expect("need write only for initialized").encode();
+			self.collection.write(I::PATH, encoded.as_slice());
+			self.need_write = false;
+		}
 	}
 }
 
-impl<'a, V, S, I> Drop for SerializeVariableHandle<'a, V, S, I>
+impl<'a, V, S, I> Drop for SerializeVariableHandleLazy<'a, V, S, I>
 	where
 		I: SerializeInstanceVariable,
 		S: SerializeDB,
@@ -560,5 +641,3 @@ impl<'a, V, S, I> Drop for SerializeVariableHandle<'a, V, S, I>
 		self.flush()
 	}
 }
-
-
