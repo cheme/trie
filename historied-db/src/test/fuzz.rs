@@ -22,7 +22,57 @@ use crate::{
 use crate::test::simple_impl::StateInput;
 
 type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
-type InMemoryMgmtSer = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
+type InMemoryMgmtSer = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, SerFuzz>;
+
+struct SerFuzz;
+
+mod bindings {
+	macro_rules! static_instance {
+		($name: ident, $col: expr) => {
+
+		#[derive(Default, Clone)]
+		pub struct $name;
+		impl crate::simple_db::SerializeInstance for $name {
+			const STATIC_COL: &'static [u8] = $col;
+		}
+		
+	}}
+	macro_rules! static_instance_variable {
+		($name: ident, $col: expr, $path: expr, $lazy: expr) => {
+			static_instance!($name, $col);
+		impl crate::simple_db::SerializeInstanceVariable for $name {
+			const PATH: &'static [u8] = $path;
+			const LAZY: bool = $lazy;
+		}
+	}}
+
+	static_instance!(Mapping, &[0u8, 0, 0, 0]);
+	static_instance!(TreeState, &[1u8, 0, 0, 0]);
+	const CST: &'static[u8] = &[2u8, 0, 0, 0];
+	static_instance_variable!(TouchedGC, CST, b"tree_mgmt/touched_gc", false);
+	static_instance_variable!(CurrentGC, CST, b"tree_mgmt/current_gc", false);
+	static_instance_variable!(LastIndex, CST, b"tree_mgmt/last_index", false);
+	static_instance_variable!(NeutralElt,CST, b"tree_mgmt/neutral_elt", false);
+	static_instance_variable!(TreeMeta, CST, b"tree_mgmt/tree_meta", true);
+	
+}
+
+impl crate::historied::tree_management::TreeManagementStorage for SerFuzz {
+	type Storage = crate::test::InMemorySimpleDB5;
+	type Mapping = bindings::Mapping;
+	type TouchedGC = bindings::TouchedGC;
+	type CurrentGC = bindings::CurrentGC;
+	type LastIndex = bindings::LastIndex;
+	type NeutralElt = bindings::NeutralElt;
+	type TreeMeta = bindings::TreeMeta;
+	type TreeState = bindings::TreeState;
+
+	fn init() -> Self::Storage {
+		crate::test::InMemorySimpleDB5::new()
+	}
+
+}
+
 struct FuzzerState {
 	/// in memory historied datas to test
 	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::MemoryOnly<u32, u32, u16>>,
@@ -183,8 +233,8 @@ impl FuzzerState {
 			let query_simple = self.simple.get_db_state(&state);
 			let query = self.in_memory_mgmt.get_db_state(&state);
 			if self.with_ser {
-//				let query_ser = self.in_memory_mgmt_ser.get_db_state(&state);
-//				assert_eq!(query, query_ser);
+				let query_ser = self.in_memory_mgmt_ser.get_db_state(&state);
+				assert_eq!(query, query_ser);
 			}
 
 			assert_eq!(query.is_some(), query_simple.is_some());

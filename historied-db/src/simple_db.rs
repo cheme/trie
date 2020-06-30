@@ -560,3 +560,5 @@ impl<'a, V, S, I> Drop for SerializeVariableHandle<'a, V, S, I>
 		self.flush()
 	}
 }
+
+

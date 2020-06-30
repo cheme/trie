@@ -26,12 +26,11 @@ macro_rules! InMemSimpleDB {
 	pub mod $inner_module {
 		use crate::simple_db::SerializeDB;
 		use crate::rstd::btree_map::BTreeMap;
-		use crate::rstd::marker::PhantomData;
 		const NB_COL: usize = $size;
 		#[derive(Clone, Debug, Eq, PartialEq)]
-		pub struct InMemory<'a>([BTreeMap<Vec<u8>, Vec<u8>>; NB_COL], PhantomData<&'a ()>);
+		pub struct InMemory([BTreeMap<Vec<u8>, Vec<u8>>; NB_COL]);
 
-		impl<'a> InMemory<'a> {
+		impl InMemory {
 			pub fn new() -> Self {
 				use core::mem::MaybeUninit;
 
@@ -42,7 +41,7 @@ macro_rules! InMemSimpleDB {
 					*elem = MaybeUninit::new(BTreeMap::new());
 				}
 				let inner = unsafe { crate::rstd::mem::transmute(inner) };
-				InMemory(inner, PhantomData)
+				InMemory(inner)
 			}
 
 			// TODO with branch conditional could be const
@@ -68,7 +67,7 @@ macro_rules! InMemSimpleDB {
 			}
 		}
 
-		impl<'a> SerializeDB for InMemory<'a> {
+		impl SerializeDB for InMemory {
 			const ACTIVE: bool = true;
 			type Iter = crate::rstd::btree_map::IntoIter<Vec<u8>, Vec<u8>>;
 
