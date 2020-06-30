@@ -35,6 +35,7 @@ pub trait TreeManagementStorage: Sized {
 	type LastIndex: SerializeInstanceVariable;
 	type NeutralElt: SerializeInstanceVariable;
 	type TreeMeta: SerializeInstanceVariable;
+	type TreeState: SerializeInstance;
 
 	fn init() -> Self::Storage;
 }
@@ -47,6 +48,7 @@ impl TreeManagementStorage for () {
 	type LastIndex = ();
 	type NeutralElt = ();
 	type TreeMeta = ();
+	type TreeState = ();
 
 	fn init() -> Self { }
 }
@@ -82,7 +84,7 @@ pub trait BranchContainer<I> {
 /// Stored states for a branch, it contains branch reference information,
 /// structural information (index of parent branch) and fork tree building
 /// information (is branch appendable).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct BranchState<I, BI> {
 	state: BranchRange<BI>,
 	/// does a state get rollback.
@@ -100,7 +102,7 @@ impl<I, BI: Clone> BranchState<I, BI> {
 
 /// This is a simple range, end non inclusive.
 /// TODO type alias or use ops::Range? see next todo?
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct BranchRange<I> {
 	// TODO rewrite this to use as single linear index?
 	// we could always start at 0 but the state could not
@@ -130,10 +132,10 @@ pub struct BranchRange<I> {
 #[derivative(Debug(bound="I: Debug, BI: Debug, S::Storage: Debug"))]
 #[derivative(Clone(bound="I: Clone, BI: Clone, S::Storage: Clone"))]
 #[cfg_attr(test, derivative(PartialEq(bound="I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
-pub struct Tree<I, BI, S: TreeManagementStorage> {
+pub struct Tree<I: Ord, BI, S: TreeManagementStorage> {
 	// TODO this could probably be cleared depending on S::ACTIVE.
 	// -> on gc ?
-	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
+	pub(crate) storage: SerializeMap<I, BranchState<I, BI>, S::Storage, S::TreeState>,
 	pub(crate) meta: SerializeVariable<TreeMeta<I, BI>, S::Storage, S::TreeMeta>,
 	/// serialize implementation
 	pub(crate) serialize: S::Storage,
@@ -176,7 +178,7 @@ impl<I: Default, BI: Default> Default for TreeMeta<I, BI> {
 impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Default for Tree<I, BI, S> {
 	fn default() -> Self {
 		Tree {
-			storage: BTreeMap::new(),
+			storage: Default::default(),
 			meta: Default::default(),
 			serialize: S::init(),
 		}
@@ -186,7 +188,7 @@ impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Default for Tree<I
 impl<I: Ord + Default + Codec, BI: Default + Codec, S: TreeManagementStorage> Tree<I, BI, S> {
 	pub fn from_ser(mut serialize: S::Storage) -> Self {
 		Tree {
-			storage: BTreeMap::new(),
+			storage: Default::default(),
 			meta: SerializeVariable::from_ser(&mut serialize),
 			serialize,
 		}
@@ -197,7 +199,7 @@ impl<I: Ord + Default + Codec, BI: Default + Codec, S: TreeManagementStorage> Tr
 #[derivative(Debug(bound="V: Debug, I: Debug, BI: Debug, S::Storage: Debug"))]
 #[derivative(Clone(bound="V: Clone, I: Clone, BI: Clone, S::Storage: Clone"))]
 #[cfg_attr(test, derivative(PartialEq(bound="V: PartialEq, I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
-pub struct TreeState<I, BI, V, S: TreeManagementStorage> {
+pub struct TreeState<I: Ord, BI, V, S: TreeManagementStorage> {
 	pub(crate) tree: Tree<I, BI, S>,
 	pub(crate) neutral_element: Option<V>,
 }
@@ -212,7 +214,7 @@ pub struct TreeStateGc<I, BI, V> {
 	pub(crate) neutral_element: Option<V>,
 }
 
-impl<I, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
+impl<I: Ord, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 	pub fn ser(&mut self) -> &mut S::Storage {
 		&mut self.tree.serialize
 	}
@@ -222,7 +224,7 @@ impl<I, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 #[derivative(Debug(bound="H: Debug, V: Debug, I: Debug, BI: Debug, S::Storage: Debug"))]
 #[derivative(Clone(bound="H: Clone, V: Clone, I: Clone, BI: Clone, S::Storage: Clone"))]
 #[cfg_attr(test, derivative(PartialEq(bound="H: PartialEq, V: PartialEq, I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
-pub struct TreeManagement<H: Ord, I, BI, V, S: TreeManagementStorage> {
+pub struct TreeManagement<H: Ord, I: Ord, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
 	touched_gc: SerializeVariable<bool, S::Storage, S::TouchedGC>,
@@ -278,7 +280,7 @@ impl<H: Ord, I: Default + Ord + Codec, BI: Default + Codec, V: Codec + Clone, S:
 
 impl<
 	H: Ord,
-	I,
+	I: Ord,
 	BI,
 	V: Codec,
 	S: TreeManagementStorage,
@@ -341,7 +343,7 @@ impl<
 		}
 		let mut previous_index = state.1.clone();
 		previous_index -= 1;
-		if let Some((parent, branch_end)) = self.state.tree.branch_state(&state.0).cloned()
+		if let Some((parent, branch_end)) = self.state.tree.branch_state(&state.0)
 			.map(|s| if s.state.start <= previous_index {
 				((state.0.clone(), previous_index), s.state.end)
 			} else {
@@ -404,17 +406,18 @@ impl<
 			}
 		}
 		let mut change = false;
+		let mut to_change = Vec::new();
 		let mut to_remove = Vec::new();
-		for (branch_ix, branch) in self.state.tree.storage.iter_mut() {
+		for (branch_ix, mut branch) in self.state.tree.storage.handle(&mut self.state.tree.serialize).iter() {
 				println!("it {:?}", branch_ix);
 			if branch.state.start < switch_index.1 {
-				if let Some(ref_range) = filter.get(branch_ix) {
+				if let Some(ref_range) = filter.get(&branch_ix) {
 					debug_assert!(ref_range.start == branch.state.start);
 					debug_assert!(ref_range.end <= branch.state.end);
 					if ref_range.end < branch.state.end {
 						branch.state.end = ref_range.end.clone();
 						branch.can_append = false;
-						change = true;
+						to_change.push((branch_ix, branch));
 						// TODO EMCH clean mapping for ends shifts
 					}
 				} else {
@@ -426,7 +429,14 @@ impl<
 		if to_remove.len() > 0 {
 			change = true;
 			for to_remove in to_remove {
-				self.state.tree.storage.remove(&to_remove);
+				self.state.tree.storage.handle(&mut self.state.tree.serialize).remove(&to_remove);
+				// TODO EMCH clean mapping for range
+			}
+		}
+		if to_change.len() > 0 {
+			change = true;
+			for (branch_ix, branch) in to_change {
+				self.state.tree.storage.handle(&mut self.state.tree.serialize).insert(branch_ix, branch);
 				// TODO EMCH clean mapping for range
 			}
 		}
@@ -475,31 +485,38 @@ impl<
 				return None;
 			}
 		} else {
-			let branch_state = self.storage.get_mut(&branch_index)
-				.expect(format!(
-					"Inconsistent state on new block: {:?} {:?}, {:?}",
-					branch_index,
-					number,
-					meta.composite_treshold,
-				).as_str());
-			if branch_state.can_append && branch_state.can_add(&number) {
-				branch_state.add_state();
-			} else {
-				if !branch_state.can_fork(&number) {
-					return None;
+			let mut handle = self.storage.handle(&mut self.serialize);
+			assert!(handle.get(&branch_index).is_some(),
+				"Inconsistent state on new block: {:?} {:?}, {:?}",
+				branch_index,
+				number,
+				meta.composite_treshold,
+			);
+			let branch_state = handle.entry(&branch_index);
+	
+			let mut can_fork = true;
+			branch_state.and_modify(|branch_state| {
+				if branch_state.can_append && branch_state.can_add(&number) {
+					branch_state.add_state();
 				} else {
-					if branch_state.state.end == number {
-						branch_state.is_latest = false;
+					if !branch_state.can_fork(&number) {
+						can_fork = false;
+					} else {
+						if branch_state.state.end == number {
+							branch_state.is_latest = false;
+						}
+						create_new = true;
 					}
-					create_new = true;
 				}
+			});
+			if !can_fork {
+				return None;
 			}
 		}
-
 		Some(if create_new {
 			meta.last_index += 1;
 			let state = BranchState::new(number, branch_index);
-			self.storage.insert(meta.last_index.clone(), state);
+			self.storage.handle(&mut self.serialize).insert(meta.last_index.clone(), state);
 			let result = meta.last_index.clone();
 
 			self.meta.handle(&mut self.serialize).set(meta);
@@ -509,19 +526,21 @@ impl<
 		})
 	}
 
-	#[cfg(test)] // TODO not &mut self
+	#[cfg(test)]
 	pub fn unchecked_latest_at(&mut self, branch_index : I) -> Option<Latest<(I, BI)>> {
-		let mut handle = self.meta.handle(&mut self.serialize);
-		let meta = handle.get();
-		if meta.composite_latest {
-			// composite
-			if branch_index <= meta.composite_treshold.0 {
-				return Some(Latest::unchecked_latest(meta.composite_treshold.clone()));
-			} else {
-				return None;
+		{
+			let mut handle = self.meta.handle(&mut self.serialize);
+			let meta = handle.get();
+			if meta.composite_latest {
+				// composite
+				if branch_index <= meta.composite_treshold.0 {
+					return Some(Latest::unchecked_latest(meta.composite_treshold.clone()));
+				} else {
+					return None;
+				}
 			}
 		}
-		self.storage.get(&branch_index).map(|branch| {
+		self.storage.handle(&mut self.serialize).get(&branch_index).map(|branch| {
 			let mut end = branch.state.end.clone();
 			end -= 1;
 			Latest::unchecked_latest((branch_index, end))
@@ -530,17 +549,19 @@ impl<
 	
 	// TODO this and is_latest is borderline useless, for management implementation only.
 	pub fn if_latest_at(&mut self, branch_index: I, seq_index: BI) -> Option<Latest<(I, BI)>> {
-		let mut handle = self.meta.handle(&mut self.serialize);
-		let meta = handle.get();
-		if meta.composite_latest {
-			// composite
-			if branch_index <= meta.composite_treshold.0 && seq_index == meta.composite_treshold.1 {
-				return Some(Latest::unchecked_latest(meta.composite_treshold.clone()));
-			} else {
-				return None;
+		{
+			let mut handle = self.meta.handle(&mut self.serialize);
+			let meta = handle.get();
+			if meta.composite_latest {
+				// composite
+				if branch_index <= meta.composite_treshold.0 && seq_index == meta.composite_treshold.1 {
+					return Some(Latest::unchecked_latest(meta.composite_treshold.clone()));
+				} else {
+					return None;
+				}
 			}
 		}
-		self.storage.get(&branch_index).and_then(|branch| {
+		self.storage.handle(&mut self.serialize).get(&branch_index).and_then(|branch| {
 			if !branch.is_latest {
 				None
 			} else {
@@ -570,7 +591,7 @@ impl<
 		let composite_treshold = self.meta.handle(&mut self.serialize).get().composite_treshold.clone();
 		let mut history = Vec::new();
 		while branch_index >= composite_treshold.0 {
-			if let Some(branch) = self.storage.get(&branch_index) {
+			if let Some(branch) = self.storage.handle(&mut self.serialize).get(&branch_index) {
 				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
 					branch.query_plan_to(end)
 				} else {
@@ -604,29 +625,40 @@ impl<
 		branch_index: &I,
 	) -> Option<I> {
 		let mut do_remove = None;
-		match self.storage.get_mut(branch_index) {
-			Some(branch_state) => {
+		{
+			let mut handle = self.storage.handle(&mut self.serialize);
+			let mut has_state = false;
+			handle.entry(branch_index).and_modify(|branch_state| {
+				has_state = true;
 				if branch_state.drop_state() {
 					do_remove = Some(branch_state.parent_branch_index.clone());
 				}
-			},
-			None => return None,
+			});
+			if !has_state {
+				return None;
+			}
 		}
 
 		Some(if let Some(parent_index) = do_remove {
-			self.storage.remove(branch_index);
+			self.storage.handle(&mut self.serialize).remove(branch_index);
 			parent_index
 		} else {
 			branch_index.clone()
 		})
 	}
 
-	pub fn branch_state(&self, branch_index: &I) -> Option<&BranchState<I, BI>> {
-		self.storage.get(branch_index)
+	pub fn branch_state(&mut self, branch_index: &I) -> Option<BranchState<I, BI>> {
+		self.storage.handle(&mut self.serialize).get(branch_index).cloned()
 	}
 
-	pub fn branch_state_mut(&mut self, branch_index: &I) -> Option<&mut BranchState<I, BI>> {
-		self.storage.get_mut(branch_index)
+	pub fn branch_state_mut<R, F: FnOnce(&mut BranchState<I, BI>) -> R>(&mut self, branch_index: &I, f: F) -> Option<R> {
+		let mut result: Option<R> = None;
+		self.storage.handle(&mut self.serialize)
+			.entry(branch_index)
+			.and_modify(|s: &mut BranchState<I, BI>| {
+				result = Some(f(s));
+			});
+		result
 	}
 
 	/// this function can go into deep recursion with full scan, it indicates
@@ -639,8 +671,12 @@ impl<
 	) {
 		// Never remove default
 		let mut remove = false;
-		let mut last;
-		if let Some(branch) = self.storage.get_mut(branch_index) {
+		let mut last = Default::default();
+		let mut has_branch = false;
+		let mut handle = self.storage.handle(&mut self.serialize);
+		let branch_entry = handle.entry(branch_index);
+		branch_entry.and_modify(|branch| {
+			has_branch = true;
 			branch.is_latest = true;
 			last = branch.state.end.clone();
 			while &branch.state.end > node_index {
@@ -650,11 +686,12 @@ impl<
 					break;
 				}
 			}
-		} else {
+		});
+		if !has_branch {
 			return;
 		}
 		if remove {
-			self.storage.remove(branch_index);
+			self.storage.handle(&mut self.serialize).remove(branch_index);
 		}
 		while &last > node_index {
 			last -= 1;
@@ -670,15 +707,15 @@ impl<
 	) {
 		let mut to_delete = Vec::new();
 		if composite {
-			for (i, s) in self.storage.iter() {
+			for (i, s) in self.storage.handle(&mut self.serialize).iter() {
 				if &s.state.start >= node_index {
-					to_delete.push((i.clone(), s.clone()));
+					to_delete.push((i, s));
 				}
 			}
 		} else {
-			for (i, s) in self.storage.iter() {
+			for (i, s) in self.storage.handle(&mut self.serialize).iter() {
 				if &s.parent_branch_index == branch_index && &s.state.start > node_index {
-					to_delete.push((i.clone(), s.clone()));
+					to_delete.push((i, s));
 				}
 			}
 		}
@@ -691,7 +728,7 @@ impl<
 				bi += 1;
 			}
 			// TODO the store and remove patern is ugly (could use a retain implementation)
-			self.storage.remove(&i);
+			self.storage.handle(&mut self.serialize).remove(&i);
 			// composite to false, as no in composite branch are stored.
 			self.apply_drop_state_rec_call(&i, &s.state.start, call_back, false);
 		}
@@ -1095,15 +1132,15 @@ pub(crate) mod test {
 		assert_eq!(states.add_state(0, 1), Some(1));
 		// root branching.
 		assert_eq!(states.add_state(0, 1), Some(2));
-		assert_eq!(Some(true), states.branch_state_mut(&1).map(|ls| ls.add_state()));
-		assert_eq!(Some(true), states.branch_state_mut(&1).map(|ls| ls.add_state()));
+		assert_eq!(Some(true), states.branch_state_mut(&1, |ls| ls.add_state()));
+		assert_eq!(Some(true), states.branch_state_mut(&1, |ls| ls.add_state()));
 		assert_eq!(states.add_state(1, 3), Some(3));
 		assert_eq!(states.add_state(1, 3), Some(4));
 		assert_eq!(states.add_state(1, 2), Some(5));
 		assert_eq!(states.add_state(2, 2), Some(2));
 		assert_eq!(Some(1), states.drop_state(&1));
 		// cannot create when dropped happen on branch
-		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.add_state()));
+		assert_eq!(Some(false), states.branch_state_mut(&1, |ls| ls.add_state()));
 
 		assert!(states.branch_state(&1).unwrap().state.exists(&1));
 		assert!(states.branch_state(&1).unwrap().state.exists(&2));
@@ -1120,7 +1157,7 @@ pub(crate) mod test {
 	#[test]
 	fn test_remove_attached() {
 		let mut states = test_states();
-		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.drop_state()));
+		assert_eq!(Some(false), states.branch_state_mut(&1, |ls| ls.drop_state()));
 		// does not recurse
 		assert!(states.branch_state(&3).unwrap().state.exists(&3));
 		assert!(states.branch_state(&4).unwrap().state.exists(&3));

@@ -376,7 +376,7 @@ mod test {
 		}
 
 		let ref_1 = states.query_plan(1);
-		assert_eq!(Some(false), states.branch_state_mut(&1).map(|ls| ls.drop_state()));
+		assert_eq!(Some(false), states.branch_state_mut(&1, |ls| ls.drop_state()));
 
 		let ref_1_bis = states.query_plan(1);
 		assert_eq!(item.get(&ref_1), Some(1));

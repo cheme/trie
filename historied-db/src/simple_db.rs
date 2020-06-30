@@ -383,7 +383,9 @@ impl<'a, K, V, S, I> EntryMap<'a, K, V, S, I>
 		self.entry.key()
 	}
 
-	pub fn and_modify<F>(mut self, f: impl FnOnce(&mut V)) -> Self {
+	// TODO EMCH change fn once to return bool depending on wether there
+	// was change done on &mut v (and change need write dependingly)
+	pub fn and_modify(mut self, f: impl FnOnce(&mut V)) -> Self {
 		self.fetch();
 
 		if let Some(v) = self.entry.get_mut() {
@@ -393,7 +395,7 @@ impl<'a, K, V, S, I> EntryMap<'a, K, V, S, I>
 		self
 	}
 
-	pub fn or_insert_with<F>(&mut self, value: impl FnOnce() -> V) -> &V {
+	pub fn or_insert_with(&mut self, value: impl FnOnce() -> V) -> &V {
 		if self.entry.get().is_none() {
 			*self.entry.get_mut() = Some(value());
 			self.need_write = true;
