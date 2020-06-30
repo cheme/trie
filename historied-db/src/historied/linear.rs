@@ -160,7 +160,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		UpdateResult::Unchanged
 	}
 
-	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
+	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()> {
 		if gc.new_start.is_some() && gc.new_start == gc.new_end {
 			self.0.clear();
 			return UpdateResult::Cleared(());
@@ -226,7 +226,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		}
 	}
 
-	fn migrate(&mut self, (mig, gc): &Self::Migrate) -> UpdateResult<()> {
+	fn migrate(&mut self, (mig, gc): &mut Self::Migrate) -> UpdateResult<()> {
 		let res = self.gc(gc);
 		if self.0.len() > 0 {
 			for h in self.0.iter_mut() {

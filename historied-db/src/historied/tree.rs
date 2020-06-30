@@ -19,6 +19,7 @@ use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, LinearState, Line
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeState};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::Latest;
+use codec::{Codec, Encode, Decode}; // TODO note codec bound is related to tree from gc : todo change gc to remove those bound
 
 // TODO for not in memory we need some direct or indexed api, returning value
 // and the info if there can be lower value index (not just a direct index).
@@ -135,8 +136,8 @@ impl<
 }
 
 impl<
-	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
+	I: Default + Eq + Ord + Clone + Codec,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI> + Codec,
 	V: Clone + Eq,
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
@@ -170,14 +171,14 @@ impl<
 		UpdateResult::Unchanged
 	}
 
-	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
+	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()> {
 
 		let neutral = &gc.neutral_element;
 		let mut result = UpdateResult::Unchanged;
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
 		let mut gc_iter = gc.tree.storage.iter().rev();
-		let start_composite = gc.tree.meta.composite_treshold.1.clone();
+		let start_composite = gc.tree.meta.handle(&mut ()).get().composite_treshold.1.clone();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
@@ -191,13 +192,13 @@ impl<
 				} else {
 					start
 				};
-				let gc = LinearGC {
+				let mut gc = LinearGC {
 					new_start: Some(start),
 					new_end:  Some(end),
 					neutral_element: neutral.clone(),
 				};
 
-				match branch.history.gc(&gc) {
+				match branch.history.gc(&mut gc) {
 					UpdateResult::Unchanged => (),
 					UpdateResult::Changed(_) => { result = UpdateResult::Changed(()); },
 					UpdateResult::Cleared(_) => to_remove.push(*index),
@@ -245,19 +246,20 @@ impl<
 		false
 	}
 
-	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()> {
+	fn migrate(&mut self, mig: &mut Self::Migrate) -> UpdateResult<()> {
 		// This is basis from old gc, it does not do indexing change as it could
 		// be possible. TODO start migrate too (mig.0)
 		let mut result = UpdateResult::Unchanged;
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
-		let mut gc_iter = mig.1.changes.iter().rev();
+		let mut gc_iter = mig.1.changes.iter_mut().rev();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
-		while let (Some(gc), Some((index, branch))) = (o_gc.as_ref(), o_branch.as_mut()) {
+		// TODO ref mut remove (not previously works fine with as ref so refact serialize to inner mut.
+		while let (Some(ref mut gc), Some((index, branch))) = (o_gc.as_mut(), o_branch.as_mut()) {
 			if gc.branch_index == branch.branch_index {
-				if let Some(gc) = gc.new_range.as_ref() {
+				if let Some(gc) = gc.new_range.as_mut() {
 					match branch.history.gc(gc) {
 						UpdateResult::Unchanged => (),
 						UpdateResult::Changed(_) => { result = UpdateResult::Changed(()); },
@@ -290,8 +292,8 @@ impl<
 }
 
 impl<
-	I: Default + Eq + Ord + Clone,
-	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
+	I: Default + Eq + Ord + Clone + Codec,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI> + Codec,
 	V: Clone + Eq,
 > InMemoryValue<V> for MemoryOnly<I, BI, V> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
@@ -388,7 +390,7 @@ mod test {
 		item = Default::default();
 
 		// need fresh state as previous modification leaves unattached branches
-		let states = test_states();
+		let mut states = test_states();
 		// could rand shuffle if rand get imported later.
 		let disordered = [
 			[1,2,3,5,4],

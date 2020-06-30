@@ -121,8 +121,10 @@ pub trait StateDB<K, V>: StateDBRef<K, V> {
 	/// being inserted into the DB. It can be "owed" more than once.
 	/// The caller should ensure that a key only corresponds to one value.
 	fn remove(&mut self, key: &K, at: &Self::SE);
-	fn gc(&mut self, gc: &Self::GC);
-	fn migrate(&mut self, mig: &Self::Migrate);
+	// TODO see issue on value for mut on gc
+	fn gc(&mut self, gc: &mut Self::GC);
+	// TODO see issue on value for mut on gc
+	fn migrate(&mut self, mig: &mut Self::Migrate);
 }
 
 /// Type holding a state db to lock the management.

@@ -76,11 +76,15 @@ pub trait Value<V>: ValueRef<V> {
 	/// Discard history at.
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>>;
 
-	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()>;
+	// TODO mut on gc is related to cache of serialize, if inner_mut
+	// we can & back.
+	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()>;
 
 	fn is_in_migrate(index: &Self::Index, gc: &Self::Migrate) -> bool;
 
-	fn migrate(&mut self, mig: &Self::Migrate) -> UpdateResult<()>;
+	// TODO mut on gc is related to cache of serialize, if inner_mut
+	// we can & back.
+	fn migrate(&mut self, mig: &mut Self::Migrate) -> UpdateResult<()>;
 }
 
 pub trait InMemoryValue<V>: Value<V> {
@@ -166,7 +170,7 @@ impl<K: Ord + Clone, V: Clone + Eq, H: Value<V>> StateDB<K, V> for BTreeMap<K, V
 		self.0.remove(&key);
 	}
 
-	fn gc(&mut self, gc: &Self::GC) {
+	fn gc(&mut self, gc: &mut Self::GC) {
 		// retain for btreemap missing here.
 		let mut to_remove = Vec::new();
 		for (key, h) in self.0.iter_mut() {
@@ -181,7 +185,7 @@ impl<K: Ord + Clone, V: Clone + Eq, H: Value<V>> StateDB<K, V> for BTreeMap<K, V
 		}
 	}
 
-	fn migrate(&mut self, mig: &Self::Migrate) {
+	fn migrate(&mut self, mig: &mut Self::Migrate) {
 		// retain for btreemap missing here.
 		let mut to_remove = Vec::new();
 		for (key, h) in self.0.iter_mut() {
@@ -259,7 +263,7 @@ impl<
 		self.touched_keys.entry(at.index()).or_default().push(key.clone());
 	}
 
-	fn gc(&mut self, gc: &Self::GC) {
+	fn gc(&mut self, gc: &mut Self::GC) {
 		let mut keys: crate::rstd::BTreeSet<_> = Default::default();
 		for touched in self.touched_keys.values() {
 			for key in touched.iter() {
@@ -277,7 +281,7 @@ impl<
 		}
 	}
 
-	fn migrate(&mut self, mig: &Self::Migrate) {
+	fn migrate(&mut self, mig: &mut Self::Migrate) {
 		// TODO this is from old gc but seems ok (as long as touched is complete).
 		// retain for btreemap missing here.
 		let mut states = Vec::new();
