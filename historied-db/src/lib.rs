@@ -176,7 +176,7 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	fn get_db_state_mut(&mut self, tag: &H) -> Option<Self::SE>;
 
 	/// Get a cursor over the last change of ref (when adding or removing).
-	fn latest_state(&self) -> Self::SE;
+	fn latest_state(&mut self) -> Self::SE;
 
 	fn reverse_lookup(&mut self, state: &Self::S) -> Option<H>;
 
@@ -208,7 +208,7 @@ pub trait ForkableManagement<H>: Management<H> {
 
 	fn get_db_state_for_fork(&mut self, tag: &H) -> Option<Self::SF>;
 
-	fn latest_state_fork(&self) -> Self::SF {
+	fn latest_state_fork(&mut self) -> Self::SF {
 		let se = self.latest_state();
 		self.inner_fork_state(se)
 	}

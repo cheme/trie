@@ -24,6 +24,7 @@ use crate::rstd::marker::PhantomData;
 use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::mem::replace;
+use codec::{Encode, Decode, Codec};
 
 /// For in memory implementation we expect the state to be `Into<usize>` and
 /// `From<usize>` and will not manage failure when converting.
@@ -299,7 +300,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOn
 
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct LinearGC<S, V> {
 	// inclusive
@@ -376,15 +377,17 @@ V: Clone,
 
 	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
 		if let Some(state) = self.mapping.get(state) {
-			let latest = self.latest_state();
-			if state == latest.latest() {
-				return Some(latest)
+			let latest = self.mapping.values().max()
+				.map(Clone::clone)
+				.unwrap_or(S::default());
+			if state == &latest {
+				return Some(Latest::unchecked_latest(latest))
 			}
 		}
 		None
 	}
 
-	fn latest_state(&self) -> Self::SE {
+	fn latest_state(&mut self) -> Self::SE {
 		// TODO can use next_state - 1 to avoid this search
 		Latest::unchecked_latest(self.mapping.values().max()
 			.map(Clone::clone)

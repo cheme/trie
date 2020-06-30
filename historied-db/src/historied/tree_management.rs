@@ -31,6 +31,9 @@ pub trait TreeManagementStorage: Sized {
 	type Storage: SerializeDB;
 	type Mapping: SerializeInstance;
 	type TouchedGC: SerializeInstanceVariable;
+	type CurrentGC: SerializeInstanceVariable;
+	type LastIndex: SerializeInstanceVariable;
+	type NeutralElt: SerializeInstanceVariable;
 
 	fn init() -> Self::Storage;
 }
@@ -41,6 +44,10 @@ impl TreeManagementStorage for () {
 	type Storage = ();
 	type Mapping = ();
 	type TouchedGC = ();
+	type CurrentGC = ();
+	type LastIndex = ();
+	type NeutralElt = ();
+
 	fn init() -> Self { }
 }
 
@@ -127,16 +134,7 @@ pub struct Tree<I, BI, S: TreeManagementStorage> {
 	// TODO this could probably be cleared depending on S::ACTIVE.
 	// -> on gc ?
 	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
-	// TODO pub(crate) storage: SerializeMap<I, BranchState<I, BI>>,
-	pub(crate) last_index: I,
-	/// treshold for possible node value, correspond
-	/// roughly to last cannonical block branch index.
-	/// If at default state value, we go through simple storage.
-	/// TODO move in tree management??
-	pub(crate) composite_treshold: (I, BI),
-	/// Is composite latest, so can we write its last state (only
-	/// possible on new or after a migration).
-	pub(crate) composite_latest: bool,
+	pub(crate) meta: TreeMeta<I, BI>,
 	/// serialize implementation
 	pub(crate) serialize: S::Storage,
 	// TODO some strategie to close a long branch that gets
@@ -148,25 +146,58 @@ pub struct Tree<I, BI, S: TreeManagementStorage> {
 	// strategy and avoid fragmenting the history to much.
 }
 
+#[derive(Derivative, Encode, Decode)]
+#[derivative(Debug(bound="I: Debug, BI: Debug"))]
+#[derivative(Clone(bound="I: Clone, BI: Clone"))]
+#[cfg_attr(test, derivative(PartialEq(bound="I: PartialEq, BI: PartialEq")))]
+pub(crate) struct TreeMeta<I, BI> {
+	// TODO pub(crate) storage: SerializeMap<I, BranchState<I, BI>>,
+	pub(crate) last_index: I,
+	/// treshold for possible node value, correspond
+	/// roughly to last cannonical block branch index.
+	/// If at default state value, we go through simple storage.
+	/// TODO move in tree management??
+	pub(crate) composite_treshold: (I, BI),
+	/// Is composite latest, so can we write its last state (only
+	/// possible on new or after a migration).
+	pub(crate) composite_latest: bool,
+}
+
+impl<I: Default, BI: Default> Default for TreeMeta<I, BI> {
+	fn default() -> Self {
+		TreeMeta {
+			last_index: I::default(),
+			composite_treshold: Default::default(),
+			composite_latest: true,
+		}
+	}
+}
+
+impl<I: Default, BI: Default> TreeMeta<I, BI> {
+	fn from_ser<S: TreeManagementStorage>(serialize: &mut S::Storage) -> Self {
+		TreeMeta {
+			last_index: I::default(),
+			composite_treshold: Default::default(),
+			composite_latest: true,
+		}
+	}
+}
+
 impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Default for Tree<I, BI, S> {
 	fn default() -> Self {
 		Tree {
 			storage: BTreeMap::new(),
-			last_index: I::default(),
-			composite_treshold: Default::default(),
-			composite_latest: true,
+			meta: Default::default(),
 			serialize: S::init(),
 		}
 	}
 }
 
 impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Tree<I, BI, S> {
-	pub fn from_ser(serialize: S::Storage) -> Self {
+	pub fn from_ser(mut serialize: S::Storage) -> Self {
 		Tree {
 			storage: BTreeMap::new(),
-			last_index: I::default(),
-			composite_treshold: Default::default(),
-			composite_latest: true,
+			meta: TreeMeta::from_ser::<S>(&mut serialize),
 			serialize,
 		}
 	}
@@ -195,8 +226,9 @@ pub struct TreeManagement<H: Ord, I, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
 	touched_gc: SerializeVariable<bool, S::Storage, S::TouchedGC>,
-	current_gc: TreeMigrate<I, BI, V>,
-	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
+	current_gc: SerializeVariable<TreeMigrate<I, BI, V>, S::Storage, S::CurrentGC>,
+	last_in_use_index: SerializeVariable<(I, BI), S::Storage, S::LastIndex>, // TODO rename to last inserted as we do not rebase on query
+	neutral_element: SerializeVariable<Option<V>, S::Storage, S::NeutralElt>,
 }
 
 impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default for TreeManagement<H, I, BI, V, S> {
@@ -204,26 +236,30 @@ impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default
 		TreeManagement {
 			state: TreeState {
 				tree: Tree::default(),
-				neutral_element: None,
+				neutral_element: Default::default(),
 			},
 			mapping: Default::default(),
 			touched_gc: Default::default(),
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
+			neutral_element: Default::default(),
 		}
 	}
 }
 
-impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> TreeManagement<H, I, BI, V, S> {
+impl<H: Ord, I: Default + Ord + Codec, BI: Default + Codec, V: Codec + Clone, S: TreeManagementStorage> TreeManagement<H, I, BI, V, S> {
 	/// Initialize from a default ser
-	pub fn from_ser(serialize: S::Storage) -> Self {
+	pub fn from_ser(mut serialize: S::Storage) -> Self {
+		let mut neutral_element_ser = SerializeVariable::<Option<V>, S::Storage, S::NeutralElt>::from_ser(&serialize);
+		let neutral_element = neutral_element_ser.handle(&mut serialize).get().clone();
 		TreeManagement {
 			mapping: Default::default(),
 			touched_gc: SerializeVariable::from_ser(&serialize),
-			current_gc: Default::default(),
-			last_in_use_index: Default::default(),
+			current_gc: SerializeVariable::from_ser(&serialize),
+			last_in_use_index: SerializeVariable::from_ser(&serialize),
+			neutral_element: neutral_element_ser,
 			state: TreeState {
-				neutral_element: None,
+				neutral_element,
 				tree: Tree::from_ser(serialize),
 			},
 		}
@@ -244,11 +280,11 @@ impl<
 	H: Ord,
 	I,
 	BI,
-	V,
+	V: Codec,
 	S: TreeManagementStorage,
 > TreeManagement<H, I, BI, V, S> {
 	pub fn define_neutral_element(mut self, n: V) -> Self {
-		self.state.neutral_element = Some(n);
+		self.neutral_element.handle(self.state.ser()).set(Some(n));
 		self
 	}
 }
@@ -290,11 +326,12 @@ impl<
 			}
 		};
 		// Less than composite do not contain a 
-		if state.1 <= self.state.tree.composite_treshold.1 {
+		if state.1 <= self.state.tree.meta.composite_treshold.1 {
 			// No branch delete (the implementation guaranty branch 0 is a single element)
 			self.state.tree.apply_drop_state_rec_call(&state.0, &state.1, &mut call_back, true);
-			self.state.tree.composite_latest = true;
-			self.last_in_use_index = self.state.tree.composite_treshold.clone();
+			self.state.tree.meta.composite_latest = true;
+			let treshold = self.state.tree.meta.composite_treshold.clone();
+			self.last_in_use_index.handle(self.state.ser()).set(treshold);
 			return;
 		}
 		let mut previous_index = state.1.clone();
@@ -312,18 +349,18 @@ impl<
 			}
 			call_back(&state.0, &state.1, self.state.ser());
 			self.state.tree.apply_drop_state(&state.0, &state.1, &mut call_back);
-			self.last_in_use_index = parent;
+			self.last_in_use_index.handle(self.state.ser()).set(parent);
 		}
 	}
 
 	// TODO rename to canonicalize or similar naming
 	// TOdO update last_in_use_index
 	pub fn apply_drop_from_latest(&mut self, back: usize) -> bool {
-		let latest = self.last_in_use_index.clone();
+		let latest = self.last_in_use_index.handle(self.state.ser()).get().clone();
 		let mut switch_index = latest.1.clone();
 		switch_index -= back as u32;
 		let qp = self.state.tree.query_plan_at(latest);
-		let mut branch_index = self.state.tree.composite_treshold.0.clone();
+		let mut branch_index = self.state.tree.meta.composite_treshold.0.clone();
 		for b in qp.iter() {
 			if b.0.end <= switch_index {
 				branch_index = b.1;
@@ -388,11 +425,11 @@ impl<
 				// TODO EMCH clean mapping for range
 			}
 		}
-		if switch_index != self.state.tree.composite_treshold {
-			self.state.tree.composite_treshold = switch_index;
+		if switch_index != self.state.tree.meta.composite_treshold {
+			self.state.tree.meta.composite_treshold = switch_index;
 			change = true;
 		}
-		println!("new ct: {:?}", &self.state.tree.composite_treshold);
+		println!("new ct: {:?}", &self.state.tree.meta.composite_treshold);
 		change
 	}
 }
@@ -410,16 +447,16 @@ impl<
 		branch_index: I,
 		number: BI,
 	) -> Option<I> {
-		if number < self.composite_treshold.1 {
+		if number < self.meta.composite_treshold.1 {
 			return None;
 		}
 		let mut create_new = false;
-		if branch_index <= self.composite_treshold.0 {
+		if branch_index <= self.meta.composite_treshold.0 {
 			// only allow terminal append
-			let mut next = self.composite_treshold.1.clone();
+			let mut next = self.meta.composite_treshold.1.clone();
 			next += 1;
 			if number == next {
-				self.composite_latest = false;
+				self.meta.composite_latest = false;
 				create_new = true;
 			} else {
 				return None;
@@ -430,7 +467,7 @@ impl<
 					"Inconsistent state on new block: {:?} {:?}, {:?}",
 					branch_index,
 					number,
-					self.composite_treshold,
+					self.meta.composite_treshold,
 				).as_str());
 			if branch_state.can_append && branch_state.can_add(&number) {
 				branch_state.add_state();
@@ -447,11 +484,11 @@ impl<
 		}
 
 		Some(if create_new {
-			self.last_index += 1;
+			self.meta.last_index += 1;
 
 			let state = BranchState::new(number, branch_index);
-			self.storage.insert(self.last_index.clone(), state);
-			self.last_index.clone()
+			self.storage.insert(self.meta.last_index.clone(), state);
+			self.meta.last_index.clone()
 		} else {
 			branch_index
 		})
@@ -459,10 +496,10 @@ impl<
 
 	#[cfg(test)]
 	pub fn unchecked_latest_at(&self, branch_index : I) -> Option<Latest<(I, BI)>> {
-		if self.composite_latest {
+		if self.meta.composite_latest {
 			// composite
-			if branch_index <= self.composite_treshold.0 {
-				return Some(Latest::unchecked_latest(self.composite_treshold.clone()));
+			if branch_index <= self.meta.composite_treshold.0 {
+				return Some(Latest::unchecked_latest(self.meta.composite_treshold.clone()));
 			} else {
 				return None;
 			}
@@ -476,10 +513,10 @@ impl<
 	
 	// TODO this and is_latest is borderline useless, for management implementation only.
 	pub fn if_latest_at(&self, branch_index: I, seq_index: BI) -> Option<Latest<(I, BI)>> {
-		if self.composite_latest {
+		if self.meta.composite_latest {
 			// composite
-			if branch_index <= self.composite_treshold.0 && seq_index == self.composite_treshold.1 {
-				return Some(Latest::unchecked_latest(self.composite_treshold.clone()));
+			if branch_index <= self.meta.composite_treshold.0 && seq_index == self.meta.composite_treshold.1 {
+				return Some(Latest::unchecked_latest(self.meta.composite_treshold.clone()));
 			} else {
 				return None;
 			}
@@ -512,7 +549,7 @@ impl<
 
 	fn query_plan_inner(&self, mut branch_index: I, mut parent_fork_branch_index: Option<BI>) -> ForkPlan<I, BI> {
 		let mut history = Vec::new();
-		while branch_index >= self.composite_treshold.0 {
+		while branch_index >= self.meta.composite_treshold.0 {
 			if let Some(branch) = self.storage.get(&branch_index) {
 				let branch_ref = if let Some(end) = parent_fork_branch_index.take() {
 					branch.query_plan_to(end)
@@ -534,7 +571,7 @@ impl<
 		}
 		ForkPlan {
 			history,
-			composite_treshold: self.composite_treshold.clone(),
+			composite_treshold: self.meta.composite_treshold.clone(),
 		}
 	}
 
@@ -861,7 +898,7 @@ impl<I, BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone> BranchState<I, B
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct BranchGC<I, BI, V> {
 	pub branch_index: I,
@@ -870,7 +907,7 @@ pub struct BranchGC<I, BI, V> {
 	pub new_range: Option<LinearGC<BI, V>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TreeMigrate<I, BI, V> {
 	/// Every modified branch.
@@ -942,8 +979,9 @@ impl<
 		(management, init_plan)
 	}
 
-	fn latest_state(&self) -> Self::SE {
-		Latest::unchecked_latest(self.last_in_use_index.clone())
+	fn latest_state(&mut self) -> Self::SE {
+		let latest = self.last_in_use_index.handle(self.state.ser()).get().clone();
+		Latest::unchecked_latest(latest)
 	}
 
 	// TODO the state parameter may not be the correct one.
@@ -1002,8 +1040,9 @@ impl<
 		index += 1;
 		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
 			let result = self.state.tree.query_plan(branch_index.clone());
-			self.last_in_use_index = (branch_index.clone(), index);
-			self.mapping.handle(self.state.ser()).insert(state, self.last_in_use_index.clone());
+			let last_in_use_index = (branch_index.clone(), index);
+			self.last_in_use_index.handle(self.state.ser()).set(last_in_use_index.clone());
+			self.mapping.handle(self.state.ser()).insert(state, last_in_use_index);
 			Some(result)
 		} else {
 			None
@@ -1104,7 +1143,7 @@ pub(crate) mod test {
 		];
 		assert_eq!(states.query_plan(6).history, ref_6);
 
-		states.composite_treshold = (2, 1);
+		states.meta.composite_treshold = (2, 1);
 		let mut ref_6 = ref_6;
 		ref_6.remove(0);
 		assert_eq!(states.query_plan(6).history, ref_6);

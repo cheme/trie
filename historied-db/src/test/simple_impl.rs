@@ -174,7 +174,7 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 		None
 	}
 
-	fn latest_state(&self) -> Self::SE {
+	fn latest_state(&mut self) -> Self::SE {
 		self.latest_state.clone()
 	}
 

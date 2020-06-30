@@ -177,7 +177,7 @@ impl<
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
 		let mut gc_iter = gc.tree.storage.iter().rev();
-		let start_composite = gc.tree.composite_treshold.1.clone();
+		let start_composite = gc.tree.meta.composite_treshold.1.clone();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
