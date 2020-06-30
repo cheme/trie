@@ -16,10 +16,9 @@
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
 use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, LinearState, LinearGC};
-use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeState};
+use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::Latest;
-use codec::{Codec, Encode, Decode}; // TODO note codec bound is related to tree from gc : todo change gc to remove those bound
 
 // TODO for not in memory we need some direct or indexed api, returning value
 // and the info if there can be lower value index (not just a direct index).
@@ -136,13 +135,13 @@ impl<
 }
 
 impl<
-	I: Default + Eq + Ord + Clone + Codec,
-	BI: LinearState + SubAssign<u32> + SubAssign<BI> + Codec,
+	I: Default + Eq + Ord + Clone,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 > Value<V> for MemoryOnly<I, BI, V> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
-	type GC = TreeState<I, BI, V, ()>;
+	type GC = TreeStateGc<I, BI, V>;
 	type Migrate = (BI, TreeMigrate<I, BI, V>);
 
 	fn new(value: V, at: &Self::SE) -> Self {
@@ -177,8 +176,8 @@ impl<
 		let mut result = UpdateResult::Unchanged;
 		let start_len = self.branches.len();
 		let mut to_remove = Vec::new(); // if switching to hash map retain usage is way better.
-		let mut gc_iter = gc.tree.storage.iter().rev();
-		let start_composite = gc.tree.meta.handle(&mut ()).get().composite_treshold.1.clone();
+		let mut gc_iter = gc.storage.iter().rev();
+		let start_composite = gc.composite_treshold.1.clone();
 		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
 		let mut o_gc = gc_iter.next();
 		let mut o_branch = branch_iter.next();
@@ -292,8 +291,8 @@ impl<
 }
 
 impl<
-	I: Default + Eq + Ord + Clone + Codec,
-	BI: LinearState + SubAssign<u32> + SubAssign<BI> + Codec,
+	I: Default + Eq + Ord + Clone,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 > InMemoryValue<V> for MemoryOnly<I, BI, V> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {

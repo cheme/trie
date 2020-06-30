@@ -202,6 +202,16 @@ pub struct TreeState<I, BI, V, S: TreeManagementStorage> {
 	pub(crate) neutral_element: Option<V>,
 }
 
+#[derive(Clone, Debug)]
+pub struct TreeStateGc<I, BI, V> {
+	/// see Tree `storage`
+	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
+	/// see TreeMeta `composite_treshold`
+	pub(crate) composite_treshold: (I, BI),
+	/// see TreeManagement `neutral_element`
+	pub(crate) neutral_element: Option<V>,
+}
+
 impl<I, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 	pub fn ser(&mut self) -> &mut S::Storage {
 		&mut self.tree.serialize
