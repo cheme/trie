@@ -167,6 +167,12 @@ pub trait SerializeInstanceVariable: SerializeInstance {
 	const LAZY: bool;
 }
 
+/// Noop implementation.
+impl SerializeInstanceVariable for () {
+	const PATH: &'static [u8] = &[];
+	const LAZY: bool = false;
+}
+
 impl SerializeDB for () {
 	const ACTIVE: bool = false;
 	type Iter = crate::rstd::iter::Empty<(Vec<u8>, Vec<u8>)>;
@@ -466,11 +472,20 @@ impl<'a, K, V, S, I> Drop for EntryMap<'a, K, V, S, I>
 	}
 }
 
+#[derive(Derivative)]
+#[derivative(Clone(bound="V: Clone, I: Clone"))]
+#[derivative(Debug(bound="V: Debug"))]
+#[derivative(Default(bound="V: Default, I: Default"))]
+#[cfg_attr(test, derivative(PartialEq(bound="V: PartialEq")))]
 /// Is db variable or default if undefined.
 pub struct SerializeVariable<V, S, I> {
 	// None indicate we did not fetch.
 	inner: Option<V>,
+	#[derivative(Debug="ignore")]
+	#[derivative(PartialEq="ignore")]
 	instance: I,
+	#[derivative(Debug="ignore")]
+	#[derivative(PartialEq="ignore")]
 	_ph: PhantomData<S>,
 }
 

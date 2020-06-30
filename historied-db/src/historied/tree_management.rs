@@ -24,12 +24,13 @@ use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
 use crate::{Management, ManagementRef, Migrate, ForkableManagement, Latest};
 use codec::{Codec, Encode, Decode};
-use crate::simple_db::{SerializeDB, SerializeMap, SerializeInstance};
+use crate::simple_db::{SerializeDB, SerializeMap, SerializeVariable, SerializeInstance, SerializeInstanceVariable};
 use derivative::Derivative;
 
 pub trait TreeManagementStorage: Sized {
 	type Storage: SerializeDB;
 	type Mapping: SerializeInstance;
+	type TouchedGC: SerializeInstanceVariable;
 
 	fn init() -> Self::Storage;
 }
@@ -39,6 +40,7 @@ fn default_noop_storage() -> () { }
 impl TreeManagementStorage for () {
 	type Storage = ();
 	type Mapping = ();
+	type TouchedGC = ();
 	fn init() -> Self { }
 }
 
@@ -192,7 +194,7 @@ impl<I, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 pub struct TreeManagement<H: Ord, I, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
-	touched_gc: bool,
+	touched_gc: SerializeVariable<bool, S::Storage, S::TouchedGC>,
 	current_gc: TreeMigrate<I, BI, V>,
 	last_in_use_index: (I, BI), // TODO rename to last inserted as we do not rebase on query
 }
@@ -205,7 +207,7 @@ impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> Default
 				neutral_element: None,
 			},
 			mapping: Default::default(),
-			touched_gc: false,
+			touched_gc: Default::default(),
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
 		}
@@ -216,14 +218,14 @@ impl<H: Ord, I: Default + Ord, BI: Default, V, S: TreeManagementStorage> TreeMan
 	/// Initialize from a default ser
 	pub fn from_ser(serialize: S::Storage) -> Self {
 		TreeManagement {
-			state: TreeState {
-				tree: Tree::from_ser(serialize),
-				neutral_element: None,
-			},
 			mapping: Default::default(),
-			touched_gc: false,
+			touched_gc: SerializeVariable::from_ser(&serialize),
 			current_gc: Default::default(),
 			last_in_use_index: Default::default(),
+			state: TreeState {
+				neutral_element: None,
+				tree: Tree::from_ser(serialize),
+			},
 		}
 	}
 
@@ -967,7 +969,7 @@ impl<
 		
 	//	self.current_gc.applied(gc); TODO pass back this reference: put it in buf more likely
 	//	(remove the associated type)
-		self.touched_gc = false;
+		self.touched_gc.handle(self.state.ser()).set(false);
 	}
 }
 
