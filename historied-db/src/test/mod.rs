@@ -18,6 +18,8 @@
 pub mod simple_impl;
 pub mod fuzz;
 
+use crate::rstd::boxed::Box;
+
 macro_rules! InMemSimpleDB {
 	($name: ident, $size: expr, $inner_module: ident) => {
 
@@ -69,7 +71,6 @@ macro_rules! InMemSimpleDB {
 
 		impl SerializeDB for InMemory {
 			const ACTIVE: bool = true;
-			type Iter = crate::rstd::btree_map::IntoIter<Vec<u8>, Vec<u8>>;
 
 			fn write(&mut self, c: &'static [u8], k: &[u8], v: &[u8]) {
 				Self::resolve_collection(c).map(|ix| {
@@ -87,12 +88,12 @@ macro_rules! InMemSimpleDB {
 				})
 			}
 
-			fn iter(&self, c: &'static [u8]) -> Self::Iter {
-				if let Some(ix) = Self::resolve_collection(c) {
+			fn iter<'a>(&'a self, c: &'static [u8]) -> crate::simple_db::SerializeDBIter<'a> {
+				Box::new(if let Some(ix) = Self::resolve_collection(c) {
 					self.0[ix].clone().into_iter()
 				} else {
 					BTreeMap::new().into_iter()
-				}
+				})
 			}
 
 			fn contains_collection(collection: &'static [u8]) -> bool {

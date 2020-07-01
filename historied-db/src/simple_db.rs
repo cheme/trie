@@ -17,6 +17,10 @@
 use derivative::Derivative;
 use crate::rstd::{BTreeMap, btree_map::Entry, marker::PhantomData, vec::Vec};
 use crate::rstd::fmt::Debug;
+use crate::rstd::boxed::Box;
+
+/// Iterator could be associated serializeDB type but dynamic type make things simplier.
+pub type SerializeDBIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 
 /// simple serialize trait, could be a noop.
 pub trait SerializeDB: Sized {
@@ -24,12 +28,11 @@ pub trait SerializeDB: Sized {
 	/// do not need to actually manage a db
 	/// (see `()` implementation).
 	const ACTIVE: bool = true;
-	type Iter: Iterator<Item = (Vec<u8>, Vec<u8>)>;
 
 	fn write(&mut self, c: &'static [u8], k: &[u8], v: &[u8]);
 	fn remove(&mut self, c: &'static [u8], k: &[u8]);
 	fn read(&self, c: &'static [u8], k: &[u8]) -> Option<Vec<u8>>;
-	fn iter(&self, c: &'static [u8]) -> Self::Iter;
+	fn iter<'a>(&'a self, c: &'static [u8]) -> SerializeDBIter<'a>;
 
 	fn contains_collection(collection: &'static [u8]) -> bool;
 
@@ -53,7 +56,7 @@ impl<'a, DB: SerializeDB, Instance: SerializeInstance> Collection<'a, DB, Instan
 	pub fn read(&self, k: &[u8]) -> Option<Vec<u8>> {
 		self.db.read(Instance::STATIC_COL, k)
 	}
-	pub fn iter(&self) -> DB::Iter {
+	pub fn iter(&self) -> SerializeDBIter<'a> {
 		self.db.iter(Instance::STATIC_COL)
 	}
 }
@@ -68,7 +71,7 @@ impl<'a, DB: SerializeDB, Instance: SerializeInstance> CollectionMut<'a, DB, Ins
 	pub fn read(&self, k: &[u8]) -> Option<Vec<u8>> {
 		self.db.read(Instance::STATIC_COL, k)
 	}
-	pub fn iter(&self) -> DB::Iter {
+	pub fn iter<'b>(&'b self) -> SerializeDBIter<'b> {
 		self.db.iter(Instance::STATIC_COL)
 	}
 }
@@ -83,7 +86,7 @@ pub trait DynSerializeDB: SerializeDB {
 	fn dyn_write(&mut self, c: &[u8], k: &[u8], v: &[u8]);
 	fn dyn_remove(&mut self, c: &[u8], k: &[u8]);
 	fn dyn_read(&self, c: &[u8], k: &[u8]) -> Option<Vec<u8>>;
-	fn dyn_iter(&self, c: &[u8]) -> Self::Iter;
+	fn dyn_iter<'a>(&'a self, c: &[u8]) -> SerializeDBIter<'a>;
 
 	fn dyn_contains_collection(collection: &[u8]) -> bool;
 //	fn dyn_read_collection<'a, DB, I>(db: &'a DB, collection: &'static[u8]) -> Option<DynCollection<'a, Self, I>>;
@@ -98,7 +101,7 @@ impl<'a, DB: DynSerializeDB, Instance: DynSerializeInstance> Collection<'a, DB, 
 			self.db.read(Instance::STATIC_COL, k)
 		}
 	}
-	pub fn dyn_iter(&self) -> DB::Iter {
+	pub fn dyn_iter(&self, c: &[u8]) -> SerializeDBIter<'a> {
 		if let Some(c) = self.instance.dyn_collection() {
 			self.db.dyn_iter(c)
 		} else {
@@ -129,7 +132,7 @@ impl<'a, DB: DynSerializeDB, Instance: DynSerializeInstance> CollectionMut<'a, D
 			self.db.read(Instance::STATIC_COL, k)
 		}
 	}
-	pub fn dyn_iter(&self) -> DB::Iter {
+	pub fn dyn_iter<'b>(&'b self) -> SerializeDBIter<'b> {
 		if let Some(c) = self.instance.dyn_collection() {
 			self.db.dyn_iter(c)
 		} else {
@@ -175,14 +178,14 @@ impl SerializeInstanceVariable for () {
 
 impl SerializeDB for () {
 	const ACTIVE: bool = false;
-	type Iter = crate::rstd::iter::Empty<(Vec<u8>, Vec<u8>)>;
+
 	fn write(&mut self, _c: &[u8], _k: &[u8], _v: &[u8]) { }
 	fn remove(&mut self, _c: &[u8], _k: &[u8]) { }
 	fn read(&self, _c: &[u8], _k: &[u8]) -> Option<Vec<u8>> {
 		None
 	}
-	fn iter(&self, _collection: &[u8]) -> Self::Iter {
-		crate::rstd::iter::empty()
+	fn iter<'a>(&'a self, _collection: &[u8]) -> SerializeDBIter<'a> {
+		Box::new(crate::rstd::iter::empty())
 	}
 	fn contains_collection(_collection: &[u8]) -> bool {
 		false
@@ -230,7 +233,7 @@ impl<'a, K, V, S, I> SerializeMap<K, V, S, I>
 		S: SerializeDB,
 		I: SerializeInstance,
 {
-	pub fn iter(&'a self, db: &'a S) -> SerializeMapIter<'a, K, V, S> {
+	pub fn iter(&'a self, db: &'a S) -> SerializeMapIter<'a, K, V> {
 		if !S::ACTIVE {
 			SerializeMapIter::Cache(self.inner.iter())
 		} else {
@@ -335,7 +338,7 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		S: SerializeDB,
 		I: SerializeInstance,
 {
-	pub fn iter(&'a self) -> SerializeMapIter<'a, K, V, S> {
+	pub fn iter(&'a self) -> SerializeMapIter<'a, K, V> {
 		if !S::ACTIVE {
 			SerializeMapIter::Cache(self.cache.iter())
 		} else {
@@ -344,21 +347,19 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 	}
 }
 
-pub enum SerializeMapIter<'a, K, V, S>
+pub enum SerializeMapIter<'a, K, V>
 	where
 		K: Codec + Ord + Clone,
 		V: Codec + Clone,
-		S: SerializeDB,
 {
 	Cache(crate::rstd::btree_map::Iter<'a, K, Option<V>>),
-	Collection(S::Iter),
+	Collection(SerializeDBIter<'a>),
 }
 
-impl<'a, K, V, S> Iterator for SerializeMapIter<'a, K, V, S>
+impl<'a, K, V> Iterator for SerializeMapIter<'a, K, V>
 	where
 		K: Codec + Ord + Clone,
 		V: Codec + Clone,
-		S: SerializeDB,
 {
 	type Item = (K, V);
 

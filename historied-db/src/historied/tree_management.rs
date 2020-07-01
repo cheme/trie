@@ -37,6 +37,7 @@ pub trait TreeManagementStorage: Sized {
 	type TreeMeta: SerializeInstanceVariable;
 	type TreeState: SerializeInstance;
 
+	// TODO delete this init function (we use from_ser)
 	fn init() -> Self::Storage;
 }
 
@@ -224,6 +225,7 @@ impl<I: Ord, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 #[derivative(Debug(bound="H: Debug, V: Debug, I: Debug, BI: Debug, S::Storage: Debug"))]
 #[derivative(Clone(bound="H: Clone, V: Clone, I: Clone, BI: Clone, S::Storage: Clone"))]
 #[cfg_attr(test, derivative(PartialEq(bound="H: PartialEq, V: PartialEq, I: PartialEq, BI: PartialEq, S::Storage: PartialEq")))]
+// TODO EMCH !!! remove V, and make neutral element a trait constant of Value.
 pub struct TreeManagement<H: Ord, I: Ord, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
@@ -308,23 +310,27 @@ impl<
 		&mut self,
 		state: &(I, BI),
 		mut drop_mapping: bool,
-		mut collect_dropped: Option<&mut Vec<H>>,
+		collect_dropped: Option<&mut Vec<H>>,
 	) {
 		drop_mapping |= collect_dropped.is_some();
 		let mut tree_meta = self.state.tree.meta.handle(&mut self.state.tree.serialize).get().clone();
 		// TODO optimized drop from I, BI == 0, 0 and ignore x, 0
 		let mapping = &mut self.mapping;
-		let collect_dropped = &mut collect_dropped;
+		let mut no_collect = Vec::new();
+		let collect_dropped = collect_dropped.unwrap_or(&mut no_collect);
 		let mut call_back = move |i: &I, bi: &BI, ser: &mut S::Storage| {
 			let mut mapping = mapping.handle(ser);
 			if drop_mapping {
 				let state = (i.clone(), bi.clone());
+				let start = collect_dropped.len();
 				// TODO again cost of reverse lookup: consider double mapping
 				if let Some(h) = mapping.iter() 
 					.find(|(_k, v)| v == &state)
 					.map(|(k, _v)| k.clone()) {
-					mapping.remove(&h);
-					collect_dropped.as_mut().map(|collect| collect.push(h));
+					collect_dropped.push(h);
+				}
+				for h in &collect_dropped[start..] {
+					mapping.remove(h);
 				}
 			}
 		};
