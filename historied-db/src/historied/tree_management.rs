@@ -994,12 +994,12 @@ impl<
 	H: Ord + Clone + Codec,
 	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
 	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
-	V: Clone,
+	V: Clone + Default + Codec,
 	S: TreeManagementStorage,
 > ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
 	type S = ForkPlan<I, BI>;
 	/// Start treshold and neutral element
-	type GC = TreeState<I, BI, V, S>;
+	type GC = TreeStateGc<I, BI, V>;
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeMigrate<I, BI, V>;
 
@@ -1008,7 +1008,21 @@ impl<
 	}
 
 	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
-		Some(crate::Ref::Borrowed(&self.state))
+		let mut storage: BTreeMap<I, BranchState<I, BI>> = Default::default();
+
+		// TODO can have a ref to the serialized collection instead (if S is ACTIVE)
+		// or TODO restor to ref of treestate if got non mutable interface for access.
+		//  + could remove default and codec of V
+		for (ix, v) in self.state.tree.storage.iter(&self.state.tree.serialize) {
+			storage.insert(ix, v);
+		}
+		let gc = TreeStateGc {
+			storage,
+			composite_treshold: self.state.tree.meta.get().composite_treshold.clone(),
+			neutral_element: self.neutral_element.get().clone(),
+		};
+
+		Some(crate::Ref::Owned(gc))
 	}
 }
 
@@ -1016,7 +1030,7 @@ impl<
 	H: Clone + Ord + Codec,
 	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
 	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
-	V: Clone,
+	V: Clone + Default + Codec,
 	S: TreeManagementStorage,
 > Management<H> for TreeManagement<H, I, BI, V, S> {
 	// TODO attach gc infos to allow some lazy cleanup (make it optional)
@@ -1072,7 +1086,7 @@ impl<
 	H: Clone + Ord + Codec,
 	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
 	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
-	V: Clone,
+	V: Clone + Default + Codec,
 	S: TreeManagementStorage,
 > ForkableManagement<H> for TreeManagement<H, I, BI, V, S> {
 

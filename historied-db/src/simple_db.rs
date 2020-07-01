@@ -223,6 +223,22 @@ impl<'a, K: Ord, V, S, I> SerializeMap<K, V, S, I> {
 		}
 	}
 }
+impl<'a, K, V, S, I> SerializeMap<K, V, S, I> 
+	where
+		K: Codec + Ord + Clone,
+		V: Codec + Clone,
+		S: SerializeDB,
+		I: SerializeInstance,
+{
+	pub fn iter(&'a self, db: &'a S) -> SerializeMapIter<'a, K, V, S> {
+		if !S::ACTIVE {
+			SerializeMapIter::Cache(self.inner.iter())
+		} else {
+			let collection = Collection { db, instance: &self.instance };
+			SerializeMapIter::Collection(collection.iter())
+		}
+	}
+}
 
 pub struct SerializeMapHandle<'a, K, V, S, I> {
 	cache: &'a mut BTreeMap<K, Option<V>>,
