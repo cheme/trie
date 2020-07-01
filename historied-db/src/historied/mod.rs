@@ -78,7 +78,7 @@ pub trait Value<V>: ValueRef<V> {
 
 	// TODO mut on gc is related to cache of serialize, if inner_mut
 	// we can & back.
-	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()>;
+	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()>;
 
 	fn is_in_migrate(index: &Self::Index, gc: &Self::Migrate) -> bool;
 
@@ -170,7 +170,7 @@ impl<K: Ord + Clone, V: Clone + Eq, H: Value<V>> StateDB<K, V> for BTreeMap<K, V
 		self.0.remove(&key);
 	}
 
-	fn gc(&mut self, gc: &mut Self::GC) {
+	fn gc(&mut self, gc: &Self::GC) {
 		// retain for btreemap missing here.
 		let mut to_remove = Vec::new();
 		for (key, h) in self.0.iter_mut() {
@@ -263,7 +263,7 @@ impl<
 		self.touched_keys.entry(at.index()).or_default().push(key.clone());
 	}
 
-	fn gc(&mut self, gc: &mut Self::GC) {
+	fn gc(&mut self, gc: &Self::GC) {
 		let mut keys: crate::rstd::BTreeSet<_> = Default::default();
 		for touched in self.touched_keys.values() {
 			for key in touched.iter() {

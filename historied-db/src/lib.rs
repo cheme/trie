@@ -122,7 +122,7 @@ pub trait StateDB<K, V>: StateDBRef<K, V> {
 	/// The caller should ensure that a key only corresponds to one value.
 	fn remove(&mut self, key: &K, at: &Self::SE);
 	// TODO see issue on value for mut on gc
-	fn gc(&mut self, gc: &mut Self::GC);
+	fn gc(&mut self, gc: &Self::GC);
 	// TODO see issue on value for mut on gc
 	fn migrate(&mut self, mig: &mut Self::Migrate);
 }
@@ -164,6 +164,7 @@ pub trait ManagementRef<H> {
 	/// Returns the historical state representation for a given historical tag.
 	fn get_db_state(&mut self, tag: &H) -> Option<Self::S>;
 	/// returns optional to avoid holding lock of do nothing GC.
+	/// TODO this would need RefMut or make the serialize cache layer inner mutable.
 	fn get_gc(&self) -> Option<Ref<Self::GC>>;
 }
 
