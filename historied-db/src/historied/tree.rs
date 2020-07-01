@@ -170,7 +170,7 @@ impl<
 		UpdateResult::Unchanged
 	}
 
-	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()> {
+	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
 
 		let neutral = &gc.neutral_element;
 		let mut result = UpdateResult::Unchanged;

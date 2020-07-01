@@ -160,7 +160,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		UpdateResult::Unchanged
 	}
 
-	fn gc(&mut self, gc: &mut Self::GC) -> UpdateResult<()> {
+	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
 		if gc.new_start.is_some() && gc.new_start == gc.new_end {
 			self.0.clear();
 			return UpdateResult::Cleared(());
