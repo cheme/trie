@@ -16,7 +16,7 @@
 //! Can be use to replace an array and skip serializing
 //! deserializing step for persistent storage.
 
-// TODO parameterized u64 (historied value) state (put it in config).
+// TODO parameterized u32 (historied value) state (put it in config).
 
 // TODO next split between consecutive indexed values
 // TODO next split consecutive with range indexing
@@ -24,6 +24,7 @@
 use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
 use super::HistoriedValue;
+use super::linear::{LinearStorage, LinearStorageMem};
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -119,8 +120,8 @@ impl EncodedArrayConfig for DefaultVersion {
 	}
 }
 
-// encoding size as u64
-const SIZE_BYTE_LEN: usize = 8;
+// encoding size as u32
+const SIZE_BYTE_LEN: usize = 4;
 
 // Basis implementation to be on par with implementation using
 // vec like container. Those method could be move to a trait
@@ -169,14 +170,14 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		self.remove_range(0, index);
 	}
 
-	pub(crate) fn pop(&mut self) -> Option<HistoriedValue<Vec<u8>, u64>> {
+	pub(crate) fn pop(&mut self) -> Option<HistoriedValue<Vec<u8>, u32>> {
 		let len = self.len();
 		if len == 0 {
 			return None;
 		}
 		let start_ix = self.index_element(len - 1);
 		let end_ix = self.index_start();
-		let state = self.read_le_u64(start_ix);
+		let state = self.read_le_u32(start_ix);
 		let value = self.0[start_ix + SIZE_BYTE_LEN..end_ix].to_vec();
 		if len - 1 == 0 {
 			self.clear();
@@ -190,12 +191,12 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		Some(HistoriedValue { value, state })
 	}
 
-	pub(crate) fn push(&mut self, val: HistoriedValue<&[u8], u64>) {
+	pub(crate) fn push(&mut self, val: HistoriedValue<&[u8], u32>) {
 		self.push_extra(val, &[])
 	}
 
 	/// variant of push where part of the value is in a second slice.
-	pub(crate) fn push_extra(&mut self, val: HistoriedValue<&[u8], u64>, extra: &[u8]) {
+	pub(crate) fn push_extra(&mut self, val: HistoriedValue<&[u8], u32>, extra: &[u8]) {
 		let len = self.len();
 		let start_ix = self.index_start();
 		let end_ix = self.0.len();
@@ -204,7 +205,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		let mut new_ix = self.0[start_ix..end_ix].to_vec();
 		// truncate here can be bad
 		self.0.to_mut().truncate(start_ix + SIZE_BYTE_LEN);
-		self.write_le_u64(start_ix, val.state);
+		self.write_le_u32(start_ix, val.state);
 		self.0.to_mut().extend_from_slice(val.value);
 		self.0.to_mut().extend_from_slice(extra);
 		self.0.to_mut().append(&mut new_ix);
@@ -259,7 +260,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 
 	}
 
-	pub(crate) fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u64> {
+	pub(crate) fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u32> {
 		let start_ix = self.index_element(index);
 		let len = self.len();
 		let end_ix = if index == len - 1 {
@@ -267,7 +268,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		} else {
 			self.index_element(index + 1)
 		};
-		let state = self.read_le_u64(start_ix);
+		let state = self.read_le_u32(start_ix);
 		HistoriedValue {
 			value: &self.0[start_ix + SIZE_BYTE_LEN..end_ix],
 			state,
@@ -335,40 +336,46 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		self.0.to_mut()[start_to..start_to + size].copy_from_slice(&buffer[..]);
 	}
 
-	// Usize encoded as le u64 (for historied value).
-	fn read_le_u64(&self, pos: usize) -> u64 {
+	// Usize encoded as le u32 (for historied value).
+	fn read_le_u32(&self, pos: usize) -> u32 {
 		let mut buffer = [0u8; SIZE_BYTE_LEN];
 		buffer.copy_from_slice(&self.0[pos..pos + SIZE_BYTE_LEN]);
-		u64::from_le_bytes(buffer)
+		u32::from_le_bytes(buffer)
 	}
 
-	// Usize encoded as le u64 (only for internal indexing).
+	// Usize encoded as le u32 (only for internal indexing).
 	fn read_le_usize(&self, pos: usize) -> usize {
 		let mut buffer = [0u8; SIZE_BYTE_LEN];
 		buffer.copy_from_slice(&self.0[pos..pos + SIZE_BYTE_LEN]);
-		u64::from_le_bytes(buffer) as usize
+		u32::from_le_bytes(buffer) as usize
 	}
 
-	// Usize encoded as le u64.
+	// Usize encoded as le u32.
 	fn write_le_usize(&mut self, pos: usize, value: usize) {
-		let buffer = (value as u64).to_le_bytes();
+		let buffer = (value as u32).to_le_bytes();
 		self.0.to_mut()[pos..pos + SIZE_BYTE_LEN].copy_from_slice(&buffer[..]);
 	}
 
-	// Usize encoded as le u64.
+	// Usize encoded as le u32.
 	fn append_le_usize(&mut self, value: usize) {
-		let buffer = (value as u64).to_le_bytes();
+		let buffer = (value as u32).to_le_bytes();
 		self.0.to_mut().extend_from_slice(&buffer[..]);
 	}
 
-	// Usize encoded as le u64.
-	fn write_le_u64(&mut self, pos: usize, value: u64) {
-		let buffer = (value as u64).to_le_bytes();
+	// Usize encoded as le u32.
+	fn write_le_u32(&mut self, pos: usize, value: u32) {
+		let buffer = (value as u32).to_le_bytes();
 		self.0.to_mut()[pos..pos + SIZE_BYTE_LEN].copy_from_slice(&buffer[..]);
 	}
 
 }
+/*
+impl<'a, F: EncodedArrayConfig> LinearStorageMem<&'a[u8], u32> for EncodedArry<'a, F> {
+}
 
+impl<'a, F: EncodedArrayConfig> LinearStorage<&'a[u8], u32> for EncodedArry<'a, F> {
+}
+*/
 #[cfg(test)]
 mod test {
 	use super::*;
