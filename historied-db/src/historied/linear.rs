@@ -73,9 +73,35 @@ const ALLOCATED_HISTORY: usize = 2;
 /// not required persistence and is not serialized.
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
+pub struct Linear<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
+
+/// Array like buffer for in memory storage.
+/// By in memory we expect that this will
+/// not required persistence and is not serialized.
+#[derive(Debug, Clone)]
+#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
-impl<V, S: Clone> MemoryOnly<V, S> {
+/// Backend for linear storage with inmemory reference.
+pub trait LinearStorageRef<V, S> {
+}
+
+/// Backend for linear storage.
+pub trait LinearStorage<V, S> {
+}
+
+impl<V, S> LinearStorageRef<V, S> for MemoryOnly<V, S> {
+}
+
+impl<V, S> LinearStorage<V, S> for MemoryOnly<V, S> {
+}
+
+/// Implementation of linear value history storage.
+#[derive(Debug, Clone)]
+#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
+pub struct LinearNext<V, S, D>(D, PhantomData<(V, S)>);
+
+impl<V, S: Clone> Linear<V, S> {
 	pub fn remove_start(&mut self, split_off: usize) {
 		if self.0.spilled() {
 			let new = replace(&mut self.0, Default::default());
@@ -88,7 +114,7 @@ impl<V, S: Clone> MemoryOnly<V, S> {
 	}
 }
 
-impl<V: Clone, S: LinearState> ValueRef<V> for MemoryOnly<V, S> {
+impl<V: Clone, S: LinearState> ValueRef<V> for Linear<V, S> {
 	type S = S;
 
 	fn get(&self, at: &Self::S) -> Option<V> {
@@ -104,7 +130,7 @@ impl<V: Clone, S: LinearState> ValueRef<V> for MemoryOnly<V, S> {
 	}
 }
 
-impl<V: Clone, S: LinearState> InMemoryValueRef<V> for MemoryOnly<V, S> {
+impl<V: Clone, S: LinearState> InMemoryValueRef<V> for Linear<V, S> {
 	fn get_ref(&self, at: &Self::S) -> Option<&V> {
 		let mut index = self.0.len();
 		if index == 0 {
@@ -122,8 +148,8 @@ impl<V: Clone, S: LinearState> InMemoryValueRef<V> for MemoryOnly<V, S> {
 	}
 }
 
-//impl<V: Clone, S: LinearState, Q: LinearStateLatest<S>> Value<V> for MemoryOnly<V, S> {
-impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S> {
+//impl<V: Clone, S: LinearState, Q: LinearStateLatest<S>> Value<V> for Linear<V, S> {
+impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for Linear<V, S> {
 	type SE = Latest<S>;
 	type Index = S;
 	type GC = LinearGC<S, V>;
@@ -136,7 +162,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 		let mut v = smallvec::SmallVec::default();
 		let state = at.latest().clone();
 		v.push(HistoriedValue{ value, state });
-		MemoryOnly(v)
+		Linear(v)
 	}
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
@@ -249,7 +275,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>> Value<V> for MemoryOnly<V, S>
 }
 
 
-impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for MemoryOnly<V, S> {
+impl<V: Clone + Eq, S: LinearState + SubAssign<S>> InMemoryValue<V> for Linear<V, S> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let mut index = self.0.len();
 		if index == 0 {
@@ -439,7 +465,7 @@ V: Clone,
 	}
 }
 
-impl MemoryOnly<Option<Vec<u8>>, u32> {
+impl Linear<Option<Vec<u8>>, u32> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {

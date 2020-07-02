@@ -15,7 +15,7 @@
 //! Tree historied data historied db implementations.
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{MemoryOnly as MemoryOnlyLinear, LinearState, LinearGC};
+use crate::historied::linear::{Linear, LinearState, LinearGC};
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::Latest;
@@ -27,8 +27,8 @@ use crate::Latest;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct MemoryOnly<I, BI, V> {
-	branches: Vec<MemoryOnlyBranch<I, BI, V>>,
+pub struct Tree<I, BI, V> {
+	branches: Vec<Branch<I, BI, V>>,
 	// TODO add optional range indexing.
 	// Indexing is over couple (I, BI), runing on fix size batches (aka max size).
 	// First try latest, then try indexing, (needs 3 methods
@@ -41,9 +41,9 @@ pub struct MemoryOnly<I, BI, V> {
 	// (conf needed in state also with optional indexing).
 }
 
-impl<I, BI, V> Default for MemoryOnly<I, BI, V> {
+impl<I, BI, V> Default for Tree<I, BI, V> {
 	fn default() -> Self {
-		MemoryOnly{
+		Tree{
 			branches: Vec::new(),
 		}
 	}
@@ -51,17 +51,17 @@ impl<I, BI, V> Default for MemoryOnly<I, BI, V> {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct MemoryOnlyBranch<I, BI, V> {
+pub struct Branch<I, BI, V> {
 	branch_index: I,
-	history: MemoryOnlyLinear<V, BI>,
+	history: Linear<V, BI>,
 }
 
-impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> MemoryOnlyBranch<I, BI, V> {
+impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> Branch<I, BI, V> {
 	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
 		let (branch_index, index) = state.latest().clone();
 		let index = Latest::unchecked_latest(index); // TODO cast ptr?
-		let history = MemoryOnlyLinear::new(value, &index);
-		MemoryOnlyBranch{
+		let history = Linear::new(value, &index);
+		Branch{
 			branch_index,
 			history,
 		}
@@ -72,7 +72,7 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>, // TODO consider subassing usize or minus one trait...
 	V: Clone,
-> ValueRef<V> for MemoryOnly<I, BI, V> {
+> ValueRef<V> for Tree<I, BI, V> {
 	type S = ForkPlan<I, BI>;
 
 	fn get(&self, at: &Self::S) -> Option<V> {
@@ -92,7 +92,7 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>,
 	V: Clone,
-> InMemoryValueRef<V> for MemoryOnly<I, BI, V> {
+> InMemoryValueRef<V> for Tree<I, BI, V> {
 	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
 		let mut index = self.branches.len();
 		// note that we expect branch index to be linearily set
@@ -138,7 +138,7 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
-> Value<V> for MemoryOnly<I, BI, V> {
+> Value<V> for Tree<I, BI, V> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
 	type GC = TreeStateGc<I, BI, V>;
@@ -146,8 +146,8 @@ impl<
 
 	fn new(value: V, at: &Self::SE) -> Self {
 		let mut v = Vec::new();
-		v.push(MemoryOnlyBranch::new(value, at));
-		MemoryOnly {
+		v.push(Branch::new(value, at));
+		Tree {
 			branches: v,
 		}
 	}
@@ -235,7 +235,7 @@ impl<
 				return branch.new_range.as_ref()
 					.map(|gc| {
 						let linear_migrate = (bi.clone(), gc.clone());
-						MemoryOnlyLinear::is_in_migrate(linear_index, &linear_migrate)
+						Linear::is_in_migrate(linear_index, &linear_migrate)
 					}).unwrap_or(true);
 			}
 			if &branch.branch_index < &index {
@@ -294,7 +294,7 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
-> InMemoryValue<V> for MemoryOnly<I, BI, V> {
+> InMemoryValue<V> for Tree<I, BI, V> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let (branch_index, index) = at.latest();
 		for branch in self.branches.iter_mut().rev() {
@@ -324,7 +324,7 @@ impl<
 				insert_at = iter_index;
 			}
 		}
-		let branch = MemoryOnlyBranch::new(value, at);
+		let branch = Branch::new(value, at);
 		if insert_at == self.branches.len() {
 			self.branches.push(branch);
 		} else {
@@ -334,7 +334,7 @@ impl<
 	}
 }
 
-impl MemoryOnly<u32, u32, Option<Vec<u8>>> {
+impl Tree<u32, u32, Option<Vec<u8>>> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {
@@ -360,7 +360,7 @@ mod test {
 		// |		 |> 5: 1
 		// |> 2: _
 		let mut states = test_states();
-		let mut item: MemoryOnly<u32, u32, u32> = Default::default();
+		let mut item: Tree<u32, u32, u32> = Default::default();
 
 		for i in 0..6 {
 			assert_eq!(item.get(&states.query_plan(i)), None);
