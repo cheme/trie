@@ -53,14 +53,14 @@ impl<I, BI, V> Default for Tree<I, BI, V> {
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Branch<I, BI, V> {
 	branch_index: I,
-	history: Linear<V, BI>,
+	history: Linear<V, BI, crate::historied::linear::MemoryOnly<V, BI>>,
 }
 
 impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> Branch<I, BI, V> {
 	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
 		let (branch_index, index) = state.latest().clone();
 		let index = Latest::unchecked_latest(index); // TODO cast ptr?
-		let history = Linear::new(value, &index);
+		let history = Linear::<_, _, crate::historied::linear::MemoryOnly<V, BI>>::new(value, &index);
 		Branch{
 			branch_index,
 			history,
@@ -235,7 +235,7 @@ impl<
 				return branch.new_range.as_ref()
 					.map(|gc| {
 						let linear_migrate = (bi.clone(), gc.clone());
-						Linear::is_in_migrate(linear_index, &linear_migrate)
+						Linear::<_, _, crate::historied::linear::MemoryOnly<V, BI>>::is_in_migrate(linear_index, &linear_migrate)
 					}).unwrap_or(true);
 			}
 			if &branch.branch_index < &index {

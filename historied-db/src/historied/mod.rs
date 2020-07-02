@@ -43,6 +43,9 @@ pub trait ValueRef<V> {
 	fn is_empty(&self) -> bool;
 }
 
+// TODO EMCH refact with 'a for inner value
+// and a get value type (see test on rust playground).
+// So we only got ValueRef type.
 pub trait InMemoryValueRef<V>: ValueRef<V> {
 	/// Get reference to the value at this state.
 	fn get_ref(&self, at: &Self::S) -> Option<&V>;
