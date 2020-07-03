@@ -449,8 +449,6 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorageMem<V, S>> In
 		self.0.push(HistoriedValue {value, state: at.clone()});
 		UpdateResult::Changed(result.map(|r| r.value))
 	}
-
-
 }
 
 #[derive(Debug, Clone, Encode, Decode)]

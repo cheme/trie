@@ -15,7 +15,7 @@
 //! Tree historied data historied db implementations.
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{Linear, LinearState, LinearGC};
+use crate::historied::linear::{Linear, LinearStorage, LinearStorageMem, LinearState, LinearGC};
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::Latest;
@@ -27,8 +27,8 @@ use crate::Latest;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct Tree<I, BI, V> {
-	branches: Vec<Branch<I, BI, V>>,
+pub struct Tree<I, BI, V, BD> {
+	branches: Vec<Branch<I, BI, V, BD>>,
 	// TODO add optional range indexing.
 	// Indexing is over couple (I, BI), runing on fix size batches (aka max size).
 	// First try latest, then try indexing, (needs 3 methods
@@ -41,7 +41,7 @@ pub struct Tree<I, BI, V> {
 	// (conf needed in state also with optional indexing).
 }
 
-impl<I, BI, V> Default for Tree<I, BI, V> {
+impl<I, BI, V, BD> Default for Tree<I, BI, V, BD> {
 	fn default() -> Self {
 		Tree{
 			branches: Vec::new(),
@@ -51,16 +51,22 @@ impl<I, BI, V> Default for Tree<I, BI, V> {
 
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct Branch<I, BI, V> {
+pub struct Branch<I, BI, V, BD> {
 	branch_index: I,
-	history: Linear<V, BI, crate::historied::linear::MemoryOnly<V, BI>>,
+	history: Linear<V, BI, BD>,
 }
 
-impl<I: Clone, BI: LinearState + SubAssign<BI>, V: Clone + Eq> Branch<I, BI, V> {
+impl<
+	I: Clone,
+	BI: LinearState + SubAssign<BI>,
+	V: Clone + Eq,
+	BD: LinearStorage<V, BI>,
+> Branch<I, BI, V, BD>
+{
 	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
 		let (branch_index, index) = state.latest().clone();
 		let index = Latest::unchecked_latest(index); // TODO cast ptr?
-		let history = Linear::<_, _, crate::historied::linear::MemoryOnly<V, BI>>::new(value, &index);
+		let history = Linear::new(value, &index);
 		Branch{
 			branch_index,
 			history,
@@ -72,15 +78,53 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>, // TODO consider subassing usize or minus one trait...
 	V: Clone,
-> ValueRef<V> for Tree<I, BI, V> {
+	BD: LinearStorage<V, BI>,
+> ValueRef<V> for Tree<I, BI, V, BD> {
 	type S = ForkPlan<I, BI>;
 
 	fn get(&self, at: &Self::S) -> Option<V> {
-		self.get_ref(at).map(|v| v.clone())
+		// TODO EMCH !! lifetime refacto to avoid this code duplication with get_ref
+		let mut index = self.branches.len();
+		// note that we expect branch index to be linearily set
+		// along a branch (no state containing unordered branch_index
+		// and no history containing unorderd branch_index).
+		if index == 0 {
+			return None;
+		}
+
+		for (state_branch_range, state_branch_index) in at.iter() {
+			while index > 0 {
+				let branch_index = &self.branches[index - 1].branch_index;
+				if branch_index < &state_branch_index {
+					break;
+				} else if branch_index == &state_branch_index {
+					// TODO add a lower bound check (maybe debug_assert it only).
+					let mut upper_bound = state_branch_range.end.clone();
+					upper_bound -= 1;
+					if let Some(result) = self.branches[index - 1].history.get(&upper_bound) {
+						return Some(result)
+					}
+				}
+				index -= 1;
+			}
+		}
+
+		// composite part.
+		while index > 0 {
+			let branch_index = &self.branches[index - 1].branch_index;
+			if branch_index <= &at.composite_treshold.0 {
+				if let Some(result) = self.branches[index - 1].history.get(&at.composite_treshold.1) {
+					return Some(result)
+				}
+			}
+			index -= 1;
+		}
+	
+		None
 	}
 
 	fn contains(&self, at: &Self::S) -> bool {
-		self.get_ref(at).is_some()
+		self.get(at).is_some() // TODO avoid clone??
 	}
 
 	fn is_empty(&self) -> bool {
@@ -92,7 +136,8 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>,
 	V: Clone,
-> InMemoryValueRef<V> for Tree<I, BI, V> {
+	BD: LinearStorageMem<V, BI>,
+> InMemoryValueRef<V> for Tree<I, BI, V, BD> {
 	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
 		let mut index = self.branches.len();
 		// note that we expect branch index to be linearily set
@@ -138,7 +183,8 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
-> Value<V> for Tree<I, BI, V> {
+	BD: LinearStorage<V, BI>,
+> Value<V> for Tree<I, BI, V, BD> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
 	type GC = TreeStateGc<I, BI, V>;
@@ -153,7 +199,29 @@ impl<
 	}
 
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()> {
-		self.set_mut(value, at).map(|v| ())
+		// Warn dup code, can be merge if change set to return previ value: with
+		// ref refact will be costless
+		let (branch_index, index) = at.latest();
+		let mut insert_at = self.branches.len();
+		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
+			if &branch.branch_index == branch_index {
+				let index = Latest::unchecked_latest(index.clone());// TODO reftransparent &
+				return branch.history.set(value, &index);
+			}
+			if &branch.branch_index < branch_index {
+				insert_at = iter_index + 1;
+				break;
+			} else {
+				insert_at = iter_index;
+			}
+		}
+		let branch = Branch::new(value, at);
+		if insert_at == self.branches.len() {
+			self.branches.push(branch);
+		} else {
+			self.branches.insert(insert_at, branch);
+		}
+		UpdateResult::Changed(())
 	}
 
 	fn discard(&mut self, at: &Self::SE) -> UpdateResult<Option<V>> {
@@ -294,7 +362,8 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
-> InMemoryValue<V> for Tree<I, BI, V> {
+	BD: LinearStorageMem<V, BI>,
+> InMemoryValue<V> for Tree<I, BI, V, BD> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let (branch_index, index) = at.latest();
 		for branch in self.branches.iter_mut().rev() {
@@ -310,6 +379,8 @@ impl<
 	}
 
 	fn set_mut(&mut self, value: V, at: &Self::SE) -> UpdateResult<Option<V>> {
+		// Warn dup code, can be merge if change set to return previ value: with
+		// ref refact will be costless
 		let (branch_index, index) = at.latest();
 		let mut insert_at = self.branches.len();
 		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
@@ -334,7 +405,9 @@ impl<
 	}
 }
 
-impl Tree<u32, u32, Option<Vec<u8>>> {
+type LinearBackendTempSize = crate::historied::linear::MemoryOnly<Option<Vec<u8>>, u32>;
+
+impl Tree<u32, u32, Option<Vec<u8>>, LinearBackendTempSize> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {
@@ -354,13 +427,15 @@ mod test {
 
 	#[test]
 	fn test_set_get() {
+		// TODO EMCH parameterize test
+		type BD = crate::historied::linear::MemoryOnly<u32, u32>;
 		// 0> 1: _ _ X
 		// |			 |> 3: 1
 		// |			 |> 4: 1
 		// |		 |> 5: 1
 		// |> 2: _
 		let mut states = test_states();
-		let mut item: Tree<u32, u32, u32> = Default::default();
+		let mut item: Tree<u32, u32, u32, BD> = Default::default();
 
 		for i in 0..6 {
 			assert_eq!(item.get(&states.query_plan(i)), None);
