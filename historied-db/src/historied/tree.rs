@@ -19,13 +19,14 @@ use crate::historied::linear::{Linear, LinearStorage, LinearStorageMem, LinearSt
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::Latest;
+use codec::{Encode, Decode};
 
 // TODO for not in memory we need some direct or indexed api, returning value
 // and the info if there can be lower value index (not just a direct index).
 // -> then similar to those reverse iteration with possible early exit.
 // -> Also need to attach some location index (see enumerate use here)
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Tree<I, BI, V, BD> {
 	branches: Vec<Branch<I, BI, V, BD>>,
@@ -49,7 +50,7 @@ impl<I, BI, V, BD> Default for Tree<I, BI, V, BD> {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Branch<I, BI, V, BD> {
 	branch_index: I,

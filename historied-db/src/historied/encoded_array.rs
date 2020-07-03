@@ -25,6 +25,7 @@ use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
 use super::HistoriedValue;
 use super::linear::{LinearStorage, LinearStorageMem};
+use codec::{Encode, Decode, Input as CodecInput};
 
 #[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
@@ -33,6 +34,30 @@ use super::linear::{LinearStorage, LinearStorageMem};
 /// storage.
 /// Could be use for direct access memory to.
 pub struct EncodedArray<'a, F>(EncodedArrayBuff<'a>, PhantomData<F>);
+
+impl<'a, A> Encode for EncodedArray<'a, A> {
+
+	fn size_hint(&self) -> usize {
+		self.0.len() + 8
+	}
+
+	fn encode(&self) -> Vec<u8> {
+		self.0.encode()
+	}
+
+/*	fn using_encoded<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
+		f(&self.0)
+	}*/
+}
+
+
+impl<'a, A> Decode for EncodedArray<'a, A> {
+	fn decode<I: CodecInput>(value: &mut I) -> Result<Self, codec::Error> {
+		let v: Vec<u8> = Vec::decode(value)?;
+		let cow_value = Cow::Owned(v);
+		Ok(EncodedArray(EncodedArrayBuff::Cow(cow_value), PhantomData))
+	}
+}
 
 #[derive(Debug)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]

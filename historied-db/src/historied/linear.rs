@@ -76,7 +76,7 @@ const ALLOCATED_HISTORY: usize = 2;
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
 /// Implementation of linear value history storage.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Linear<V, S, D>(D, PhantomData<(V, S)>);
 
