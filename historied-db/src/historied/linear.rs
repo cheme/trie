@@ -92,7 +92,7 @@ pub trait LinearStorageMem<V, S>: LinearStorage<V, S> {
 pub trait LinearStorage<V, S>: Default {
 	/// This does not need to be very efficient as it is mainly for
 	/// garbage collection.
-	fn remove_start(&mut self, split_off: usize);
+	fn truncate_until(&mut self, split_off: usize);
 	/// Number of element for different S.
 	fn len(&self) -> usize;
 	/// Array like get.
@@ -111,6 +111,8 @@ pub trait LinearStorage<V, S>: Default {
 	fn pop(&mut self) -> Option<HistoriedValue<V, S>>;
 	fn clear(&mut self);
 	fn truncate(&mut self, at: usize);
+	/// This can be slow, only define in migrate.
+	/// TODO consider renaming.
 	fn emplace(&mut self, at: usize, value: HistoriedValue<V, S>);
 }
 
@@ -139,7 +141,7 @@ impl<V: Clone, S: Clone> LinearStorageMem<V, S> for MemoryOnly<V, S> {
 }
 
 impl<V: Clone, S: Clone> LinearStorage<V, S> for MemoryOnly<V, S> {
-	fn remove_start(&mut self, split_off: usize) {
+	fn truncate_until(&mut self, split_off: usize) {
 		if self.0.spilled() {
 			let new = replace(&mut self.0, Default::default());
 			self.0 = smallvec::SmallVec::from_vec(new.into_vec().split_off(split_off));
@@ -353,7 +355,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 				self.0.clear();
 				return UpdateResult::Cleared(());
 			}
-			self.0.remove_start(index);
+			self.0.truncate_until(index);
 			UpdateResult::Changed(())
 		} else {
 			return end_result;

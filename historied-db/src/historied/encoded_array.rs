@@ -18,7 +18,7 @@
 
 // TODO parameterized u32 (historied value) state (put it in config).
 
-// TODO next split between consecutive indexed values
+// TODO next split between consecutive indexed values (replace write length by generic write meta)
 // TODO next split consecutive with range indexing
 
 use crate::rstd::marker::PhantomData;
@@ -37,7 +37,7 @@ pub struct EncodedArray<'a, F>(EncodedArrayBuff<'a>, PhantomData<F>);
 #[derive(Debug)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 enum EncodedArrayBuff<'a> {
-	Cow(Cow<'a, [u8]>),
+	Cow(Cow<'a, [u8]>), // TODO consider remove Cow and add third variant
 	Mut(&'a mut Vec<u8>),
 }
 
@@ -128,7 +128,6 @@ const SIZE_BYTE_LEN: usize = 4;
 // implementation.
 // Those function requires checked index.
 impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
-
 	pub fn into_owned(self) -> EncodedArray<'static, F> {
     EncodedArray(EncodedArrayBuff::Cow(Cow::from(self.0.into_owned())), PhantomData)
   }
@@ -137,61 +136,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
     self.0.into_owned()
   }
 
-	pub(crate) fn len(&self) -> usize {
-		let len = self.0.len();
-		self.read_le_usize(len - SIZE_BYTE_LEN) as usize
-	}
-
-	pub(crate) fn clear(&mut self) {
-		self.write_le_usize(F::version_len(), 0);
-		self.0.to_mut().truncate(F::version_len() + SIZE_BYTE_LEN);
-	}
-
-	#[cfg(test)]
-	fn truncate(&mut self, index: usize) {
-		if index == 0 {
-			self.clear();
-			return;
-		}
-		let len = self.len();
-		if index >= len {
-			return;
-		}
-		let start_ix = self.index_start();
-		let new_start = self.index_element(index) as usize;
-		let len_ix = index * SIZE_BYTE_LEN;
-		self.slice_copy(start_ix, new_start, len_ix);
-		self.write_le_usize(new_start + len_ix - SIZE_BYTE_LEN, index);
-		self.0.to_mut().truncate(new_start + len_ix);
-	}
-
-	// index stay in truncated content
-	pub(crate) fn truncate_until(&mut self, index: usize) {
-		self.remove_range(0, index);
-	}
-
-	pub(crate) fn pop(&mut self) -> Option<HistoriedValue<Vec<u8>, u32>> {
-		let len = self.len();
-		if len == 0 {
-			return None;
-		}
-		let start_ix = self.index_element(len - 1);
-		let end_ix = self.index_start();
-		let state = self.read_le_u32(start_ix);
-		let value = self.0[start_ix + SIZE_BYTE_LEN..end_ix].to_vec();
-		if len - 1 == 0 {
-			self.clear();
-			return Some(HistoriedValue { value, state })	
-		} else {
-			self.write_le_usize(self.0.len() - (SIZE_BYTE_LEN * 2), len - 1);
-		};
-		let ix_size = (len * SIZE_BYTE_LEN) - SIZE_BYTE_LEN;
-		self.slice_copy(end_ix, start_ix, ix_size);
-		self.0.to_mut().truncate(start_ix + ix_size);
-		Some(HistoriedValue { value, state })
-	}
-
-	pub(crate) fn push(&mut self, val: HistoriedValue<&[u8], u32>) {
+	fn push_slice(&mut self, val: HistoriedValue<&[u8], u32>) {
 		self.push_extra(val, &[])
 	}
 
@@ -200,8 +145,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		let len = self.len();
 		let start_ix = self.index_start();
 		let end_ix = self.0.len();
-		// A sized buffer and multiple index to avoid to big copy
-		// should be use here.
+		// TODO EMCH use slice copy within after extend, no need for buffer!!!!
 		let mut new_ix = self.0[start_ix..end_ix].to_vec();
 		// truncate here can be bad
 		self.0.to_mut().truncate(start_ix + SIZE_BYTE_LEN);
@@ -257,10 +201,9 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		let end_index = start_ix + len * SIZE_BYTE_LEN;
 		self.write_le_usize(end_index - SIZE_BYTE_LEN, len);
 		self.0.to_mut().truncate(end_index);
-
 	}
 
-	pub(crate) fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u32> {
+	fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u32> {
 		let start_ix = self.index_element(index);
 		let len = self.len();
 		let end_ix = if index == len - 1 {
@@ -274,7 +217,6 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 			state,
 		}
 	}
-
 }
 
 const EMPTY_SERIALIZED: [u8; SIZE_BYTE_LEN] = [0u8; SIZE_BYTE_LEN];
@@ -369,13 +311,132 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 	}
 
 }
-/*
-impl<'a, F: EncodedArrayConfig> LinearStorageMem<&'a[u8], u32> for EncodedArry<'a, F> {
+
+impl<'a, F: EncodedArrayConfig> LinearStorage<Vec<u8>, u32> for EncodedArray<'a, F> {
+//impl<'a, F: EncodedArrayConfig> LinearStorage<'a, &'a[u8], u32> for EncodedArray<'a, F> {
+	fn truncate_until(&mut self, split_off: usize) {
+		self.remove_range(0, split_off);
+	}
+
+	fn len(&self) -> usize {
+		let len = self.0.len();
+		self.read_le_usize(len - SIZE_BYTE_LEN) as usize
+	}
+
+	// TODO lifetime in Linear storage refacto
+	// fn get(&self, index: usize) -> Option<HistoriedValue<&'a[u8], u32>> {
+	fn get(&self, index: usize) -> Option<HistoriedValue<Vec<u8>, u32>> {
+		if index < self.len() {
+			Some(self.get_state(index).into_map(|v| v.to_vec()))
+			//Some(self.get_state(index))
+		} else {
+			None
+		}
+	}
+
+	//fn push(&mut self, value: HistoriedValue<&'a[u8], u32>) {
+	fn push(&mut self, value: HistoriedValue<Vec<u8>, u32>) {
+		let val = value.copy_map(|v| v.as_slice());
+		self.push_extra(val, &[])
+	}
+
+	//fn pop(&mut self) -> Option<HistoriedValue<&'a[u8], u32>> {
+	fn pop(&mut self) -> Option<HistoriedValue<Vec<u8>, u32>> {
+		let len = self.len();
+		if len == 0 {
+			return None;
+		}
+		let start_ix = self.index_element(len - 1);
+		let end_ix = self.index_start();
+		let state = self.read_le_u32(start_ix);
+		let value = self.0[start_ix + SIZE_BYTE_LEN..end_ix].to_vec();
+		if len - 1 == 0 {
+			self.clear();
+			return Some(HistoriedValue { value, state })	
+		} else {
+			self.write_le_usize(self.0.len() - (SIZE_BYTE_LEN * 2), len - 1);
+		};
+		let ix_size = (len * SIZE_BYTE_LEN) - SIZE_BYTE_LEN;
+		self.slice_copy(end_ix, start_ix, ix_size);
+		self.0.to_mut().truncate(start_ix + ix_size);
+		Some(HistoriedValue { value, state })
+	}
+
+	fn clear(&mut self) {
+		self.write_le_usize(F::version_len(), 0);
+		self.0.to_mut().truncate(F::version_len() + SIZE_BYTE_LEN);
+	}
+
+	fn truncate(&mut self, index: usize) {
+		if index == 0 {
+			self.clear();
+			return;
+		}
+		let len = self.len();
+		if index >= len {
+			return;
+		}
+		let start_ix = self.index_start();
+		let new_start = self.index_element(index) as usize;
+		let len_ix = index * SIZE_BYTE_LEN;
+		self.slice_copy(start_ix, new_start, len_ix);
+		self.write_le_usize(new_start + len_ix - SIZE_BYTE_LEN, index);
+		self.0.to_mut().truncate(new_start + len_ix);
+	}
+
+	// TODO test function
+	//fn emplace(&mut self, at: usize, value: HistoriedValue<&'a[u8], u32>) {
+	fn emplace(&mut self, at: usize, value: HistoriedValue<Vec<u8>, u32>) {
+		let len = self.len();
+		if len <= at {
+			debug_assert!(false);
+			return;
+		}
+		let elt_start = self.index_element(at);
+		let start_ix = self.index_start();
+		let elt_end = if len == at + 1{
+			start_ix
+		} else {
+			self.index_element(at + 1) 
+		};
+		let previous_size = elt_end - elt_start - SIZE_BYTE_LEN;
+		if previous_size == value.value.len() {
+			self.write_le_u32(elt_start, value.state);
+			self.0[elt_start + SIZE_BYTE_LEN..elt_end].copy_from_slice(value.value.as_slice());
+			return;
+		}
+
+		let end_ix = self.0.len();
+		if previous_size > value.value.len() {
+			let delete_size = previous_size - value.value.len();
+			let new_elt_end = elt_end - delete_size; // TODO this var is awkward
+			self.write_le_u32(elt_start, value.state);
+			self.0[elt_start + SIZE_BYTE_LEN..new_elt_end].copy_from_slice(value.value.as_slice());
+			for _ in 0..delete_size {
+				let _ = self.0.to_mut().remove(new_elt_end);
+			}
+			let start_ix = start_ix - delete_size;
+			for pos in at..len - 1 {
+				let old_value = self.read_le_usize(start_ix + pos * SIZE_BYTE_LEN);
+				self.write_le_usize(start_ix + pos * SIZE_BYTE_LEN, old_value - delete_size);
+			}
+		} else {
+			let additional_size = value.value.len() - previous_size;
+			let new_len = end_ix + additional_size;
+			self.0.to_mut().resize(new_len, 0);
+			let new_elt_end = elt_end + additional_size;
+			self.0.copy_within(elt_end..end_ix, new_elt_end);
+			self.write_le_u32(elt_start, value.state);
+			self.0[elt_start + SIZE_BYTE_LEN..new_elt_end].copy_from_slice(value.value.as_slice());
+			let start_ix = start_ix + additional_size;
+			for pos in at..len - 1 {
+				let old_value = self.read_le_usize(start_ix + pos * SIZE_BYTE_LEN);
+				self.write_le_usize(start_ix + pos * SIZE_BYTE_LEN, old_value + additional_size);
+			}
+		}
+	}
 }
 
-impl<'a, F: EncodedArrayConfig> LinearStorage<&'a[u8], u32> for EncodedArry<'a, F> {
-}
-*/
 #[cfg(test)]
 mod test {
 	use super::*;
@@ -383,50 +444,94 @@ mod test {
 	fn test_serialized_basis<F: EncodedArrayConfig>(mut ser: EncodedArray<F>) {
 		// test basis unsafe function similar to a simple vec
 		// without index checking.
-		let v1 = &b"val1"[..];
-		let v2 = &b"value_2"[..];
-		let v3 = &b"a third value 3"[..];
+		let v1ref = &b"val1"[..];
+		let v2ref = &b"value_2"[..];
+		let v3ref = &b"a third value 3"[..];
+		let v1 = b"val1".to_vec();
+		let v2 = b"value_2".to_vec();
+		let v3 = b"a third value 3".to_vec();
+
+
 
 		assert_eq!(ser.len(), 0);
 		assert_eq!(ser.pop(), None);
-		ser.push((v1, 1).into());
-		assert_eq!(ser.get_state(0), (v1, 1).into());
-		assert_eq!(ser.pop(), Some((v1.to_vec(), 1).into()));
+		ser.push((v1.clone(), 1).into());
+		assert_eq!(ser.get_state(0), (v1ref, 1).into());
+		assert_eq!(ser.pop(), Some((v1.clone().to_vec(), 1).into()));
 		assert_eq!(ser.len(), 0);
-		ser.push((v1, 1).into());
-		ser.push((v2, 2).into());
-		ser.push((v3, 3).into());
-		assert_eq!(ser.get_state(0), (v1, 1).into());
-		assert_eq!(ser.get_state(1), (v2, 2).into());
-		assert_eq!(ser.get_state(2), (v3, 3).into());
-		assert_eq!(ser.pop(), Some((v3.to_vec(), 3).into()));
+		ser.push((v1.clone(), 1).into());
+		ser.push((v2.clone(), 2).into());
+		ser.push((v3.clone(), 3).into());
+		assert_eq!(ser.get_state(0), (v1ref, 1).into());
+		assert_eq!(ser.get_state(1), (v2ref, 2).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
+		assert_eq!(ser.pop(), Some((v3ref.to_vec(), 3).into()));
 		assert_eq!(ser.len(), 2);
-		ser.push((v3, 3).into());
-		assert_eq!(ser.get_state(2), (v3, 3).into());
+		ser.push((v3.clone(), 3).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
 		ser.remove(0);
 		assert_eq!(ser.len(), 2);
-		assert_eq!(ser.get_state(0), (v2, 2).into());
-		assert_eq!(ser.get_state(1), (v3, 3).into());
-		ser.push((v1, 1).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+		assert_eq!(ser.get_state(1), (v3ref, 3).into());
+		ser.push((v1.clone(), 1).into());
 		ser.remove(1);
 		assert_eq!(ser.len(), 2);
-		assert_eq!(ser.get_state(0), (v2, 2).into());
-		assert_eq!(ser.get_state(1), (v1, 1).into());
-		ser.push((v1, 1).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+		assert_eq!(ser.get_state(1), (v1ref, 1).into());
+		ser.push((v1.clone(), 1).into());
 		ser.truncate(1);
 		assert_eq!(ser.len(), 1);
-		assert_eq!(ser.get_state(0), (v2, 2).into());
-		ser.push((v1, 1).into());
-		ser.push((v3, 3).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+		ser.push((v1.clone(), 1).into());
+		ser.push((v3.clone(), 3).into());
 		ser.truncate_until(1);
 		assert_eq!(ser.len(), 2);
-		assert_eq!(ser.get_state(0), (v1, 1).into());
-		assert_eq!(ser.get_state(1), (v3, 3).into());
-		ser.push((v2, 2).into());
+		assert_eq!(ser.get_state(0), (v1ref, 1).into());
+		assert_eq!(ser.get_state(1), (v3ref, 3).into());
+		ser.push((v2.clone(), 2).into());
 		ser.truncate_until(2);
 		assert_eq!(ser.len(), 1);
-		assert_eq!(ser.get_state(0), (v2, 2).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+	}
 
+	fn test_serialized_emplace<F: EncodedArrayConfig>(mut ser: EncodedArray<F>) {
+		// test basis unsafe function similar to a simple vec
+		// without index checking.
+		let v1ref = &b"val1"[..];
+		let v2ref = &b"value_2"[..];
+		let v3ref = &b"a third value 3"[..];
+		let v1 = b"val1".to_vec();
+		let v2 = b"value_2".to_vec();
+		let v3 = b"a third value 3".to_vec();
+
+		ser.push((v1.clone(), 1).into());
+		ser.push((v2.clone(), 2).into());
+		ser.push((v3.clone(), 3).into());
+		
+		ser.emplace(0, (v3.clone(), 4).into());
+		assert_eq!(ser.get_state(0), (v3ref, 4).into());
+		assert_eq!(ser.get_state(1), (v2ref, 2).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
+		ser.emplace(0, (v2.clone(), 5).into());
+		assert_eq!(ser.get_state(0), (v2ref, 5).into());
+		assert_eq!(ser.get_state(1), (v2ref, 2).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
+		ser.emplace(1, (v3.clone(), 6).into());
+		assert_eq!(ser.get_state(0), (v2ref, 5).into());
+		assert_eq!(ser.get_state(1), (v3ref, 6).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
+		ser.emplace(1, (v1.clone(), 7).into());
+		assert_eq!(ser.get_state(0), (v2ref, 5).into());
+		assert_eq!(ser.get_state(1), (v1ref, 7).into());
+		assert_eq!(ser.get_state(2), (v3ref, 3).into());
+		ser.emplace(2, (v1.clone(), 8).into());
+		assert_eq!(ser.get_state(0), (v2ref, 5).into());
+		assert_eq!(ser.get_state(1), (v1ref, 7).into());
+		assert_eq!(ser.get_state(2), (v1ref, 8).into());
+		ser.emplace(2, (v2.clone(), 9).into());
+		assert_eq!(ser.get_state(0), (v2ref, 5).into());
+		assert_eq!(ser.get_state(1), (v1ref, 7).into());
+		assert_eq!(ser.get_state(2), (v2ref, 9).into());
 	}
 
 	#[test]
@@ -436,6 +541,15 @@ mod test {
 		test_serialized_basis(ser1);
 		test_serialized_basis(ser2);
 	}
+
+	#[test]
+	fn serialized_emplpace() {
+		let ser1: EncodedArray<NoVersion> = Default::default();
+		let ser2: EncodedArray<DefaultVersion> = Default::default();
+		test_serialized_emplace(ser1);
+		test_serialized_emplace(ser2);
+	}
+
 /*
 	// TODO rename to gc and activate when implementation
 	// similar to in memory in linear.rs is added to EncodedArray. 

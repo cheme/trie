@@ -109,6 +109,24 @@ pub struct HistoriedValue<V, S> {
 	pub state: S,
 }
 
+impl<V, S> HistoriedValue<V, S> {
+	fn map<V2, F: Fn((&mut V, &mut S))>(&mut self, f: F) {
+		let HistoriedValue { value, state } = self;
+		f((value, state))
+	}
+
+	fn into_map<V2, F: Fn(V) -> V2>(self, f: F) -> HistoriedValue<V2, S> {
+		let HistoriedValue { value, state } = self;
+		HistoriedValue { value: f(value), state }
+	}
+}
+impl<'a, V: 'a, S: Clone> HistoriedValue<V, S> {
+	fn copy_map<V2: 'a, F: Fn(&'a V) -> V2>(&'a self, f: F) -> HistoriedValue<V2, S> {
+		let HistoriedValue { value, state } = self;
+		HistoriedValue { value: f(value), state: state.clone() }
+	}
+}
+
 impl<V, S> From<(V, S)> for HistoriedValue<V, S> {
 	fn from(input: (V, S)) -> HistoriedValue<V, S> {
 		HistoriedValue { value: input.0, state: input.1 }
