@@ -24,7 +24,7 @@
 use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
 use super::HistoriedValue;
-use super::linear::{LinearStorage, LinearStorageMem};
+use super::linear::{LinearStorage, LinearStorageSlice, StorageAdapter};
 use codec::{Encode, Decode, Input as CodecInput};
 
 #[derive(Debug, Clone)]
@@ -228,7 +228,7 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 		self.0.to_mut().truncate(end_index);
 	}
 
-	fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u32> {
+	fn get_range(&self, index: usize) -> (usize, usize, u32) {
 		let start_ix = self.index_element(index);
 		let len = self.len();
 		let end_ix = if index == len - 1 {
@@ -237,11 +237,28 @@ impl<'a, F: EncodedArrayConfig> EncodedArray<'a, F> {
 			self.index_element(index + 1)
 		};
 		let state = self.read_le_u32(start_ix);
+		(start_ix, end_ix, state)
+
+	}
+	fn get_state(&self, index: usize) -> HistoriedValue<&[u8], u32> {
+		let (start_ix, end_ix, state) = self.get_range(index);
 		HistoriedValue {
 			value: &self.0[start_ix + SIZE_BYTE_LEN..end_ix],
 			state,
 		}
 	}
+	fn get_state_mut(&mut self, index: usize) -> HistoriedValue<&mut [u8], u32> {
+		let (start_ix, end_ix, state) = self.get_range(index);
+		HistoriedValue {
+			value: &mut self.0[start_ix + SIZE_BYTE_LEN..end_ix],
+			state,
+		}
+	}
+	fn get_state_only(&self, index: usize) -> u32 {
+		let start_ix = self.index_element(index);
+		self.read_le_u32(start_ix)
+	}
+
 }
 
 const EMPTY_SERIALIZED: [u8; SIZE_BYTE_LEN] = [0u8; SIZE_BYTE_LEN];
@@ -359,6 +376,14 @@ impl<'a, F: EncodedArrayConfig> LinearStorage<Vec<u8>, u32> for EncodedArray<'a,
 		}
 	}
 
+	fn get_state(&self, index: usize) -> Option<u32> {
+		if index < self.len() {
+			Some(self.get_state_only(index))
+		} else {
+			None
+		}
+	}
+
 	//fn push(&mut self, value: HistoriedValue<&'a[u8], u32>) {
 	fn push(&mut self, value: HistoriedValue<Vec<u8>, u32>) {
 		let val = value.copy_map(|v| v.as_slice());
@@ -458,6 +483,23 @@ impl<'a, F: EncodedArrayConfig> LinearStorage<Vec<u8>, u32> for EncodedArray<'a,
 				let old_value = self.read_le_usize(start_ix + pos * SIZE_BYTE_LEN);
 				self.write_le_usize(start_ix + pos * SIZE_BYTE_LEN, old_value + additional_size);
 			}
+		}
+	}
+}
+
+impl<'a, F: EncodedArrayConfig> LinearStorageSlice<Vec<u8>, u32> for EncodedArray<'a, F> {
+	fn get_slice(&self, index: usize) -> Option<HistoriedValue<&[u8], u32>> {
+		if index < self.len() {
+			Some(self.get_state(index))
+		} else {
+			None
+		}
+	}
+	fn get_slice_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut [u8], u32>> {
+		if index < self.len() {
+			Some(self.get_state_mut(index))
+		} else {
+			None
 		}
 	}
 }

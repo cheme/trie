@@ -51,6 +51,11 @@ pub trait InMemoryValueRef<V>: ValueRef<V> {
 	fn get_ref(&self, at: &Self::S) -> Option<&V>;
 }
 
+pub trait InMemoryValueSlice<V>: ValueRef<V> {
+	/// Get reference to the value at this state.
+	fn get_slice(&self, at: &Self::S) -> Option<&[u8]>;
+}
+
 /// Trait for historied value.
 pub trait Value<V>: ValueRef<V> {
 	/// State to use here.
