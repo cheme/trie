@@ -186,6 +186,12 @@ pub trait LinearStorage<V, S>: Default {
 	fn get_state(&self, index: usize) -> Option<S>;
 	/// Vec like push.
 	fn push(&mut self, value: HistoriedValue<V, S>);
+	/// Vec like insert, this is mainly use in tree implementation.
+	/// So when used as tree branch container, a efficient implementation
+	/// shall be use.
+	fn insert(&mut self, index: usize, value: HistoriedValue<V, S>);
+	/// Vec like remove, this is mainly use in tree branch implementation.
+	fn remove(&mut self, index: usize);
 	/// TODO put 'a and return read type that can be &'a S and where S is AsRef<S>.
 	/// TODO put 'a and return read type that can be &'a [u8] and where Vec<u8> is AsRef<[u8]>.
 	fn last(&self) -> Option<HistoriedValue<V, S>> {
@@ -249,6 +255,12 @@ impl<V: Clone, S: Clone> LinearStorage<V, S> for MemoryOnly<V, S> {
 	}
 	fn push(&mut self, value: HistoriedValue<V, S>) {
 		self.0.push(value)
+	}
+	fn insert(&mut self, index: usize, value: HistoriedValue<V, S>) {
+		self.0.insert(index, value)
+	}
+	fn remove(&mut self, index: usize) {
+		self.0.remove(index);
 	}
 	fn last(&self) -> Option<HistoriedValue<V, S>> {
 		self.0.last().cloned()
