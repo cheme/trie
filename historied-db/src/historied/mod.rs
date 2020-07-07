@@ -21,6 +21,7 @@ use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef
 	Management, Migrate, LinearManagement};
 use hash_db::{PlainDB, PlainDBRef};
 use crate::Latest;
+use codec::{Encode, Decode};
 
 pub mod linear;
 pub mod tree_management;
@@ -105,7 +106,7 @@ pub trait InMemoryValue<V>: Value<V> {
 }
 
 /// An entry at a given history index.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct HistoriedValue<V, S> {
 	/// The stored value.

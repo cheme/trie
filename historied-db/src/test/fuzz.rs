@@ -73,9 +73,16 @@ impl crate::historied::tree_management::TreeManagementStorage for SerFuzz {
 
 }
 type LinearBackend = crate::historied::linear::MemoryOnly<u16, u32>;
+type TreeBackend = crate::historied::linear::MemoryOnly<
+	crate::historied::linear::Linear<u16, u32, LinearBackend>,
+	u32,
+>;
 struct FuzzerState {
 	/// in memory historied datas to test
-	in_memory_db: crate::historied::BTreeMap<Vec<u8>, u16, crate::historied::tree::Tree<u32, u32, u16, LinearBackend>>,
+	in_memory_db: crate::historied::BTreeMap<
+		Vec<u8>, u16,
+		crate::historied::tree::Tree<u32, u32, u16, TreeBackend, LinearBackend>,
+	>,
 	/// in memory state management
 	in_memory_mgmt: InMemoryMgmt,
 	/// in memory state management with serialize

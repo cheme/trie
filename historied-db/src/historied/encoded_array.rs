@@ -435,7 +435,6 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 		self.0.to_mut().truncate(new_start + len_ix);
 	}
 
-	// TODO test function
 	//fn emplace(&mut self, at: usize, value: HistoriedValue<&'a[u8], u32>) {
 	fn emplace(&mut self, at: usize, value: HistoriedValue<V, u32>) {
 		let len = self.len();
@@ -485,6 +484,14 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 				self.write_le_usize(start_ix + pos * SIZE_BYTE_LEN, old_value + additional_size);
 			}
 		}
+	}
+
+	fn insert(&mut self, index: usize, value: HistoriedValue<V, u32>) {
+		unimplemented!("insert for array unimplemented");
+	}
+
+	fn remove(&mut self, index: usize) {
+		unimplemented!("remove for array unimplemented");
 	}
 }
 
