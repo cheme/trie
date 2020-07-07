@@ -16,8 +16,9 @@
 
 // TODO remove "previous code" expect.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{Linear, LinearStorage, LinearStorageMem, LinearState, LinearGC};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult, InMemoryValueSlice, InMemoryValueSliceRange};
+use crate::historied::linear::{Linear, LinearStorage, LinearStorageSlice, LinearStorageMem, LinearStorageSliceRange, LinearState, LinearGC};
+use crate::historied::encoded_array::{EncodedArray, EncodedArrayConfig};
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::marker::PhantomData;
@@ -180,6 +181,69 @@ impl<
 				if let Some(result) = self.branches.get_ref(index - 1).expect("previous code").value.get_ref(&at.composite_treshold.1) {
 					return Some(result)
 				}
+			}
+			index -= 1;
+		}
+	
+		None
+	}
+}
+
+// the whole trait definition is fishy, needs refacto again
+impl<
+	'a,
+	I: Default + Eq + Ord + Clone,
+	D: LinearStorageSlice<Vec<u8>, I>
+		+ LinearStorage<Linear<Vec<u8>, u32, EncodedArray<'a, Vec<u8>, EC>>, I>,
+	EC: EncodedArrayConfig,
+> InMemoryValueSlice<Vec<u8>> for &'a Tree<I, u32, Vec<u8>, D, EncodedArray<'a, Vec<u8>, EC>> {
+	fn get_slice(&self, at: &Self::S) -> Option<&[u8]> {
+		let mut index = <D as LinearStorage<Vec<u8>, I>>::len(&self.branches);
+	//	let mut index = self.branches.len();
+		// note that we expect branch index to be linearily set
+		// along a branch (no state containing unordered branch_index
+		// and no history containing unorderd branch_index).
+		if index == 0 {
+			return None;
+		}
+
+		for (state_branch_range, state_branch_index) in at.iter() {
+			while index > 0 {
+				let branch_index: I = <D as LinearStorage<Vec<u8>, I>>::get_state(&self.branches, index - 1).expect("previous code");
+				if branch_index < state_branch_index {
+					break;
+				} else if branch_index == state_branch_index {
+					// TODO add a lower bound check (maybe debug_assert it only).
+					let mut upper_bound = state_branch_range.end.clone();
+					upper_bound -= 1;
+					if let Some(result) = self.branches.get_slice(index - 1).and_then(|slice|
+						<Linear<Vec<u8>, u32, EncodedArray<'a, Vec<u8>, EC>> as InMemoryValueSliceRange<Vec<u8>>>::get_range(slice.value, &upper_bound)
+						//<EncodedArray<'a, Vec<u8>, EC> as LinearStorageSliceRange<Vec<u8>, u32>>::get_range(slice.value, &upper_bound)
+							.map(|range| &slice.value[range]))
+					{
+						return Some(result)
+					}
+
+/*					if let Some(result) = self.branches.get_slice(index - 1).and_then(|slice|
+						BD::get_range_from_slice(slice.value, &upper_bound).and_then(|range| &slice[range]) {
+						return Some(result)
+					}*/
+				}
+				index -= 1;
+			}
+		}
+
+		// composite part.
+		while index > 0 {
+			let branch_index: I = <D as LinearStorage<Vec<u8>, I>>::get_state(&self.branches, index - 1).expect("previous code");
+//			let branch_index: I = self.branches.get_state(index - 1).expect("previous code");
+			if branch_index <= at.composite_treshold.0 {
+					if let Some(result) = self.branches.get_slice(index - 1).and_then(|slice|
+						<Linear<Vec<u8>, u32, EncodedArray<'a, Vec<u8>, EC>> as InMemoryValueSliceRange<Vec<u8>>>::get_range(slice.value, &at.composite_treshold.1)
+							.map(|range| &slice.value[range]))
+					{
+						return Some(result)
+					}
 			}
 			index -= 1;
 		}
@@ -536,11 +600,24 @@ mod test {
 	use crate::historied::tree_management::test::test_states;
 
 	#[test]
+	fn compile_double_encoded() {
+		use crate::historied::encoded_array::{EncodedArray, NoVersion};
+		use crate::historied::InMemoryValueSlice;
+		type BD<'a> = EncodedArray<'a, Vec<u8>, NoVersion>;
+		type D<'a> = EncodedArray<'a,
+			crate::historied::linear::Linear<u32, u32, BD<'a>>,
+			NoVersion,
+		>;
+		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
+		let at: ForkPlan<u32, u32> = Default::default();
+		item.get_slice(&at);
+	}
+	#[test]
 	fn test_set_get() {
 		// TODO EMCH parameterize test
 		type BD = crate::historied::linear::MemoryOnly<u32, u32>;
 		type D = crate::historied::linear::MemoryOnly<
-			crate::historied::linear::Linear<u32, u32,BD>,
+			crate::historied::linear::Linear<u32, u32, BD>,
 			u32,
 		>;
 		// 0> 1: _ _ X

@@ -23,8 +23,9 @@
 
 use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
+use crate::rstd::ops::Range;
 use super::HistoriedValue;
-use super::linear::{LinearStorage, LinearStorageSlice, StorageAdapter};
+use super::linear::{LinearStorage, LinearStorageSlice, LinearStorageSliceRange, StorageAdapter};
 use codec::{Encode, Decode, Input as CodecInput};
 
 #[derive(Debug, Clone)]
@@ -511,6 +512,41 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 		}
 	}
 }
+
+// TODO rem ??
+impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]>> LinearStorageSliceRange<V, u32> for EncodedArray<'a, V, F> {
+	fn get_range<'c>(slice: &'c [u8], index: usize) -> Option<HistoriedValue<Range<usize>, u32>> {
+		let read_ec: EncodedArray<'c, V, F> = slice.into();
+		if index < read_ec.len() {
+			let (start, end, state) = read_ec.get_range(index);
+			Some(HistoriedValue {
+				value: start .. end,
+				state,
+			})
+		} else {
+			None
+		}
+	}
+}
+
+impl<'a, F: EncodedArrayConfig, V: Clone + AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]>> crate::historied::InMemoryValueSliceRange<V> for crate::historied::linear::Linear<V, u32, EncodedArray<'a, V, F>> {
+	fn get_range<'c>(slice: &'c [u8], at: &Self::S) -> Option<Range<usize>> {
+		let read_ec: EncodedArray<'c, V, F> = slice.into();
+		let linear = crate::historied::linear::Linear::from(read_ec);
+		let inner_index = linear.inner_index(at);
+		let read_ec = linear.0;
+		inner_index.and_then(|index|
+				if index < read_ec.len() {
+					let (start, end, _state) = read_ec.get_range(index);
+					Some(start .. end)
+				} else {
+					None
+				}
+			)
+	}
+}
+
+
 
 #[cfg(test)]
 mod test {

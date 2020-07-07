@@ -17,6 +17,7 @@
 #[cfg(not(feature = "std"))]
 use crate::rstd::{vec::Vec, vec};
 use crate::rstd::marker::PhantomData;
+use crate::rstd::ops::Range;
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
 	Management, Migrate, LinearManagement};
 use hash_db::{PlainDB, PlainDBRef};
@@ -44,6 +45,22 @@ pub trait ValueRef<V> {
 	fn is_empty(&self) -> bool;
 }
 
+impl<'a, V, R: ValueRef<V>> ValueRef<V> for &'a R {
+	type S = <R as ValueRef<V>>::S;
+
+	fn get(&self, at: &Self::S) -> Option<V> {
+		<R as ValueRef<V>>::get(self, at)
+	}
+
+	fn contains(&self, at: &Self::S) -> bool {
+		<R as ValueRef<V>>::contains(self, at)
+	}
+
+	fn is_empty(&self) -> bool {
+		<R as ValueRef<V>>::is_empty(self)
+	}
+}
+
 // TODO EMCH refact with 'a for inner value
 // and a get value type (see test on rust playground).
 // So we only got ValueRef type.
@@ -55,6 +72,10 @@ pub trait InMemoryValueRef<V>: ValueRef<V> {
 pub trait InMemoryValueSlice<V>: ValueRef<V> {
 	/// Get reference to the value at this state.
 	fn get_slice(&self, at: &Self::S) -> Option<&[u8]>;
+}
+
+pub trait InMemoryValueSliceRange<V>: ValueRef<V> {
+	fn get_range(slice: &[u8], at: &Self::S) -> Option<Range<usize>>;
 }
 
 /// Trait for historied value.

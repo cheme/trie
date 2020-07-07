@@ -17,7 +17,7 @@
 //! Current implementation is limited to a simple array indexing
 //! with modification at the end only.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValueSlice, InMemoryValue, StateIndex};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValueSlice, InMemoryValueSliceRange, InMemoryValue, StateIndex};
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
 	Management, Migrate, LinearManagement, Latest};
 use crate::rstd::marker::PhantomData;
@@ -78,7 +78,13 @@ pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_
 /// Implementation of linear value history storage.
 #[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct Linear<V, S, D>(D, PhantomData<(V, S)>);
+pub struct Linear<V, S, D>(pub(crate) D, PhantomData<(V, S)>);
+
+impl<V, S, D> From<D> for Linear<V, S, D> {
+	fn from(inner: D) -> Self {
+		Linear(inner, PhantomData)
+	}
+}
 
 /// Adapter for storage (allows to factor code while keeping simple types).
 /// VR is the reference to value that is used, and I the initial state.
@@ -171,6 +177,10 @@ pub trait LinearStorageSlice<V: AsRef<[u8]> + AsMut<[u8]>, S>: LinearStorage<V, 
 	}
 	/// Array like get mut.
 	fn get_slice_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut [u8], S>>;
+}
+
+pub trait LinearStorageSliceRange<V, S>: LinearStorage<V, S> {
+	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<Range<usize>, S>>;
 }
 
 /// Backend for linear storage.
@@ -296,6 +306,22 @@ impl<V: Clone, S: LinearState, D: LinearStorage<V, S>> ValueRef<V> for Linear<V,
 }
 
 impl<V, S: LinearState, D: LinearStorage<V, S>> Linear<V, S, D> {
+	pub fn inner_index(&self, at: &S) -> Option<usize> {
+		let mut index = self.0.len();
+		if index == 0 {
+			return None;
+		}
+		while index > 0 {
+			index -= 1;
+			if let Some(state) = self.0.get_state(index) {
+				if state.exists(at) {
+					return Some(index);
+				}
+			}
+		}
+		None
+	}
+
 	fn get_adapt<'a, VR, A: StorageAdapter<'a, S, VR, &'a D>>(&'a self, at: &S) -> Option<VR> {
 		let mut index = self.0.len();
 		if index == 0 {
