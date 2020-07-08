@@ -125,24 +125,24 @@ impl<'a, S, V, D: LinearStorage<V, S>> StorageAdapter<
 		inner.get(index)
 	}
 }
-struct SliceAdapter;
-impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
+struct SliceAdapter<V>(PhantomData<V>);
+impl<'a, S, V: AsRef<[u8]> + AsMut<[u8]>, D: LinearStorageSlice<V, S>> StorageAdapter<
 	'a,
 	S,
 	&'a [u8],
 	&'a D,
-> for SliceAdapter {
+> for SliceAdapter<V> {
 	fn get_adapt(inner: &'a D, index: usize) -> Option<HistoriedValue<&'a [u8], S>> {
 		inner.get_slice(index)
 	}
 }
-struct SliceAdapterMut;
-impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
+struct SliceAdapterMut<V>(PhantomData<V>);
+impl<'a, S, V: AsRef<[u8]> + AsMut<[u8]>, D: LinearStorageSlice<V, S>> StorageAdapter<
 	'a,
 	S,
 	&'a mut [u8],
 	&'a mut D,
-> for SliceAdapter {
+> for SliceAdapter<V> {
 	fn get_adapt(inner: &'a mut D, index: usize) -> Option<HistoriedValue<&'a mut [u8], S>> {
 		inner.get_slice_mut(index)
 	}
@@ -407,9 +407,9 @@ impl<V: Clone, S: LinearState, D: LinearStorageMem<V, S>> InMemoryValueRef<V> fo
 	}
 }
 
-impl<S: LinearState, D: LinearStorageSlice<Vec<u8>, S>> InMemoryValueSlice<Vec<u8>> for Linear<Vec<u8>, S, D> {
+impl<V: Clone + AsRef<[u8]> + AsMut<[u8]>, S: LinearState, D: LinearStorageSlice<V, S>> InMemoryValueSlice<V> for Linear<V, S, D> {
 	fn get_slice(&self, at: &Self::S) -> Option<&[u8]> {
-		self.get_adapt::<_, SliceAdapter>(at)
+		self.get_adapt::<_, SliceAdapter<V>>(at)
 	}
 }
 

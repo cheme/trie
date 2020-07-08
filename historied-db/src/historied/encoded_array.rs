@@ -98,6 +98,22 @@ impl<'a> crate::rstd::ops::DerefMut for EncodedArrayBuff<'a> {
 	}
 }
 
+// Needed to call a inner slice, maybe LinearStorageSlice should have different
+// constraint. TODO replace couple AsRef<[u8]> + AsMut<[u8]> by a specific crate trait.
+impl<'a, EC> AsRef<[u8]> for EncodedArray<'a, Vec<u8>, EC> {
+	fn as_ref(&self) -> &[u8] {
+		use crate::rstd::ops::Deref;
+		self.0.deref()
+	}
+}
+
+impl<'a, EC> AsMut<[u8]> for EncodedArray<'a, Vec<u8>, EC> {
+	fn as_mut(&mut self) -> &mut [u8] {
+		use crate::rstd::ops::DerefMut;
+		self.0.deref_mut()
+	}
+}
+
 impl<'a> Clone for EncodedArrayBuff<'a> {
 	fn clone(&self) -> Self {
 		match self {
