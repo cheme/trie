@@ -529,27 +529,6 @@ impl Tree<u32, u32, Option<Vec<u8>>, TreeBackendTempSize, LinearBackendTempSize>
 		size
 	}
 }
-mod cut {
-fn test() {
-
-type LinearBackend<'a> = crate::historied::encoded_array::EncodedArray<
-	'a,
-	Vec<u8>,
-	crate::historied::encoded_array::NoVersion,
->;
-type TreeBackend<'a> = crate::historied::encoded_array::EncodedArray<
-	'a,
-	crate::historied::linear::Linear<Vec<u8>, u32, LinearBackend<'a>>,
-	crate::historied::encoded_array::NoVersion,
->;
-type HValue<'a> = super::Tree<u32, u32, Vec<u8>, TreeBackend<'a>, LinearBackend<'a>>;
-
-		let latest = super::Latest::unchecked_latest((0, 0));
-		use super::Value;
-		let mut item = HValue::new(b"dtd".to_vec(), &latest);
-
-}
-}
 
 #[cfg(test)]
 mod test {

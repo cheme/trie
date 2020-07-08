@@ -72,7 +72,7 @@ const ALLOCATED_HISTORY: usize = 2;
 /// Array like buffer for in memory storage.
 /// By in memory we expect that this will
 /// not required persistence and is not serialized.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
