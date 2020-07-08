@@ -24,7 +24,7 @@ use crate::rstd::marker::PhantomData;
 use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::mem::replace;
-use codec::{Encode, Decode, Codec};
+use codec::{Encode, Decode, Codec, Input as CodecInput};
 use crate::historied::encoded_array::EncodedArrayValue;
 
 /// For in memory implementation we expect the state to be `Into<usize>` and
@@ -72,9 +72,34 @@ const ALLOCATED_HISTORY: usize = 2;
 /// Array like buffer for in memory storage.
 /// By in memory we expect that this will
 /// not required persistence and is not serialized.
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
+
+
+impl<V: Encode, S: Encode> Encode for MemoryOnly<V, S> {
+
+	fn size_hint(&self) -> usize {
+		self.0.as_slice().size_hint()
+	}
+
+	fn encode(&self) -> Vec<u8> {
+		self.0.as_slice().encode()
+	}
+
+/*	fn using_encoded<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
+		f(&self.0)
+	}*/
+}
+
+impl<V: Decode, S: Decode> Decode for MemoryOnly<V, S> {
+	fn decode<I: CodecInput>(value: &mut I) -> Result<Self, codec::Error> {
+		// TODO make a variant when len < ALLOCATED_HISTORY
+		let v = Vec::decode(value)?;
+		Ok(MemoryOnly(smallvec::SmallVec::from_vec(v)))
+	}
+}
+
 
 /// Implementation of linear value history storage.
 #[derive(Debug, Encode, Decode)]
