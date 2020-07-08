@@ -27,13 +27,50 @@ use super::HistoriedValue;
 use super::linear::{LinearStorage, LinearStorageSlice, StorageAdapter};
 use codec::{Encode, Decode, Input as CodecInput};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 /// Arraylike buffer with in place byte data.
 /// Can be written as is in underlying
 /// storage.
 /// Could be use for direct access memory to.
 pub struct EncodedArray<'a, V, F>(EncodedArrayBuff<'a>, PhantomData<(F, V)>);
+
+impl<'a, V, F> Clone for EncodedArray<'a, V, F> {
+	fn clone(&self) -> Self {
+		EncodedArray(self.0.clone(), PhantomData)
+	}
+}
+
+pub trait EncodedArrayValue: AsRef<[u8]> + AsMut<[u8]> + Sized {
+	fn from_slice(slice: &[u8]) -> Self;
+}
+
+impl EncodedArrayValue for Vec<u8> {
+	fn from_slice(slice: &[u8]) -> Self {
+		slice.to_vec()
+	}
+}
+
+impl<'a, V, F> EncodedArrayValue for EncodedArray<'a, V, F> {
+	// TODO non ownd variant that is very tricky to do.
+	fn from_slice(slice: &[u8]) -> Self {
+		EncodedArray(EncodedArrayBuff::Cow(Cow::Owned(slice.to_vec())), PhantomData)
+	}
+}
+
+impl<'a, V, F> AsRef<[u8]> for EncodedArray<'a, V, F> {
+	fn as_ref(&self) -> &[u8] {
+		use crate::rstd::ops::Deref;
+		self.0.deref()
+	}
+}
+
+impl<'a, V, F> AsMut<[u8]> for EncodedArray<'a, V, F> {
+	fn as_mut(&mut self) -> &mut [u8] {
+		use crate::rstd::ops::DerefMut;
+		self.0.deref_mut()
+	}
+}
 
 impl<'a, V, A> Encode for EncodedArray<'a, V, A> {
 
@@ -153,7 +190,7 @@ const SIZE_BYTE_LEN: usize = 4;
 // implementation.
 // Those function requires checked index.
 impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
-	where V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]> {
+	where V: EncodedArrayValue {
 	pub fn into_owned(self) -> EncodedArray<'static, V, F> {
     EncodedArray(EncodedArrayBuff::Cow(Cow::from(self.0.into_owned())), PhantomData)
   }
@@ -297,7 +334,7 @@ impl<'a, V, F> Into<EncodedArray<'a, V, F>> for &'a mut Vec<u8> {
 
 // Utility function for basis implementation.
 impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
-	where V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]> {
+	where V: EncodedArrayValue {
 	// Index at end, also contains the encoded size
 	fn index_start(&self) -> usize {
 		let nb_ix = self.len();
@@ -355,7 +392,9 @@ impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
 
 }
 
-impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]>> LinearStorage<V, u32> for EncodedArray<'a, V, F> {
+impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V, F>
+	where V: EncodedArrayValue,
+{
 //impl<'a, F: EncodedArrayConfig> LinearStorage<'a, &'a[u8], u32> for EncodedArray<'a, F> {
 	fn truncate_until(&mut self, split_off: usize) {
 		self.remove_range(0, split_off);
@@ -368,9 +407,9 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 
 	// TODO lifetime in Linear storage refacto
 	// fn get(&self, index: usize) -> Option<HistoriedValue<&'a[u8], u32>> {
-	fn get(&self, index: usize) -> Option<HistoriedValue<V, u32>> {
+	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, u32>> {
 		if index < self.len() {
-			Some(self.get_state(index).into_map(|v| v.as_ref().into()))
+			Some(self.get_state(index).into_map(|v| V::from_slice(v.as_ref())))
 			//Some(self.get_state(index))
 		} else {
 			None
@@ -400,7 +439,7 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 		let start_ix = self.index_element(len - 1);
 		let end_ix = self.index_start();
 		let state = self.read_le_u32(start_ix);
-		let value = self.0[start_ix + SIZE_BYTE_LEN..end_ix].into();
+		let value = V::from_slice(&self.0[start_ix + SIZE_BYTE_LEN..end_ix]);
 		if len - 1 == 0 {
 			self.clear();
 			return Some(HistoriedValue { value, state })	
@@ -495,7 +534,9 @@ impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b 
 	}
 }
 
-impl<'a, F: EncodedArrayConfig, V: AsRef<[u8]> + AsMut<[u8]> + for<'b> From<&'b [u8]>> LinearStorageSlice<V, u32> for EncodedArray<'a, V, F> {
+impl<'a, F: EncodedArrayConfig, V> LinearStorageSlice<V, u32> for EncodedArray<'a, V, F>
+	where V: EncodedArrayValue,
+{
 	fn get_slice(&self, index: usize) -> Option<HistoriedValue<&[u8], u32>> {
 		if index < self.len() {
 			Some(self.get_state(index))

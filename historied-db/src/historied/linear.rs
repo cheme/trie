@@ -25,6 +25,7 @@ use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::mem::replace;
 use codec::{Encode, Decode, Codec};
+use crate::historied::encoded_array::EncodedArrayValue;
 
 /// For in memory implementation we expect the state to be `Into<usize>` and
 /// `From<usize>` and will not manage failure when converting.
@@ -76,9 +77,81 @@ const ALLOCATED_HISTORY: usize = 2;
 pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
 
 /// Implementation of linear value history storage.
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Linear<V, S, D>(D, PhantomData<(V, S)>);
+
+impl<V, S, D: AsRef<[u8]>> AsRef<[u8]> for Linear<V, S, D> {
+	fn as_ref(&self) -> &[u8] {
+		self.0.as_ref()
+	}
+}
+
+impl<V, S, D: AsMut<[u8]>> AsMut<[u8]> for Linear<V, S, D> {
+	fn as_mut(&mut self) -> &mut [u8] {
+		self.0.as_mut()
+	}
+}
+
+impl<V, S, D: Clone> Clone for Linear<V, S, D> {
+	fn clone(&self) -> Self {
+		Linear(self.0.clone(), PhantomData)
+	}
+}
+
+impl<V, S, D: EncodedArrayValue> EncodedArrayValue for Linear<V, S, D> {
+	fn from_slice(slice: &[u8]) -> Self {
+		let v = D::from_slice(slice);
+		Linear(v, PhantomData)
+	}
+}
+
+impl<V, S, D: Default> Default for Linear<V, S, D> {
+	fn default() -> Self {
+		let v = D::default();
+		Linear(v, PhantomData)
+	}
+}
+
+
+impl<V, S, D: LinearStorage<V, S>> LinearStorage<V, S> for Linear<V, S, D> {
+	fn truncate_until(&mut self, split_off: usize) {
+		self.0.truncate_until(split_off)
+	}
+	fn len(&self) -> usize {
+		self.0.len()
+	}
+	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, S>> {
+		self.0.st_get(index)
+	}
+	fn get_state(&self, index: usize) -> Option<S> {
+		self.0.get_state(index)
+	}
+	fn push(&mut self, value: HistoriedValue<V, S>) {
+		self.0.push(value)
+	}
+	fn insert(&mut self, index: usize, value: HistoriedValue<V, S>) {
+		self.0.insert(index, value)
+	}
+	fn remove(&mut self, index: usize) {
+		self.0.remove(index)
+	}
+	fn last(&self) -> Option<HistoriedValue<V, S>> {
+		self.0.last()
+	}
+	fn pop(&mut self) -> Option<HistoriedValue<V, S>> {
+		self.0.pop()
+	}
+	fn clear(&mut self) {
+		self.0.clear()
+	}
+	fn truncate(&mut self, at: usize) {
+		self.0.truncate(at)
+	}
+	fn emplace(&mut self, at: usize, value: HistoriedValue<V, S>) {
+		self.0.emplace(at, value)
+	}
+}
 
 /// Adapter for storage (allows to factor code while keeping simple types).
 /// VR is the reference to value that is used, and I the initial state.
@@ -116,7 +189,7 @@ impl<'a, S, V, D: LinearStorage<V, S>> StorageAdapter<
 	&'a D,
 > for ValueVecAdapter {
 	fn get_adapt(inner: &'a D, index: usize) -> Option<HistoriedValue<V, S>> {
-		inner.get(index)
+		inner.st_get(index)
 	}
 }
 struct SliceAdapter;
@@ -181,7 +254,7 @@ pub trait LinearStorage<V, S>: Default {
 	/// Number of element for different S.
 	fn len(&self) -> usize;
 	/// Array like get.
-	fn get(&self, index: usize) -> Option<HistoriedValue<V, S>>;
+	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, S>>;
 	/// Array like get.
 	fn get_state(&self, index: usize) -> Option<S>;
 	/// Vec like push.
@@ -196,7 +269,7 @@ pub trait LinearStorage<V, S>: Default {
 	/// TODO put 'a and return read type that can be &'a [u8] and where Vec<u8> is AsRef<[u8]>.
 	fn last(&self) -> Option<HistoriedValue<V, S>> {
 		if self.len() > 0 {
-			self.get(self.len() - 1)
+			self.st_get(self.len() - 1)
 		} else {
 			None
 		}
@@ -247,7 +320,7 @@ impl<V: Clone, S: Clone> LinearStorage<V, S> for MemoryOnly<V, S> {
 	fn len(&self) -> usize {
 		self.0.len()
 	}
-	fn get(&self, index: usize) -> Option<HistoriedValue<V, S>> {
+	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, S>> {
 		self.0.get(index).cloned()
 	}
 	fn get_state(&self, index: usize) -> Option<S> {
@@ -459,7 +532,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 
 			let mut index = self.0.len();
 			while index > 0 {
-				if let Some(HistoriedValue{ value: _, state }) = self.0.get(index - 1) {
+				if let Some(HistoriedValue{ value: _, state }) = self.0.st_get(index - 1) {
 					if &state < new_end {
 						break;
 					}
@@ -481,7 +554,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 		if let Some(start_treshold) = gc.new_start.as_ref() {
 			let mut index = 0;
 			loop {
-				if let Some(HistoriedValue{ value: _, state }) = self.0.get(index) {
+				if let Some(HistoriedValue{ value: _, state }) = self.0.st_get(index) {
 					if &state >= start_treshold {
 						index = index.saturating_sub(1);
 						break;
@@ -493,7 +566,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 				index += 1;
 			}
 			if let Some(neutral) = gc.neutral_element.as_ref() {
-				while let Some(HistoriedValue{ value, state: _ }) = self.0.get(index) {
+				while let Some(HistoriedValue{ value, state: _ }) = self.0.st_get(index) {
 					if &value != neutral {
 						break;
 					}
@@ -529,7 +602,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 			*/
 		
 			for i in 0..len {
-				if let Some(mut h) = self.0.get(i) {
+				if let Some(mut h) = self.0.st_get(i) {
 					if &h.state > mig {
 						h.state -= mig.clone();
 					} else {

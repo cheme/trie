@@ -85,7 +85,7 @@ impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>, // TODO consider subassing usize or minus one trait...
 	V: Clone,
-	D: LinearStorage<Linear<V, BI, BD>, I>,
+	D: LinearStorage<Linear<V, BI, BD>, I>, // TODO rewrite to be linear storage of BD only.
 	BD: LinearStorage<V, BI>,
 > ValueRef<V> for Tree<I, BI, V, D, BD> {
 	type S = ForkPlan<I, BI>;
@@ -109,7 +109,7 @@ impl<
 					// TODO add a lower bound check (maybe debug_assert it only).
 					let mut upper_bound = state_branch_range.end.clone();
 					upper_bound -= 1;
-					if let Some(result) = self.branches.get(index - 1).expect("previous code").value.get(&upper_bound) {
+					if let Some(result) = self.branches.st_get(index - 1).expect("previous code").value.get(&upper_bound) {
 						return Some(result)
 					}
 				}
@@ -121,7 +121,7 @@ impl<
 		while index > 0 {
 			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
 			if branch_index <= &at.composite_treshold.0 {
-				if let Some(result) = self.branches.get(index - 1).expect("previous code").value.get(&at.composite_treshold.1) {
+				if let Some(result) = self.branches.st_get(index - 1).expect("previous code").value.get(&at.composite_treshold.1) {
 					return Some(result)
 				}
 			}
@@ -233,7 +233,7 @@ impl<
 			let iter_branch_index = self.branches.get_state(iter_index).expect("previous code");
 			if &iter_branch_index == branch_index {
 				let index = Latest::unchecked_latest(index.clone());
-				let mut branch = self.branches.get(iter_index).expect("previous code");
+				let mut branch = self.branches.st_get(iter_index).expect("previous code");
 				return match branch.value.set(value, &index) {
 					UpdateResult::Changed(_) => {
 						self.branches.emplace(iter_index, branch);
@@ -285,7 +285,7 @@ impl<
 			let iter_branch_index = self.branches.get_state(iter_index).expect("previous code");
 			if &iter_branch_index == branch_index {
 				let index = Latest::unchecked_latest(index.clone());
-				let mut branch = self.branches.get(iter_index).expect("previous code");
+				let mut branch = self.branches.st_get(iter_index).expect("previous code");
 				return match branch.value.discard(&index) {
 					UpdateResult::Changed(v) => {
 						self.branches.emplace(iter_index, branch);
@@ -346,7 +346,7 @@ impl<
 					neutral_element: neutral.clone(),
 				};
 
-				let mut branch = self.branches.get(*index).expect("previous code");
+				let mut branch = self.branches.st_get(*index).expect("previous code");
 				match branch.value.gc(&mut gc) {
 					UpdateResult::Unchanged => (),
 					UpdateResult::Changed(_) => { 
@@ -420,7 +420,7 @@ impl<
 
 			if gc.branch_index == branch_index {
 				if let Some(gc) = gc.new_range.as_mut() {
-					let mut branch = self.branches.get(index).expect("previous code");
+					let mut branch = self.branches.st_get(index).expect("previous code");
 					match branch.value.gc(gc) {
 						UpdateResult::Unchanged => (),
 						UpdateResult::Changed(_) => { 
@@ -529,6 +529,27 @@ impl Tree<u32, u32, Option<Vec<u8>>, TreeBackendTempSize, LinearBackendTempSize>
 		size
 	}
 }
+mod cut {
+fn test() {
+
+type LinearBackend<'a> = crate::historied::encoded_array::EncodedArray<
+	'a,
+	Vec<u8>,
+	crate::historied::encoded_array::NoVersion,
+>;
+type TreeBackend<'a> = crate::historied::encoded_array::EncodedArray<
+	'a,
+	crate::historied::linear::Linear<Vec<u8>, u32, LinearBackend<'a>>,
+	crate::historied::encoded_array::NoVersion,
+>;
+type HValue<'a> = super::Tree<u32, u32, Vec<u8>, TreeBackend<'a>, LinearBackend<'a>>;
+
+		let latest = super::Latest::unchecked_latest((0, 0));
+		use super::Value;
+		let mut item = HValue::new(b"dtd".to_vec(), &latest);
+
+}
+}
 
 #[cfg(test)]
 mod test {
@@ -536,11 +557,37 @@ mod test {
 	use crate::historied::tree_management::test::test_states;
 
 	#[test]
+	fn compile_double_encoded() {
+		use crate::historied::encoded_array::{EncodedArray, NoVersion};
+		use crate::historied::ValueRef;
+
+		type BD<'a> = EncodedArray<'a, Vec<u8>, NoVersion>;
+//		type D<'a> = crate::historied::linear::MemoryOnly<
+		type D<'a> = EncodedArray<'a,
+			crate::historied::linear::Linear<Vec<u8>, u32, BD<'a>>,
+			NoVersion,
+//			u32
+		>;
+		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
+		let at: ForkPlan<u32, u32> = Default::default();
+		item.get(&at);
+		let latest = Latest::unchecked_latest((0, 0));
+		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
+		let slice = &b"dtdt"[..];
+		use crate::historied::encoded_array::{EncodedArrayValue};
+//		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
+//		let bd = BD::from_slice(slice);
+		let bd = D::default();
+		use crate::historied::linear::LinearStorage;
+		bd.st_get(1usize);
+	}
+
+	#[test]
 	fn test_set_get() {
 		// TODO EMCH parameterize test
 		type BD = crate::historied::linear::MemoryOnly<u32, u32>;
 		type D = crate::historied::linear::MemoryOnly<
-			crate::historied::linear::Linear<u32, u32,BD>,
+			crate::historied::linear::Linear<u32, u32, BD>,
 			u32,
 		>;
 		// 0> 1: _ _ X
