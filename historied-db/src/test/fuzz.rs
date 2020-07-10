@@ -380,3 +380,10 @@ fn inmemory_forkable_no_regression() {
 		inmemory_forkable(input, true);
 	}
 }
+
+#[test]
+fn management() {
+	let mut in_memory_mgmt_ser = InMemoryMgmtSer::default();
+	assert!(in_memory_mgmt_ser.get_db_state_for_fork(&StateInput(199u32)).is_none());
+	assert!(in_memory_mgmt_ser.get_db_state_for_fork(&StateInput(0u32)).is_none());
+}
