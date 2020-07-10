@@ -178,6 +178,10 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 		self.latest_state.clone()
 	}
 
+	fn init_state(&mut self) -> Self::SE {
+		Latest::unchecked_latest(0)
+	}
+
 	fn reverse_lookup(&mut self, state: &Self::S) -> Option<StateInput> {
 		if let Some(state) = state.first() {
 			// TODO wrong cast.
@@ -209,6 +213,7 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 	fn ref_state_fork(&self, s: &Self::S) -> Self::SF {
 		s.first().cloned().unwrap_or_default()
 	}
+
 	fn get_db_state_for_fork(&mut self, state: &StateInput) -> Option<Self::SF> {
 		self.get_state(state)
 	}

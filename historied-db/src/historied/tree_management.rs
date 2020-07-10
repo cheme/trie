@@ -1056,6 +1056,10 @@ impl<
 		(management, init_plan)
 	}
 
+	fn init_state(&mut self) -> Self::SE {
+		Latest::unchecked_latest(self.state.tree.meta.get().composite_treshold.clone())
+	}
+
 	fn latest_state(&mut self) -> Self::SE {
 		let latest = self.last_in_use_index.handle(self.state.ser()).get().clone();
 		Latest::unchecked_latest(latest)

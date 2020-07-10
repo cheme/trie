@@ -760,6 +760,10 @@ V: Clone,
 		}, state)
 	}
 
+	fn init_state(&mut self) -> Self::SE {
+		Latest::unchecked_latest(self.start_treshold.clone())
+	}
+
 	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
 		if let Some(state) = self.mapping.get(state) {
 			let latest = self.mapping.values().max()
