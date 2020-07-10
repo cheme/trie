@@ -29,6 +29,56 @@ use codec::{Encode, Decode};
 // -> then similar to those reverse iteration with possible early exit.
 // -> Also need to attach some location index (see enumerate use here)
 
+// strategy such as in linear are getting too complex for tree, just using
+// macros to remove duplicated code.
+
+// get from tree
+macro_rules! tree_get {
+	($fn_name: ident, $return_type: ty, $branch_query: ident, $value_query: expr, $post_process: expr) => {
+	fn $fn_name<'a>(&'a self, at: &<Self as ValueRef<V>>::S) -> Option<$return_type> {
+		let mut index = self.branches.len();
+		// note that we expect branch index to be linearily set
+		// along a branch (no state containing unordered branch_index
+		// and no history containing unorderd branch_index).
+		if index == 0 {
+			return None;
+		}
+
+		for (state_branch_range, state_branch_index) in at.iter() {
+			while index > 0 {
+				let branch_index = &self.branches.get_state(index - 1).expect("previous code");
+				if branch_index < &state_branch_index {
+					break;
+				} else if branch_index == &state_branch_index {
+					// TODO add a lower bound check (maybe debug_assert it only).
+					let mut upper_bound = state_branch_range.end.clone();
+					upper_bound -= 1;
+					let branch = self.branches.$branch_query(index - 1).expect("previous code").value;
+					if let Some(result) = $value_query(&branch, &upper_bound) {
+						return Some($post_process(result, branch))
+					}
+				}
+				index -= 1;
+			}
+		}
+
+		// composite part.
+		while index > 0 {
+			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
+			if branch_index <= &at.composite_treshold.0 {
+				let branch = self.branches.$branch_query(index - 1).expect("previous code").value;
+				if let Some(result) = $value_query(&branch, &at.composite_treshold.1) {
+					return Some($post_process(result, branch))
+				}
+			}
+			index -= 1;
+		}
+	
+		None
+	}
+	}
+}
+
 #[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
 pub struct Tree<I, BI, V, D, BD> {
@@ -90,46 +140,7 @@ impl<
 > ValueRef<V> for Tree<I, BI, V, D, BD> {
 	type S = ForkPlan<I, BI>;
 
-	fn get(&self, at: &Self::S) -> Option<V> {
-		// TODO EMCH !! lifetime refacto to avoid this code duplication with get_ref
-		let mut index = self.branches.len();
-		// note that we expect branch index to be linearily set
-		// along a branch (no state containing unordered branch_index
-		// and no history containing unorderd branch_index).
-		if index == 0 {
-			return None;
-		}
-
-		for (state_branch_range, state_branch_index) in at.iter() {
-			while index > 0 {
-				let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-				if branch_index < &state_branch_index {
-					break;
-				} else if branch_index == &state_branch_index {
-					// TODO add a lower bound check (maybe debug_assert it only).
-					let mut upper_bound = state_branch_range.end.clone();
-					upper_bound -= 1;
-					if let Some(result) = self.branches.st_get(index - 1).expect("previous code").value.get(&upper_bound) {
-						return Some(result)
-					}
-				}
-				index -= 1;
-			}
-		}
-
-		// composite part.
-		while index > 0 {
-			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-			if branch_index <= &at.composite_treshold.0 {
-				if let Some(result) = self.branches.st_get(index - 1).expect("previous code").value.get(&at.composite_treshold.1) {
-					return Some(result)
-				}
-			}
-			index -= 1;
-		}
-	
-		None
-	}
+	tree_get!(get, V, st_get, |b: &Linear<V, BI, BD>, ix| b.get(ix), |r, _| r);
 
 	fn contains(&self, at: &Self::S) -> bool {
 		self.get(at).is_some() // TODO avoid clone??
@@ -148,45 +159,7 @@ impl<
 	D: LinearStorageMem<Linear<V, BI, BD>, I>,
 	BD: LinearStorageMem<V, BI>,
 > InMemoryValueRef<V> for Tree<I, BI, V, D, BD> {
-	fn get_ref(&self, at: &<Self as ValueRef<V>>::S) -> Option<&V> {
-		let mut index = self.branches.len();
-		// note that we expect branch index to be linearily set
-		// along a branch (no state containing unordered branch_index
-		// and no history containing unorderd branch_index).
-		if index == 0 {
-			return None;
-		}
-
-		for (state_branch_range, state_branch_index) in at.iter() {
-			while index > 0 {
-				let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-				if branch_index < &state_branch_index {
-					break;
-				} else if branch_index == &state_branch_index {
-					// TODO add a lower bound check (maybe debug_assert it only).
-					let mut upper_bound = state_branch_range.end.clone();
-					upper_bound -= 1;
-					if let Some(result) = self.branches.get_ref(index - 1).expect("previous code").value.get_ref(&upper_bound) {
-						return Some(result)
-					}
-				}
-				index -= 1;
-			}
-		}
-
-		// composite part.
-		while index > 0 {
-			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-			if branch_index <= &at.composite_treshold.0 {
-				if let Some(result) = self.branches.get_ref(index - 1).expect("previous code").value.get_ref(&at.composite_treshold.1) {
-					return Some(result)
-				}
-			}
-			index -= 1;
-		}
-	
-		None
-	}
+	tree_get!(get_ref, &V, get_ref, |b: &'a Linear<V, BI, BD>, ix| b.get_ref(ix), |r, _| r );
 }
 
 impl<
@@ -538,47 +511,13 @@ impl<
 	D: LinearStorageSlice<Linear<V, BI, BD>, I>,
 	BD: AsRef<[u8]> + AsMut<[u8]> + LinearStorageRange<V, BI>,
 > InMemoryValueSlice<V> for Tree<I, BI, V, D, BD> {
-	fn get_slice(&self, at: &<Self as ValueRef<V>>::S) -> Option<&[u8]> {
-		let mut index = self.branches.len();
-		// note that we expect branch index to be linearily set
-		// along a branch (no state containing unordered branch_index
-		// and no history containing unorderd branch_index).
-		if index == 0 {
-			return None;
-		}
-
-		for (state_branch_range, state_branch_index) in at.iter() {
-			while index > 0 {
-				let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-				if branch_index < &state_branch_index {
-					break;
-				} else if branch_index == &state_branch_index {
-					// TODO add a lower bound check (maybe debug_assert it only).
-					let mut upper_bound = state_branch_range.end.clone();
-					upper_bound -= 1;
-					let slice = self.branches.get_slice(index - 1).expect("previous code").value;
-					if let Some(result) = <Linear<V, BI, BD>>::get_range(slice, &upper_bound) {
-						return Some(&slice[result])
-					}
-				}
-				index -= 1;
-			}
-		}
-
-		// composite part.
-		while index > 0 {
-			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
-			if branch_index <= &at.composite_treshold.0 {
-				let slice = self.branches.get_slice(index - 1).expect("previous code").value;
-				if let Some(result) = <Linear<V, BI, BD>>::get_range(slice, &at.composite_treshold.1) {
-					return Some(&slice[result])
-				}
-			}
-			index -= 1;
-		}
-	
-		None
-	}
+	tree_get!(
+		get_slice,
+		&[u8],
+		get_slice,
+		|b: &'a [u8], ix| <Linear<V, BI, BD>>::get_range(b, ix),
+		|result, b: &'a [u8]| &b[result]
+	);
 }
 
 
