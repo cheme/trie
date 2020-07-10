@@ -16,8 +16,8 @@
 
 // TODO remove "previous code" expect.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, UpdateResult};
-use crate::historied::linear::{Linear, LinearStorage, LinearStorageMem, LinearState, LinearGC};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, InMemoryValueSlice, InMemoryValueRange, UpdateResult};
+use crate::historied::linear::{Linear, LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem, LinearState, LinearGC};
 use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::marker::PhantomData;
@@ -140,6 +140,7 @@ impl<
 		self.branches.len() == 0
 	}
 }
+
 impl<
 	I: Default + Eq + Ord + Clone,
 	BI: LinearState + SubAssign<u32>,
@@ -530,6 +531,57 @@ impl Tree<u32, u32, Option<Vec<u8>>, TreeBackendTempSize, LinearBackendTempSize>
 	}
 }
 
+impl<
+	I: Default + Eq + Ord + Clone,
+	BI: LinearState + SubAssign<u32>,
+	V: Clone + AsRef<[u8]> + AsMut<[u8]>,
+	D: LinearStorageSlice<Linear<V, BI, BD>, I>,
+	BD: AsRef<[u8]> + AsMut<[u8]> + LinearStorageRange<V, BI>,
+> InMemoryValueSlice<V> for Tree<I, BI, V, D, BD> {
+	fn get_slice(&self, at: &<Self as ValueRef<V>>::S) -> Option<&[u8]> {
+		let mut index = self.branches.len();
+		// note that we expect branch index to be linearily set
+		// along a branch (no state containing unordered branch_index
+		// and no history containing unorderd branch_index).
+		if index == 0 {
+			return None;
+		}
+
+		for (state_branch_range, state_branch_index) in at.iter() {
+			while index > 0 {
+				let branch_index = &self.branches.get_state(index - 1).expect("previous code");
+				if branch_index < &state_branch_index {
+					break;
+				} else if branch_index == &state_branch_index {
+					// TODO add a lower bound check (maybe debug_assert it only).
+					let mut upper_bound = state_branch_range.end.clone();
+					upper_bound -= 1;
+					let slice = self.branches.get_slice(index - 1).expect("previous code").value;
+					if let Some(result) = <Linear<V, BI, BD>>::get_range(slice, &upper_bound) {
+						return Some(&slice[result])
+					}
+				}
+				index -= 1;
+			}
+		}
+
+		// composite part.
+		while index > 0 {
+			let branch_index = &self.branches.get_state(index - 1).expect("previous code");
+			if branch_index <= &at.composite_treshold.0 {
+				let slice = self.branches.get_slice(index - 1).expect("previous code").value;
+				if let Some(result) = <Linear<V, BI, BD>>::get_range(slice, &at.composite_treshold.1) {
+					return Some(&slice[result])
+				}
+			}
+			index -= 1;
+		}
+	
+		None
+	}
+}
+
+
 #[cfg(test)]
 mod test {
 	use super::*;
@@ -550,6 +602,7 @@ mod test {
 		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
 		let at: ForkPlan<u32, u32> = Default::default();
 		item.get(&at);
+		item.get_slice(&at);
 		let latest = Latest::unchecked_latest((0, 0));
 		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
 		let slice = &b"dtdt"[..];

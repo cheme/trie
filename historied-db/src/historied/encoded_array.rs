@@ -24,7 +24,7 @@
 use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
 use super::HistoriedValue;
-use super::linear::{LinearStorage, LinearStorageSlice, StorageAdapter};
+use super::linear::{LinearStorage, LinearStorageSlice, LinearStorageRange, StorageAdapter};
 use codec::{Encode, Decode, Input as CodecInput};
 
 #[derive(Debug)]
@@ -551,6 +551,25 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorageSlice<V, u32> for EncodedArray<'
 			None
 		}
 	}
+}
+
+impl<'a, F: EncodedArrayConfig, V> LinearStorageRange<V, u32> for EncodedArray<'a, V, F>
+	where V: EncodedArrayValue,
+{
+	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<std::ops::Range<usize>, u32>> {
+
+		let inner = <Self as EncodedArrayValue>::from_slice(slice);
+		let (start, end, state) = inner.get_range(index);
+		Some(HistoriedValue {
+			state,
+			value: start..end,
+		})
+	}
+
+	fn from_slice(slice: &[u8]) -> Option<Self> {
+		Some(<Self as EncodedArrayValue>::from_slice(slice))
+	}
+
 }
 
 #[cfg(test)]

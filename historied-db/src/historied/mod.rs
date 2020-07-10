@@ -22,6 +22,7 @@ use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef
 use hash_db::{PlainDB, PlainDBRef};
 use crate::Latest;
 use codec::{Encode, Decode};
+use std::ops::Range;
 
 pub mod linear;
 pub mod tree_management;
@@ -55,6 +56,11 @@ pub trait InMemoryValueRef<V>: ValueRef<V> {
 pub trait InMemoryValueSlice<V>: ValueRef<V> {
 	/// Get reference to the value at this state.
 	fn get_slice(&self, at: &Self::S) -> Option<&[u8]>;
+}
+
+pub trait InMemoryValueRange<S> {
+	/// Get reference to the value from which this slice can be build.
+	fn get_range(slice: &[u8], at: &S) -> Option<Range<usize>>;
 }
 
 /// Trait for historied value.

@@ -17,7 +17,7 @@
 //! Current implementation is limited to a simple array indexing
 //! with modification at the end only.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValueSlice, InMemoryValue, StateIndex};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRange, InMemoryValueRef, InMemoryValueSlice, InMemoryValue, StateIndex};
 use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
 	Management, Migrate, LinearManagement, Latest};
 use crate::rstd::marker::PhantomData;
@@ -256,6 +256,14 @@ pub trait LinearStorageMem<V, S>: LinearStorage<V, S> {
 	fn get_ref_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut V, S>>;
 }
 
+pub trait LinearStorageRange<V, S>: LinearStorage<V, S> {
+	/// Array like get. TODO consider not returning option (same for from_slice), inner
+	/// implementation being unsafe.
+	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<Range<usize>, S>>;
+
+	fn from_slice(slice: &[u8]) -> Option<Self>;
+}
+	
 /// Backend for linear storage with inmemory reference.
 pub trait LinearStorageSlice<V: AsRef<[u8]> + AsMut<[u8]>, S>: LinearStorage<V, S> {
 	/// Array like get.
@@ -390,6 +398,29 @@ impl<V: Clone, S: LinearState, D: LinearStorage<V, S>> ValueRef<V> for Linear<V,
 
 	fn is_empty(&self) -> bool {
 		self.0.len() == 0
+	}
+}
+
+impl<V, S: LinearState, D: LinearStorageRange<V, S>> InMemoryValueRange<S> for Linear<V, S, D> {
+	fn get_range(slice: &[u8], at: &S) -> Option<Range<usize>> {
+		if let Some(inner) = D::from_slice(slice) {
+			let inner = Linear(inner, PhantomData);
+			let mut index = inner.len();
+			if index == 0 {
+				return None;
+			}
+			while index > 0 {
+				index -= 1;
+				if let Some(HistoriedValue { value, state }) = D::get_range(slice, index) {
+					if state.exists(at) {
+						return Some(value);
+					}
+				}
+			}
+			None
+		} else {
+			None
+		}
 	}
 }
 
