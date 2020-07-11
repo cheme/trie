@@ -462,7 +462,7 @@ impl<
 		let len = insert_at;
 		for ix in 0..len {
 			let iter_index = len - 1 - ix;
-			let mut branch = self.branches.get_ref_mut(iter_index).expect("previous code");
+			let branch = self.branches.get_ref_mut(iter_index).expect("previous code");
 	
 //		for (iter_index, branch) in self.branches.iter_mut().enumerate().rev() {
 			if &branch.state == branch_index {
@@ -538,14 +538,14 @@ mod test {
 			NoVersion,
 //			u32
 		>;
-		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
+		let item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
 		let at: ForkPlan<u32, u32> = Default::default();
 		item.get(&at);
 		item.get_slice(&at);
 		let latest = Latest::unchecked_latest((0, 0));
-		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
-		let slice = &b"dtdt"[..];
-		use crate::backend::encoded_array::{EncodedArrayValue};
+		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
+//		let slice = &b"dtdt"[..];
+//		use crate::backend::encoded_array::{EncodedArrayValue};
 //		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
 //		let bd = BD::from_slice(slice);
 		let bd = D::default();

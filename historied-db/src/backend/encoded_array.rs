@@ -200,7 +200,7 @@ impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
     self.0.into_owned()
   }
 
-	fn push_slice(&mut self, val: HistoriedValue<&[u8], u32>) {
+	pub fn push_slice(&mut self, val: HistoriedValue<&[u8], u32>) {
 		self.push_extra(val, &[])
 	}
 

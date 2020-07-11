@@ -990,12 +990,6 @@ impl<I, BI, V> Default for TreeMigrate<I, BI, V> {
 	}
 }
 
-impl<I, BI, V> TreeMigrate<I, BI, V> {
-	fn applied(&mut self, _gc_applied: TreeMigrate<I, BI, V>) {
-		unimplemented!("TODO run a delta to keep possible updates in between");
-	}
-}
-
 impl<
 	H: Ord + Clone + Codec,
 	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,

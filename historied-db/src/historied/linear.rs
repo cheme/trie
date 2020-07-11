@@ -185,7 +185,7 @@ impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
 		inner.get_slice(index)
 	}
 }
-struct SliceAdapterMut;
+/*struct SliceAdapterMut;
 impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
 	'a,
 	S,
@@ -195,7 +195,7 @@ impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
 	fn get_adapt(inner: &'a mut D, index: usize) -> Option<HistoriedValue<&'a mut [u8], S>> {
 		inner.get_slice_mut(index)
 	}
-}
+}*/
 
 impl<V: Clone, S: LinearState, D: LinearStorage<V, S>> ValueRef<V> for Linear<V, S, D> {
 	type S = S;
