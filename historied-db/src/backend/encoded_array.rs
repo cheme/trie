@@ -670,6 +670,40 @@ mod test {
 		assert_eq!(ser.get_state(2), (v2ref, 9).into());
 	}
 
+	fn test_serialized_insert_remove<F: EncodedArrayConfig>(mut ser: EncodedArray<Vec<u8>, F>) {
+		// test basis unsafe function similar to a simple vec
+		// without index checking.
+		let v1ref = &b"val1"[..];
+		let v2ref = &b"value_2"[..];
+		let v3ref = &b"a third value 3"[..];
+		let v1 = b"val1".to_vec();
+		let v2 = b"value_2".to_vec();
+		let v3 = b"a third value 3".to_vec();
+
+		ser.insert(0, (v1.clone(), 1).into());
+		ser.insert(0, (v2.clone(), 2).into());
+		ser.insert(1, (v3.clone(), 3).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+		assert_eq!(ser.get_state(1), (v3ref, 3).into());
+		assert_eq!(ser.get_state(2), (v1ref, 1).into());
+		assert_eq!(ser.len(), 3);
+		ser.remove(1);
+		ser.insert(1, (v2.clone(), 1).into());
+		assert_eq!(ser.get_state(0), (v2ref, 2).into());
+		assert_eq!(ser.get_state(1), (v2ref, 1).into());
+		assert_eq!(ser.get_state(2), (v1ref, 1).into());
+		assert_eq!(ser.len(), 3);
+		ser.remove(0);
+		assert_eq!(ser.get_state(0), (v2ref, 1).into());
+		assert_eq!(ser.get_state(1), (v1ref, 1).into());
+		assert_eq!(ser.len(), 2);
+		ser.remove(1);
+		assert_eq!(ser.get_state(0), (v2ref, 1).into());
+		assert_eq!(ser.len(), 1);
+		ser.remove(0);
+		assert_eq!(ser.len(), 0);
+	}
+
 	#[test]
 	fn serialized_basis() {
 		let ser1: EncodedArray<Vec<u8>, NoVersion> = Default::default();
@@ -685,6 +719,15 @@ mod test {
 		test_serialized_emplace(ser1);
 		test_serialized_emplace(ser2);
 	}
+
+	#[test]
+	fn serialized_insert_remove() {
+		let ser1: EncodedArray<Vec<u8>, NoVersion> = Default::default();
+		let ser2: EncodedArray<Vec<u8>, DefaultVersion> = Default::default();
+		test_serialized_insert_remove(ser1);
+		test_serialized_insert_remove(ser2);
+	}
+
 
 /*
 	// TODO rename to gc and activate when implementation
