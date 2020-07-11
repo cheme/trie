@@ -20,7 +20,7 @@ use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, In
 use crate::backend::{LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem};
 use crate::historied::linear::{Linear, LinearState, LinearGC};
 use crate::management::tree::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
-use crate::rstd::ops::{AddAssign, SubAssign, Range};
+use crate::rstd::ops::SubAssign;
 use crate::rstd::marker::PhantomData;
 use crate::Latest;
 use codec::{Encode, Decode};
@@ -289,7 +289,6 @@ impl<
 
 		let neutral = &gc.neutral_element;
 		let mut result = UpdateResult::Unchanged;
-		let start_len = self.branches.len();
 		let mut gc_iter = gc.storage.iter().rev();
 		let start_composite = gc.composite_treshold.1.clone();
 		let len = self.branches.len();

@@ -17,8 +17,7 @@
 #[cfg(not(feature = "std"))]
 use crate::rstd::{vec::Vec, vec};
 use crate::rstd::marker::PhantomData;
-use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
-	Management, Migrate, LinearManagement};
+use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB};
 use hash_db::{PlainDB, PlainDBRef};
 use crate::Latest;
 use codec::{Encode, Decode};

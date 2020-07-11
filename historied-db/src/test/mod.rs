@@ -18,8 +18,6 @@
 pub mod simple_impl;
 pub mod fuzz;
 
-use crate::rstd::boxed::Box;
-
 macro_rules! InMemSimpleDB {
 	($name: ident, $size: expr, $inner_module: ident) => {
 

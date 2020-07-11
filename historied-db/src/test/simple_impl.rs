@@ -270,7 +270,7 @@ impl<K: Eq + Hash, V> Db<K, V> {
 		} else {
 			1
 		};
-		let rec_calls: Vec<StateIndex> = self.db.iter().enumerate().skip(1)
+		let rec_calls: Vec<StateIndex> = self.db.iter().enumerate().skip(skip)
 			.filter_map(|(ix, elt)| elt.as_ref().and_then(|elt| if elt.previous == state {
 			Some(ix as u32)
 		} else {

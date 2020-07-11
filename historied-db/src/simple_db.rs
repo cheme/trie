@@ -101,7 +101,7 @@ impl<'a, DB: DynSerializeDB, Instance: DynSerializeInstance> Collection<'a, DB, 
 			self.db.read(Instance::STATIC_COL, k)
 		}
 	}
-	pub fn dyn_iter(&self, c: &[u8]) -> SerializeDBIter<'a> {
+	pub fn dyn_iter(&self) -> SerializeDBIter<'a> {
 		if let Some(c) = self.instance.dyn_collection() {
 			self.db.dyn_iter(c)
 		} else {
@@ -199,7 +199,7 @@ impl SerializeDB for () {
 }
 
 
-use codec::{Codec, Encode, Decode};
+use codec::{Codec, Encode};
 
 #[derive(Derivative)]
 #[derivative(Clone(bound="K: Clone, V: Clone, I: Clone"))]

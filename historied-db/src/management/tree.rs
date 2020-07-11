@@ -18,7 +18,7 @@
 //! State changes are limited so resulting tree is rather unbalance.
 //! This is best when there is not to many branch (fork)
 
-use crate::rstd::ops::{AddAssign, SubAssign, Range};
+use crate::rstd::ops::{AddAssign, SubAssign};
 use crate::rstd::BTreeMap;
 use crate::rstd::fmt::Debug;
 use crate::historied::linear::LinearGC;
@@ -991,7 +991,7 @@ impl<I, BI, V> Default for TreeMigrate<I, BI, V> {
 }
 
 impl<I, BI, V> TreeMigrate<I, BI, V> {
-	fn applied(&mut self, gc_applied: TreeMigrate<I, BI, V>) {
+	fn applied(&mut self, _gc_applied: TreeMigrate<I, BI, V>) {
 		unimplemented!("TODO run a delta to keep possible updates in between");
 	}
 }

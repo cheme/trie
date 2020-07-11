@@ -17,20 +17,14 @@
 //! Current implementation is limited to a simple array indexing
 //! with modification at the end only.
 
-use super::{HistoriedValue, ValueRef, Value, InMemoryValueRange, InMemoryValueRef, InMemoryValueSlice, InMemoryValue, StateIndex};
-use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef,
-	Management, Migrate, LinearManagement, Latest};
+use super::{HistoriedValue, ValueRef, Value, InMemoryValueRange, InMemoryValueRef, InMemoryValueSlice, InMemoryValue};
+use crate::{UpdateResult, Latest};
 use crate::rstd::marker::PhantomData;
-use crate::rstd::convert::{TryFrom, TryInto};
+use crate::rstd::convert::TryFrom;
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
-use crate::rstd::mem::replace;
-use codec::{Encode, Decode, Codec, Input as CodecInput};
+use codec::{Encode, Decode};
 use crate::backend::{LinearStorage, LinearStorageMem, LinearStorageSlice, LinearStorageRange};
 use crate::backend::encoded_array::EncodedArrayValue;
-
-/// For in memory implementation we expect the state to be `Into<usize>` and
-/// `From<usize>` and will not manage failure when converting.
-const USIZE_CONVERT: &'static str = "A in memory vec is bounded by usize limit.";
 
 /// Basic usage case should be integers and byte representation, but
 /// only integer should really be use.

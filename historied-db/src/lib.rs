@@ -238,7 +238,7 @@ pub trait ForkableManagement<H>: Management<H> {
 	/// Note that this trait could be simplified to this function only.
 	/// But SF can generally be extracted from an SE or an S so it is one less query.
 	fn try_append_external_state(&mut self, state: H, at: &H) -> Option<Self::S> {
-		self.get_db_state_for_fork(&state)
+		self.get_db_state_for_fork(&at)
 			.and_then(|at| self.append_external_state(state, &at))
 	}
 
