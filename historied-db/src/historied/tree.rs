@@ -17,8 +17,9 @@
 // TODO remove "previous code" expect.
 
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, InMemoryValueSlice, InMemoryValueRange, UpdateResult};
-use crate::historied::linear::{Linear, LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem, LinearState, LinearGC};
-use crate::historied::tree_management::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
+use crate::backend::{LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem};
+use crate::historied::linear::{Linear, LinearState, LinearGC};
+use crate::management::tree::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::marker::PhantomData;
 use crate::Latest;
@@ -363,7 +364,7 @@ impl<
 				return branch.new_range.as_ref()
 					.map(|gc| {
 						let linear_migrate = (bi.clone(), gc.clone());
-						Linear::<_, _, crate::historied::linear::MemoryOnly<V, BI>>::is_in_migrate(linear_index, &linear_migrate)
+						Linear::<_, _, crate::backend::in_memory::MemoryOnly<V, BI>>::is_in_migrate(linear_index, &linear_migrate)
 					}).unwrap_or(true);
 			}
 			if &branch.branch_index < &index {
@@ -486,8 +487,8 @@ impl<
 	}
 }
 
-type LinearBackendTempSize = crate::historied::linear::MemoryOnly<Option<Vec<u8>>, u32>;
-type TreeBackendTempSize = crate::historied::linear::MemoryOnly<Linear<Option<Vec<u8>>, u32, LinearBackendTempSize>, u32>;
+type LinearBackendTempSize = crate::backend::in_memory::MemoryOnly<Option<Vec<u8>>, u32>;
+type TreeBackendTempSize = crate::backend::in_memory::MemoryOnly<Linear<Option<Vec<u8>>, u32, LinearBackendTempSize>, u32>;
 
 impl Tree<u32, u32, Option<Vec<u8>>, TreeBackendTempSize, LinearBackendTempSize> {
 	/// Temporary function to get occupied stage.
@@ -524,11 +525,11 @@ impl<
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::historied::tree_management::test::test_states;
+	use crate::management::tree::test::test_states;
 
 	#[test]
 	fn compile_double_encoded() {
-		use crate::historied::encoded_array::{EncodedArray, NoVersion};
+		use crate::backend::encoded_array::{EncodedArray, NoVersion};
 		use crate::historied::ValueRef;
 
 		type BD<'a> = EncodedArray<'a, Vec<u8>, NoVersion>;
@@ -545,19 +546,19 @@ mod test {
 		let latest = Latest::unchecked_latest((0, 0));
 		let mut item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
 		let slice = &b"dtdt"[..];
-		use crate::historied::encoded_array::{EncodedArrayValue};
+		use crate::backend::encoded_array::{EncodedArrayValue};
 //		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
 //		let bd = BD::from_slice(slice);
 		let bd = D::default();
-		use crate::historied::linear::LinearStorage;
+		use crate::backend::LinearStorage;
 		bd.st_get(1usize);
 	}
 
 	#[test]
 	fn test_set_get() {
 		// TODO EMCH parameterize test
-		type BD = crate::historied::linear::MemoryOnly<u32, u32>;
-		type D = crate::historied::linear::MemoryOnly<
+		type BD = crate::backend::in_memory::MemoryOnly<u32, u32>;
+		type D = crate::backend::in_memory::MemoryOnly<
 			crate::historied::linear::Linear<u32, u32, BD>,
 			u32,
 		>;

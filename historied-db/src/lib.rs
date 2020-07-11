@@ -47,9 +47,15 @@ use core::marker::PhantomData;
 /// using historied values
 pub mod historied;
 
+/// Backend structures for historied data storage.
+pub mod backend;
+
 /// Tools to work with simple key value
 /// collection based dbs (non historied).
 pub mod simple_db;
+
+/// Management for state of historied data.
+pub mod management;
 
 /// Minimal simple implementation.
 #[cfg(any(test, feature = "test-helpers"))]

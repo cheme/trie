@@ -23,8 +23,9 @@
 
 use crate::rstd::marker::PhantomData;
 use crate::rstd::borrow::Cow;
-use super::HistoriedValue;
-use super::linear::{LinearStorage, LinearStorageSlice, LinearStorageRange, StorageAdapter};
+use crate::rstd::ops::Range;
+use crate::historied::HistoriedValue;
+use super::{LinearStorage, LinearStorageSlice, LinearStorageRange};
 use codec::{Encode, Decode, Input as CodecInput};
 
 #[derive(Debug)]
@@ -409,7 +410,7 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V,
 	// fn get(&self, index: usize) -> Option<HistoriedValue<&'a[u8], u32>> {
 	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, u32>> {
 		if index < self.len() {
-			Some(self.get_state(index).into_map(|v| V::from_slice(v.as_ref())))
+			Some(self.get_state(index).map(|v| V::from_slice(v.as_ref())))
 			//Some(self.get_state(index))
 		} else {
 			None
@@ -426,7 +427,7 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V,
 
 	//fn push(&mut self, value: HistoriedValue<&'a[u8], u32>) {
 	fn push(&mut self, value: HistoriedValue<V, u32>) {
-		let val = value.copy_map(|v| v.as_ref());
+		let val = value.map_ref(|v| v.as_ref());
 		self.push_extra(val, &[])
 	}
 
@@ -556,7 +557,7 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorageSlice<V, u32> for EncodedArray<'
 impl<'a, F: EncodedArrayConfig, V> LinearStorageRange<V, u32> for EncodedArray<'a, V, F>
 	where V: EncodedArrayValue,
 {
-	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<std::ops::Range<usize>, u32>> {
+	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<Range<usize>, u32>> {
 
 		let inner = <Self as EncodedArrayValue>::from_slice(slice);
 		let (start, end, state) = inner.get_range(index);

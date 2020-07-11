@@ -21,8 +21,8 @@ use crate::{
 };
 use crate::test::simple_impl::StateInput;
 
-type InMemoryMgmt = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, ()>;
-type InMemoryMgmtSer = crate::historied::tree_management::TreeManagement<StateInput, u32, u32, u16, SerFuzz>;
+type InMemoryMgmt = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, ()>;
+type InMemoryMgmtSer = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, SerFuzz>;
 
 struct SerFuzz;
 
@@ -57,7 +57,7 @@ mod bindings {
 	
 }
 
-impl crate::historied::tree_management::TreeManagementStorage for SerFuzz {
+impl crate::management::tree::TreeManagementStorage for SerFuzz {
 	type Storage = crate::test::InMemorySimpleDB5;
 	type Mapping = bindings::Mapping;
 	type TouchedGC = bindings::TouchedGC;
@@ -72,8 +72,8 @@ impl crate::historied::tree_management::TreeManagementStorage for SerFuzz {
 	}
 
 }
-type LinearBackend = crate::historied::linear::MemoryOnly<u16, u32>;
-type TreeBackend = crate::historied::linear::MemoryOnly<
+type LinearBackend = crate::backend::in_memory::MemoryOnly<u16, u32>;
+type TreeBackend = crate::backend::in_memory::MemoryOnly<
 	crate::historied::linear::Linear<u16, u32, LinearBackend>,
 	u32,
 >;

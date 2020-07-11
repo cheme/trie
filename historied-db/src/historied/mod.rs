@@ -22,13 +22,10 @@ use crate::{StateDBRef, UpdateResult, InMemoryStateDBRef, StateDB, ManagementRef
 use hash_db::{PlainDB, PlainDBRef};
 use crate::Latest;
 use codec::{Encode, Decode};
-use std::ops::Range;
+use crate::rstd::ops::Range;
 
 pub mod linear;
-pub mod tree_management;
 pub mod tree;
-// TODO move to top (use linear logic).
-pub mod encoded_array;
 
 /// Trait for historied value
 pub trait ValueRef<V> {
@@ -122,18 +119,27 @@ pub struct HistoriedValue<V, S> {
 }
 
 impl<V, S> HistoriedValue<V, S> {
-	fn map<V2, F: Fn((&mut V, &mut S))>(&mut self, f: F) {
+	/// Apply modification over historied value reference and state.
+	pub fn apply<V2, F: Fn((&mut V, &mut S))>(&mut self, f: F) {
 		let HistoriedValue { value, state } = self;
 		f((value, state))
 	}
 
-	fn into_map<V2, F: Fn(V) -> V2>(self, f: F) -> HistoriedValue<V2, S> {
+	/// Map inner historied value.
+	pub fn map<V2, F: Fn(V) -> V2>(self, f: F) -> HistoriedValue<V2, S> {
 		let HistoriedValue { value, state } = self;
 		HistoriedValue { value: f(value), state }
 	}
 }
 impl<'a, V: 'a, S: Clone> HistoriedValue<V, S> {
-	fn copy_map<V2: 'a, F: Fn(&'a V) -> V2>(&'a self, f: F) -> HistoriedValue<V2, S> {
+	/// Get historied reference to the value.
+	pub fn as_ref(&self) -> HistoriedValue<&V, S> {
+		let HistoriedValue { value, state } = self;
+		HistoriedValue { value: &value, state: state.clone() }
+	}
+
+	/// Map over a reference of value.
+	pub fn map_ref<V2: 'a, F: Fn(&'a V) -> V2>(&'a self, f: F) -> HistoriedValue<V2, S> {
 		let HistoriedValue { value, state } = self;
 		HistoriedValue { value: f(value), state: state.clone() }
 	}

@@ -25,7 +25,8 @@ use crate::rstd::convert::{TryFrom, TryInto};
 use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use crate::rstd::mem::replace;
 use codec::{Encode, Decode, Codec, Input as CodecInput};
-use crate::historied::encoded_array::EncodedArrayValue;
+use crate::backend::{LinearStorage, LinearStorageMem, LinearStorageSlice, LinearStorageRange};
+use crate::backend::encoded_array::EncodedArrayValue;
 
 /// For in memory implementation we expect the state to be `Into<usize>` and
 /// `From<usize>` and will not manage failure when converting.
@@ -64,43 +65,6 @@ impl<S> LinearState for S where S:
 	+ PartialEq<u32>
 { }
 
-/// Size of preallocated history per element.
-/// Currently at two for committed and prospective only.
-/// It means that using transaction in a module got a direct allocation cost.
-const ALLOCATED_HISTORY: usize = 2;
-
-/// Array like buffer for in memory storage.
-/// By in memory we expect that this will
-/// not required persistence and is not serialized.
-#[derive(Debug, Clone)]
-#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
-pub struct MemoryOnly<V, S>(smallvec::SmallVec<[HistoriedValue<V, S>; ALLOCATED_HISTORY]>);
-
-
-impl<V: Encode, S: Encode> Encode for MemoryOnly<V, S> {
-
-	fn size_hint(&self) -> usize {
-		self.0.as_slice().size_hint()
-	}
-
-	fn encode(&self) -> Vec<u8> {
-		self.0.as_slice().encode()
-	}
-
-/*	fn using_encoded<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
-		f(&self.0)
-	}*/
-}
-
-impl<V: Decode, S: Decode> Decode for MemoryOnly<V, S> {
-	fn decode<I: CodecInput>(value: &mut I) -> Result<Self, codec::Error> {
-		// TODO make a variant when len < ALLOCATED_HISTORY
-		let v = Vec::decode(value)?;
-		Ok(MemoryOnly(smallvec::SmallVec::from_vec(v)))
-	}
-}
-
-
 /// Implementation of linear value history storage.
 #[derive(Debug, Encode, Decode)]
 #[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
@@ -137,7 +101,6 @@ impl<V, S, D: Default> Default for Linear<V, S, D> {
 		Linear(v, PhantomData)
 	}
 }
-
 
 impl<V, S, D: LinearStorage<V, S>> LinearStorage<V, S> for Linear<V, S, D> {
 	fn truncate_until(&mut self, split_off: usize) {
@@ -237,151 +200,6 @@ impl<'a, S, D: LinearStorageSlice<Vec<u8>, S>> StorageAdapter<
 > for SliceAdapter {
 	fn get_adapt(inner: &'a mut D, index: usize) -> Option<HistoriedValue<&'a mut [u8], S>> {
 		inner.get_slice_mut(index)
-	}
-}
-
-
-/// Backend for linear storage with inmemory reference.
-pub trait LinearStorageMem<V, S>: LinearStorage<V, S> {
-	/// Array like get.
-	fn get_ref(&self, index: usize) -> Option<HistoriedValue<&V, S>>;
-	fn last_ref(&self) -> Option<HistoriedValue<&V, S>> {
-		if self.len() > 0 {
-			self.get_ref(self.len() - 1)
-		} else {
-			None
-		}
-	}
-	/// Array like get mut.
-	fn get_ref_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut V, S>>;
-}
-
-pub trait LinearStorageRange<V, S>: LinearStorage<V, S> {
-	/// Array like get. TODO consider not returning option (same for from_slice), inner
-	/// implementation being unsafe.
-	fn get_range(slice: &[u8], index: usize) -> Option<HistoriedValue<Range<usize>, S>>;
-
-	fn from_slice(slice: &[u8]) -> Option<Self>;
-}
-	
-/// Backend for linear storage with inmemory reference.
-pub trait LinearStorageSlice<V: AsRef<[u8]> + AsMut<[u8]>, S>: LinearStorage<V, S> {
-	/// Array like get.
-	fn get_slice(&self, index: usize) -> Option<HistoriedValue<&[u8], S>>;
-	fn last_slice(&self) -> Option<HistoriedValue<&[u8], S>> {
-		if self.len() > 0 {
-			self.get_slice(self.len() - 1)
-		} else {
-			None
-		}
-	}
-	/// Array like get mut.
-	fn get_slice_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut [u8], S>>;
-}
-
-/// Backend for linear storage.
-pub trait LinearStorage<V, S>: Default {
-	/// This does not need to be very efficient as it is mainly for
-	/// garbage collection.
-	fn truncate_until(&mut self, split_off: usize);
-	/// Number of element for different S.
-	fn len(&self) -> usize;
-	/// Array like get.
-	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, S>>;
-	/// Array like get.
-	fn get_state(&self, index: usize) -> Option<S>;
-	/// Vec like push.
-	fn push(&mut self, value: HistoriedValue<V, S>);
-	/// Vec like insert, this is mainly use in tree implementation.
-	/// So when used as tree branch container, a efficient implementation
-	/// shall be use.
-	fn insert(&mut self, index: usize, value: HistoriedValue<V, S>);
-	/// Vec like remove, this is mainly use in tree branch implementation.
-	fn remove(&mut self, index: usize);
-	/// TODO put 'a and return read type that can be &'a S and where S is AsRef<S>.
-	/// TODO put 'a and return read type that can be &'a [u8] and where Vec<u8> is AsRef<[u8]>.
-	fn last(&self) -> Option<HistoriedValue<V, S>> {
-		if self.len() > 0 {
-			self.st_get(self.len() - 1)
-		} else {
-			None
-		}
-	}
-	fn pop(&mut self) -> Option<HistoriedValue<V, S>>;
-	fn clear(&mut self);
-	fn truncate(&mut self, at: usize);
-	/// This can be slow, only define in migrate.
-	/// TODO consider renaming.
-	fn emplace(&mut self, at: usize, value: HistoriedValue<V, S>);
-}
-
-impl<V, S> Default for MemoryOnly<V, S> {
-	fn default() -> Self {
-		MemoryOnly(smallvec::SmallVec::default())
-	}
-}
-
-impl<V: Clone, S: Clone> LinearStorageMem<V, S> for MemoryOnly<V, S> {
-	fn get_ref(&self, index: usize) -> Option<HistoriedValue<&V, S>> {
-		if let Some(HistoriedValue { value, state }) = self.0.get(index) {
-			Some(HistoriedValue { value: &value, state: state.clone() })
-		} else {
-			None
-		}
-	}
-
-	fn get_ref_mut(&mut self, index: usize) -> Option<HistoriedValue<&mut V, S>> {
-		if let Some(HistoriedValue { value, state }) = self.0.get_mut(index) {
-			Some(HistoriedValue { value, state: state.clone() })
-		} else {
-			None
-		}
-	}
-}
-
-impl<V: Clone, S: Clone> LinearStorage<V, S> for MemoryOnly<V, S> {
-	fn truncate_until(&mut self, split_off: usize) {
-		if self.0.spilled() {
-			let new = replace(&mut self.0, Default::default());
-			self.0 = smallvec::SmallVec::from_vec(new.into_vec().split_off(split_off));
-		} else {
-			for i in 0..split_off {
-				self.0.remove(i);
-			}
-		}
-	}
-	fn len(&self) -> usize {
-		self.0.len()
-	}
-	fn st_get(&self, index: usize) -> Option<HistoriedValue<V, S>> {
-		self.0.get(index).cloned()
-	}
-	fn get_state(&self, index: usize) -> Option<S> {
-		self.0.get(index).map(|h| h.state.clone())
-	}
-	fn push(&mut self, value: HistoriedValue<V, S>) {
-		self.0.push(value)
-	}
-	fn insert(&mut self, index: usize, value: HistoriedValue<V, S>) {
-		self.0.insert(index, value)
-	}
-	fn remove(&mut self, index: usize) {
-		self.0.remove(index);
-	}
-	fn last(&self) -> Option<HistoriedValue<V, S>> {
-		self.0.last().cloned()
-	}
-	fn pop(&mut self) -> Option<HistoriedValue<V, S>> {
-		self.0.pop()
-	}
-	fn clear(&mut self) {
-		self.0.clear()
-	}
-	fn truncate(&mut self, at: usize) {
-		self.0.truncate(at)
-	}
-	fn emplace(&mut self, at: usize, value: HistoriedValue<V, S>) {
-		self.0[at] = value;
 	}
 }
 
@@ -681,7 +499,6 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 	}
 }
 
-
 impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorageMem<V, S>> InMemoryValue<V> for Linear<V, S, D> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let at = at.latest();
@@ -727,139 +544,7 @@ pub struct LinearGC<S, V> {
 	pub(crate) neutral_element: Option<V>,
 }
 
-// This is for small state as there is no double
-// mapping an some operation goes through full scan.
-pub struct LinearInMemoryManagement<H, S, V> {
-	mapping: crate::rstd::BTreeMap<H, S>,
-	start_treshold: S,
-	next_state: S,
-	neutral_element: Option<V>,
-	changed_treshold: bool,
-	can_append: bool,
-}
-
-impl<H, S, V> LinearInMemoryManagement<H, S, V> {
-	// TODO should use a builder but then we neend
-	// to change Management trait
-	pub fn define_neutral_element(mut self, n: V) -> Self {
-		self.neutral_element = Some(n);
-		self
-	}
-}
-
-impl<H, S: AddAssign<u32>, V> LinearInMemoryManagement<H, S, V> {
-	pub fn prune(&mut self, nb: usize) {
-		self.changed_treshold = true;
-		self.start_treshold += nb as u32
-	}
-}
-
-impl<H: Ord, S: Clone, V: Clone> ManagementRef<H> for LinearInMemoryManagement<H, S, V> {
-	type S = S;
-	type GC = (S, Option<V>);
-	type Migrate = (S, Self::GC);
-	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
-		self.mapping.get(state).cloned()
-	}
-	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
-		if self.changed_treshold {
-			Some(crate::Ref::Owned((self.start_treshold.clone(), self.neutral_element.clone())))
-		} else {
-			None
-		}
-	}
-}
-
-impl<
-H: Ord + Clone,
-S: Default + Clone + AddAssign<u32> + Ord,
-V: Clone,
-> Management<H> for LinearInMemoryManagement<H, S, V> {
-	type SE = Latest<S>;
-	fn init() -> (Self, Self::S) {
-		let state = S::default();
-		let mut next_state = S::default();
-		next_state += 1;
-		let mapping = Default::default();
-		(LinearInMemoryManagement {
-			mapping,
-			start_treshold: state.clone(),
-			next_state,
-			neutral_element: None,
-			changed_treshold: false,
-			can_append: true,
-		}, state)
-	}
-
-	fn init_state(&mut self) -> Self::SE {
-		Latest::unchecked_latest(self.start_treshold.clone())
-	}
-
-	fn get_db_state_mut(&mut self, state: &H) -> Option<Self::SE> {
-		if let Some(state) = self.mapping.get(state) {
-			let latest = self.mapping.values().max()
-				.map(Clone::clone)
-				.unwrap_or(S::default());
-			if state == &latest {
-				return Some(Latest::unchecked_latest(latest))
-			}
-		}
-		None
-	}
-
-	fn latest_state(&mut self) -> Self::SE {
-		// TODO can use next_state - 1 to avoid this search
-		Latest::unchecked_latest(self.mapping.values().max()
-			.map(Clone::clone)
-			.unwrap_or(S::default()))
-	}
-
-	fn reverse_lookup(&mut self, state: &Self::S) -> Option<H> {
-		// TODO could be the closest valid and return non optional!!!! TODO
-		self.mapping.iter()
-			.find(|(_k, v)| v == &state)
-			.map(|(k, _v)| k.clone())
-	}
-
-	fn get_migrate(self) -> Migrate<H, Self> {
-		unimplemented!()
-	}
-
-	fn applied_migrate(&mut self) {
-		self.changed_treshold = false;
-		//self.start_treshold = gc.0; // TODO from backed inner state
-
-		unimplemented!()
-	}
-}
-
-impl<
-H: Ord + Clone,
-S: Default + Clone + SubAssign<S> + AddAssign<u32> + Ord,
-V: Clone,
-> LinearManagement<H> for LinearInMemoryManagement<H, S, V> {
-	fn append_external_state(&mut self, state: H) -> Option<Self::S> {
-		if !self.can_append {
-			return None;
-		}
-		self.mapping.insert(state, self.next_state.clone());
-		let result = self.next_state.clone();
-		self.next_state += 1;
-		Some(result)
-	}
-
-	fn drop_last_state(&mut self) -> Self::S {
-		if self.next_state != S::default() {
-			let mut dec = S::default();
-			dec += 1;
-			self.next_state -= dec;
-		}
-		self.can_append = true;
-		self.next_state.clone()
-	}
-}
-
-impl Linear<Option<Vec<u8>>, u32, MemoryOnly<Option<Vec<u8>>, u32>> {
+impl Linear<Option<Vec<u8>>, u32, crate::backend::in_memory::MemoryOnly<Option<Vec<u8>>, u32>> {
 	/// Temporary function to get occupied stage.
 	/// TODO replace by heapsizeof
 	pub fn temp_size(&self) -> usize {
