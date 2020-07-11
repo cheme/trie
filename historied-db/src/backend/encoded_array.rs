@@ -225,11 +225,6 @@ impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
 		}
 	}
 
-	#[cfg(test)]
-	fn remove(&mut self, index: usize) {
-		self.remove_range(index, index + 1);
-	}
-
 	fn remove_range(&mut self, index: usize, end: usize) {
 		if end == 0 {
 			return;
@@ -479,8 +474,7 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V,
 	fn emplace(&mut self, at: usize, value: HistoriedValue<V, u32>) {
 		let len = self.len();
 		if len <= at {
-			debug_assert!(false);
-			return;
+			panic!("out of range emplace");
 		}
 		let elt_start = self.index_element(at);
 		let start_ix = self.index_start();
@@ -526,12 +520,34 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V,
 		}
 	}
 
-	fn insert(&mut self, index: usize, value: HistoriedValue<V, u32>) {
-		unimplemented!("insert for array unimplemented");
+	fn insert(&mut self, at: usize, value: HistoriedValue<V, u32>) {
+		let len = self.len();
+		if len < at {
+			panic!("out of rane insert");
+		}
+		let end_ix = self.0.len();
+		let start_ix = self.index_start();
+		let elt_start = self.index_element(at);
+		let additional_size = value.value.as_ref().len() + SIZE_BYTE_LEN;
+		let elt_end = elt_start + additional_size;
+
+		let new_len = end_ix + additional_size + if len != 0 { SIZE_BYTE_LEN } else { 0 };
+		self.0.to_mut().resize(new_len, 0);
+		self.0.copy_within(elt_start..end_ix, elt_end);
+		self.write_le_u32(elt_start, value.state);
+		self.0[elt_start + SIZE_BYTE_LEN..elt_end].copy_from_slice(value.value.as_ref());
+		let start_ix = start_ix + additional_size;
+		let mut old_value = elt_end;
+		for pos in at..len {
+			let tmp = self.read_le_usize(start_ix + pos * SIZE_BYTE_LEN);
+			self.write_le_usize(start_ix + pos * SIZE_BYTE_LEN, old_value);
+			old_value = tmp + additional_size;
+		}
+		self.write_le_usize(self.0.len() - SIZE_BYTE_LEN, len + 1);
 	}
 
 	fn remove(&mut self, index: usize) {
-		unimplemented!("remove for array unimplemented");
+		self.remove_range(index, index + 1);
 	}
 }
 
