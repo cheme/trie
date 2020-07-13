@@ -204,6 +204,8 @@ impl<K: Eq + Hash, V> Management<StateInput> for Db<K, V> {
 }
 
 impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
+	const JOURNAL_DELETE: bool = false;
+
 	type SF = StateIndex;
 
 	fn inner_fork_state(&self, s: Self::SE) -> Self::SF {

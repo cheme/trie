@@ -210,6 +210,8 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 /// This trait is for mapping a given state to the DB opaque inner state.
 // TODO is only ManagementRef
 pub trait ForkableManagement<H>: Management<H> {
+	/// Do we keep trace of changes.
+	const JOURNAL_DELETE: bool;
 	/// Fork at any given internal state.
 	type SF;
 

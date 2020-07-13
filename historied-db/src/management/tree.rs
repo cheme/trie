@@ -28,8 +28,11 @@ use crate::simple_db::{SerializeDB, SerializeMap, SerializeVariable, SerializeIn
 use derivative::Derivative;
 
 pub trait TreeManagementStorage: Sized {
+	/// Do we keep trace of changes.
+	const JOURNAL_DELETE: bool;
 	type Storage: SerializeDB;
 	type Mapping: SerializeInstance;
+	type JournalDelete: SerializeInstance;
 	type TouchedGC: SerializeInstanceVariable;
 	type CurrentGC: SerializeInstanceVariable;
 	type LastIndex: SerializeInstanceVariable;
@@ -42,8 +45,10 @@ pub trait TreeManagementStorage: Sized {
 }
 
 impl TreeManagementStorage for () {
+	const JOURNAL_DELETE: bool = false;
 	type Storage = ();
 	type Mapping = ();
+	type JournalDelete = ();
 	type TouchedGC = ();
 	type CurrentGC = ();
 	type LastIndex = ();
@@ -147,6 +152,7 @@ pub struct Tree<I: Ord, BI, S: TreeManagementStorage> {
 	// value is always in a low number branch behind a few fork.
 	// A longest branch pointer per history is also a viable
 	// strategy and avoid fragmenting the history to much.
+	pub(crate) journal_delete: SerializeMap<I, Option<BI>, S::Storage, S::JournalDelete>,
 }
 
 #[derive(Derivative, Encode, Decode)]
@@ -160,7 +166,10 @@ pub(crate) struct TreeMeta<I, BI> {
 	/// roughly to last cannonical block branch index.
 	/// If at default state value, we go through simple storage.
 	/// TODO move in tree management??
+	/// TODO only store BI, mgmt rule out all that is > bi and
 	pub(crate) composite_treshold: (I, BI),
+	/// Changed pruning treshold for composite part.
+	pub(crate) composite_pruning_treshold: Option<BI>,
 	/// Is composite latest, so can we write its last state (only
 	/// possible on new or after a migration).
 	pub(crate) composite_latest: bool,
@@ -171,6 +180,7 @@ impl<I: Default, BI: Default> Default for TreeMeta<I, BI> {
 		TreeMeta {
 			last_index: I::default(),
 			composite_treshold: Default::default(),
+			composite_pruning_treshold: None,
 			composite_latest: true,
 		}
 	}
@@ -180,6 +190,7 @@ impl<I: Ord + Default, BI: Default, S: TreeManagementStorage> Default for Tree<I
 	fn default() -> Self {
 		Tree {
 			storage: Default::default(),
+			journal_delete: Default::default(),
 			meta: Default::default(),
 			serialize: S::init(),
 		}
@@ -190,6 +201,7 @@ impl<I: Ord + Default + Codec, BI: Default + Codec, S: TreeManagementStorage> Tr
 	pub fn from_ser(mut serialize: S::Storage) -> Self {
 		Tree {
 			storage: Default::default(),
+			journal_delete: Default::default(),
 			meta: SerializeVariable::from_ser(&mut serialize),
 			serialize,
 		}
@@ -205,14 +217,42 @@ pub struct TreeState<I: Ord, BI, V, S: TreeManagementStorage> {
 	pub(crate) neutral_element: Option<V>,
 }
 
+/// Gc against a current tree state.
+/// This is require going through all of a historied value
+/// branches and should be use when gc happens rarely.
 #[derive(Clone, Debug)]
 pub struct TreeStateGc<I, BI, V> {
 	/// see Tree `storage`
 	pub(crate) storage: BTreeMap<I, BranchState<I, BI>>,
 	/// see TreeMeta `composite_treshold`
 	pub(crate) composite_treshold: (I, BI),
+	/// All data before this can get pruned for composite non forked part.
+	pub(crate) composite_treshold_new_start: Option<BI>,
 	/// see TreeManagement `neutral_element`
 	pub(crate) neutral_element: Option<V>,
+}
+
+/// Gc against a given set of changes.
+/// This should be use when there is few state changes,
+/// or frequent migration.
+/// Generally if management collect those information (see associated
+/// constant `JOURNAL_DELETE`) this gc should be use.
+#[derive(Clone, Debug)]
+pub struct DeltaTreeStateGc<I, BI, V> {
+	/// Set of every branch that get reduced (new end stored) or deleted.
+	pub(crate) storage: BTreeMap<I, Option<BI>>,
+	/// New composite treshold value, this is not strictly needed but
+	/// potentially allows skipping some iteration into storage.
+	pub(crate) composite_treshold: (I, BI),
+	/// All data before this can get pruned for composite non forked part.
+	pub(crate) composite_treshold_new_start: Option<BI>,
+	/// see TreeManagement `neutral_element`
+	pub(crate) neutral_element: Option<V>,
+}
+
+pub enum MultipleGc<I, BI, V> {
+	Journaled(DeltaTreeStateGc<I, BI, V>),
+	State(TreeStateGc<I, BI, V>),
 }
 
 impl<I: Ord, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
@@ -334,7 +374,7 @@ impl<
 				}
 			}
 		};
-		// Less than composite do not contain a 
+		// Less than composite treshold, we delete all and switch composite
 		if state.1 <= tree_meta.composite_treshold.1 {
 			// No branch delete (the implementation guaranty branch 0 is a single element)
 			self.state.tree.apply_drop_state_rec_call(&state.0, &state.1, &mut call_back, true);
@@ -356,6 +396,7 @@ impl<
 				((s.parent_branch_index.clone(), previous_index), s.state.end)
 			}) {
 			let mut bi = state.1.clone();
+			// TODO consider moving thit to tree `apply_drop_state`!! (others calls are at tree level)
 			while bi < branch_end { // TODO should be < branch_end - 1
 				call_back(&state.0, &bi, self.state.ser());
 				bi += 1;
@@ -677,6 +718,7 @@ impl<
 	) {
 		// Never remove default
 		let mut remove = false;
+		let mut register = None;
 		let mut last = Default::default();
 		let mut has_branch = false;
 		let mut handle = self.storage.handle(&mut self.serialize);
@@ -691,6 +733,11 @@ impl<
 					remove = true;
 					break;
 				}
+				if node_index == &branch.state.end {
+					register = Some(None);
+				} else if node_index < &branch.state.end {
+					register = Some(Some(node_index.clone()));
+				}
 			}
 		});
 		if !has_branch {
@@ -698,6 +745,9 @@ impl<
 		}
 		if remove {
 			self.storage.handle(&mut self.serialize).remove(branch_index);
+		}
+		if let Some(register) = register {
+			self.register_drop(branch_index, register);
 		}
 		while &last > node_index {
 			last -= 1;
@@ -726,6 +776,7 @@ impl<
 			}
 		}
 		for (i, s) in to_delete.into_iter() {
+			self.register_drop(&i, None);
 			// TODO these drop is a full branch drop: we could recurse on ourselves
 			// into calling function and this function rec on itself and do its own drop
 			let mut bi = s.state.start.clone();
@@ -733,10 +784,33 @@ impl<
 				call_back(&i, &bi, &mut self.serialize);
 				bi += 1;
 			}
-			// TODO the store and remove patern is ugly (could use a retain implementation)
 			self.storage.handle(&mut self.serialize).remove(&i);
 			// composite to false, as no in composite branch are stored.
 			self.apply_drop_state_rec_call(&i, &s.state.start, call_back, false);
+		}
+	}
+
+	fn register_drop(&mut self,
+		branch_index: &I,
+		new_node_index: Option<BI>, // if none this is a delete
+	) {
+		if S::JOURNAL_DELETE {
+			let mut journal_delete = self.journal_delete.handle(&mut self.serialize);
+			if let Some(new_node_index) = new_node_index {
+				if let Some(to_insert) = match journal_delete.get(branch_index) {
+					Some(Some(old)) => if &new_node_index < old {
+						Some(new_node_index)
+					} else {
+						None
+					},
+					Some(None) => None,
+					None => Some(new_node_index),
+				} {
+					journal_delete.insert(branch_index.clone(), Some(to_insert));
+				}
+			} else {
+				journal_delete.insert(branch_index.clone(), None);
+			}
 		}
 	}
 }
@@ -970,6 +1044,8 @@ pub struct BranchGC<I, BI, V> {
 	pub new_range: Option<LinearGC<BI, V>>,
 }
 
+
+// TODO delete
 #[derive(Debug, Clone, Encode, Decode)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TreeMigrate<I, BI, V> {
@@ -979,6 +1055,24 @@ pub struct TreeMigrate<I, BI, V> {
 	// TODO is also in every lineargc of branchgc.
 	pub neutral_element: Option<V>,
 	// TODO add the key elements (as option to trigger registration or not).
+}
+
+/// Same as `DeltaTreeStateGc`, but also
+/// indicates the changes journaling can be clean.
+/// TODO requires a function returning all H indices.
+pub struct TreeMigrateGC<I, BI, V>(DeltaTreeStateGc<I, BI, V>);
+
+/// A migration that swap some branch indices.
+/// Note that we do not touch indices into branch.
+pub struct TreeRewrite<I, BI, V> {
+	/// Original branch index (and optionally a treshold) mapped to new branch index or deleted.
+	pub rewrite: Vec<((I, Option<BI>), Option<I>)>,
+	/// Possible change in composite treshold.
+	pub composite_treshold: (I, BI),
+	/// All data before this can get pruned for composite non forked part.
+	pub composite_treshold_new_start: Option<BI>,
+	/// see TreeManagement `neutral_element`
+	pub neutral_element: Option<V>,
 }
 
 impl<I, BI, V> Default for TreeMigrate<I, BI, V> {
@@ -1019,6 +1113,7 @@ impl<
 		let gc = TreeStateGc {
 			storage,
 			composite_treshold: self.state.tree.meta.get().composite_treshold.clone(),
+			composite_treshold_new_start: self.state.tree.meta.get().composite_pruning_treshold.clone(),
 			neutral_element: self.neutral_element.get().clone(),
 		};
 
@@ -1093,6 +1188,7 @@ impl<
 	V: Clone + Default + Codec,
 	S: TreeManagementStorage,
 > ForkableManagement<H> for TreeManagement<H, I, BI, V, S> {
+	const JOURNAL_DELETE: bool = S::JOURNAL_DELETE;
 
 	type SF = (I, BI);
 
