@@ -464,11 +464,17 @@ impl<
 					neutral_element: neutral.clone(),
 				})
 			} else if let Some(change) = gc.storage.get(&branch.state) {
-				Some(LinearGC {
-					new_start,
-					new_end: change.clone(),
-					neutral_element: neutral.clone(),
-				})
+				if change.is_none() {
+					self.branches.remove(index);
+					result = UpdateResult::Changed(());
+					None
+				} else {
+					Some(LinearGC {
+						new_start,
+						new_end: change.clone(),
+						neutral_element: neutral.clone(),
+					})
+				}
 			} else {
 				None
 			} {

@@ -731,13 +731,12 @@ impl<
 				// TODO a function to drop multiple state in linear.
 				if branch.drop_state() {
 					remove = true;
+					register = Some(None);
 					break;
 				}
-				if node_index == &branch.state.end {
-					register = Some(None);
-				} else if node_index < &branch.state.end {
-					register = Some(Some(node_index.clone()));
-				}
+			}
+			if register.is_none() {
+				register = Some(Some(node_index.clone()));
 			}
 		});
 		if !has_branch {

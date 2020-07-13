@@ -359,7 +359,7 @@ pub fn inmemory_forkable(data: &[u8], with_ser: bool) {
 		fuzz_state.apply(action);
 	}
 	fuzz_state.compare();
-	let gc_journal = fuzz_state.in_memory_mgmt_ser.get_gc();
+	let gc_journal = fuzz_state.in_memory_mgmt.get_gc();
 	let gc_state = fuzz_state.in_memory_mgmt.get_gc().unwrap();
 	for key in 0..NUMBER_POSSIBLE_KEYS {
 		if let Some(value) = fuzz_state.in_memory_db.0.get_mut(&vec![key]) {
