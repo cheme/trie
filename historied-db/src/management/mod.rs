@@ -117,7 +117,7 @@ pub mod linear {
 				.map(|(k, _v)| k.clone())
 		}
 
-		fn get_migrate(self) -> Migrate<H, Self> {
+		fn get_migrate(self) -> (Migrate<H, Self>, Self::Migrate) {
 			unimplemented!()
 		}
 

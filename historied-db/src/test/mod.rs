@@ -75,6 +75,11 @@ macro_rules! InMemSimpleDB {
 					self.0[ix].insert(k.to_vec(), v.to_vec())
 				});
 			}
+			fn clear(&mut self, c: &'static [u8]) {
+				Self::resolve_collection(c).map(|ix| {
+					self.0[ix].clear();
+				});
+			}
 			fn remove(&mut self, c: &'static [u8], k: &[u8]) {
 				Self::resolve_collection(c).map(|ix| {
 					self.0[ix].remove(k)

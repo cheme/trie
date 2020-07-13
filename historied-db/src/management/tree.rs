@@ -269,8 +269,8 @@ impl<I: Ord, BI, V, S: TreeManagementStorage> TreeState<I, BI, V, S> {
 pub struct TreeManagement<H: Ord, I: Ord, BI, V, S: TreeManagementStorage> {
 	state: TreeState<I, BI, V, S>,
 	mapping: SerializeMap<H, (I, BI), S::Storage, S::Mapping>,
-	touched_gc: SerializeVariable<bool, S::Storage, S::TouchedGC>,
-	current_gc: SerializeVariable<TreeMigrate<I, BI, V>, S::Storage, S::CurrentGC>,
+	touched_gc: SerializeVariable<bool, S::Storage, S::TouchedGC>, // TODO currently damned unused thing??
+	current_gc: SerializeVariable<TreeMigrate<I, BI, V>, S::Storage, S::CurrentGC>, // TODO currently unused??
 	last_in_use_index: SerializeVariable<(I, BI), S::Storage, S::LastIndex>, // TODO rename to last inserted as we do not rebase on query
 	neutral_element: SerializeVariable<Option<V>, S::Storage, S::NeutralElt>,
 }
@@ -812,6 +812,15 @@ impl<
 			}
 		}
 	}
+
+	fn clear_journal_delete(&mut self) {
+		let mut journal_delete = self.journal_delete.handle(&mut self.serialize);
+		journal_delete.clear()
+	}
+
+	fn clear_composite(&mut self) {
+		unimplemented!("TODO parse all branche and remove them that are in composite range");
+	}
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1074,6 +1083,12 @@ pub struct TreeRewrite<I, BI, V> {
 	pub neutral_element: Option<V>,
 }
 
+pub enum MultipleMigrate<I, BI, V> {
+	JournalGc(DeltaTreeStateGc<I, BI, V>),
+	Rewrite(TreeRewrite<I, BI, V>),
+	Noops,
+}
+
 impl<I, BI, V> Default for TreeMigrate<I, BI, V> {
 	fn default() -> Self {
 		TreeMigrate {
@@ -1089,20 +1104,8 @@ impl<
 	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
 	V: Clone + Default + Codec,
 	S: TreeManagementStorage,
-> ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
-	type S = ForkPlan<I, BI>;
-	/// Garbage collect over current
-	/// state or registered changes.
-	/// Choice is related to `TreeManagementStorage::JOURNAL_DELETE`.
-	type GC = MultipleGc<I, BI, V>;
-	/// TODO this needs some branch index mappings.
-	type Migrate = TreeMigrate<I, BI, V>;
-
-	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
-		self.mapping.handle(self.state.ser()).get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
-	}
-
-	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
+> TreeManagement<H, I, BI, V, S> {
+	fn get_inner_gc(&self) -> Option<MultipleGc<I, BI, V>> {
 		let composite_treshold = self.state.tree.meta.get().composite_treshold.clone();
 		let composite_treshold_new_start = self.state.tree.meta.get().composite_pruning_treshold.clone();
 		let neutral_element = self.neutral_element.get().clone();
@@ -1111,6 +1114,11 @@ impl<
 			for (k, v) in self.state.tree.journal_delete.iter(&self.state.tree.serialize) {
 				storage.insert(k, v);
 			}
+
+			if composite_treshold_new_start.is_none() && storage.is_empty() {
+				return None;
+			}
+
 			let gc = DeltaTreeStateGc {
 				storage,
 				composite_treshold,
@@ -1137,7 +1145,33 @@ impl<
 			MultipleGc::State(gc)
 		};
 
-		Some(crate::Ref::Owned(gc))
+		Some(gc)
+	}
+
+}
+	
+impl<
+	H: Ord + Clone + Codec,
+	I: Clone + Default + SubAssign<u32> + AddAssign<u32> + Ord + Debug + Codec,
+	BI: Ord + Eq + SubAssign<u32> + AddAssign<u32> + Clone + Default + Debug + Codec,
+	V: Clone + Default + Codec,
+	S: TreeManagementStorage,
+> ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
+	type S = ForkPlan<I, BI>;
+	/// Garbage collect over current
+	/// state or registered changes.
+	/// Choice is related to `TreeManagementStorage::JOURNAL_DELETE`.
+	type GC = MultipleGc<I, BI, V>;
+	/// TODO this needs some branch index mappings.
+	type Migrate = MultipleMigrate<I, BI, V>;
+	//type Migrate = TreeMigrate<I, BI, V>;
+
+	fn get_db_state(&mut self, state: &H) -> Option<Self::S> {
+		self.mapping.handle(self.state.ser()).get(state).cloned().map(|i| self.state.tree.query_plan_at(i))
+	}
+
+	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
+		self.get_inner_gc().map(|gc| crate::Ref::Owned(gc))
 	}
 }
 
@@ -1189,11 +1223,31 @@ impl<
 			.map(|(k, _v)| k.clone())
 	}
 
-	fn get_migrate(self) -> Migrate<H, Self> {
-		unimplemented!()
+	fn get_migrate(self) -> (Migrate<H, Self>, Self::Migrate) {
+		let migrate = if S::JOURNAL_DELETE {
+			// initial migrate strategie is gc.
+			if let Some(MultipleGc::Journaled(gc)) = self.get_inner_gc() {
+				MultipleMigrate::JournalGc(gc)
+			} else {
+				MultipleMigrate::Noops
+			}
+		} else {
+			unimplemented!();
+		};
+
+		(Migrate::capture(self), migrate)
 	}
 
 	fn applied_migrate(&mut self) {
+		if S::JOURNAL_DELETE {
+			self.state.tree.clear_journal_delete();
+			self.state.tree.clear_composite();
+			let mut handle = self.state.tree.meta.handle(&mut self.state.tree.serialize);
+			let mut tree_meta = handle.get().clone();
+			if tree_meta.composite_pruning_treshold.take().is_some() {
+				handle.set(tree_meta);
+			}
+		}
 		
 	//	self.current_gc.applied(gc); TODO pass back this reference: put it in buf more likely
 	//	(remove the associated type)
@@ -1250,8 +1304,6 @@ impl<
 		result
 	}
 }
-
-
 
 #[cfg(test)]
 pub(crate) mod test {

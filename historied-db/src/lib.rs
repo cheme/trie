@@ -160,6 +160,15 @@ impl<'a, V> AsRef<V> for Ref<'a, V> {
 	}
 }
 
+impl<'a, V: Clone> Ref<'a, V> {
+	pub fn into_owned(self) -> V {
+		match self {
+			Ref::Borrowed(v) => v.clone(),
+			Ref::Owned(v) => v,
+		}
+	}
+}
+
 /// Management maps a historical tag of type `H` with its different db states representation.
 pub trait ManagementRef<H> {
 	/// attached db state needed for query.
@@ -196,7 +205,7 @@ pub trait Management<H>: ManagementRef<H> + Sized {
 	/// see migrate. When running thes making a backup of this management
 	/// state is usually a good idea (this method does not manage
 	/// backup or rollback).
-	fn get_migrate(self) -> Migrate<H, Self>;
+	fn get_migrate(self) -> (Migrate<H, Self>, Self::Migrate);
 
 	/// report a migration did run successfully, will update management state
 	/// accordingly.

@@ -19,7 +19,7 @@
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, InMemoryValueSlice, InMemoryValueRange, UpdateResult};
 use crate::backend::{LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem};
 use crate::historied::linear::{Linear, LinearState, LinearGC};
-use crate::management::tree::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc, DeltaTreeStateGc, MultipleGc};
+use crate::management::tree::{ForkPlan, BranchesContainer, TreeStateGc, DeltaTreeStateGc, MultipleGc, MultipleMigrate};
 use crate::rstd::ops::SubAssign;
 use crate::rstd::marker::PhantomData;
 use crate::Latest;
@@ -174,7 +174,8 @@ impl<
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
 	type GC = MultipleGc<I, BI, V>;
-	type Migrate = (BI, TreeMigrate<I, BI, V>);
+	//type Migrate = (BI, TreeMigrate<I, BI, V>);
+	type Migrate = MultipleMigrate<I, BI, V>;
 
 	fn new(value: V, at: &Self::SE) -> Self {
 		let mut v = D::default();
@@ -293,10 +294,29 @@ impl<
 		}
 	}
 
-	// TODO this is rather costy and would run in a loop, consider using btreemap instead of vec in
-	// treegc
+	// TODO is it really usefull
 	fn is_in_migrate((index, linear_index) : &Self::Index, gc: &Self::Migrate) -> bool {
-		for branch in gc.1.changes.iter().rev() {
+		match gc {
+			MultipleMigrate::Noops => (),
+			MultipleMigrate::JournalGc(gc) => {
+				if let Some(new_start) = gc.composite_treshold_new_start.as_ref() {
+					if linear_index <= &new_start {
+						return true;
+					}
+				}
+				if let Some(br) = gc.storage.get(&index) {
+					return if let Some(bi) = br.as_ref() {
+						bi <= linear_index
+					} else {
+						true
+					};
+				}
+			},
+			MultipleMigrate::Rewrite(_gc) => {
+				unimplemented!()
+			},
+		}
+/*		for branch in gc.1.changes.iter().rev() {
 			let bi = &gc.0;
 			if &branch.branch_index == index {
 				return branch.new_range.as_ref()
@@ -308,14 +328,60 @@ impl<
 			if &branch.branch_index < &index {
 				break;
 			}
-		}
+		}*/
 		false
 	}
 
 	fn migrate(&mut self, mig: &mut Self::Migrate) -> UpdateResult<()> {
-		// This is basis from old gc, it does not do indexing change as it could
-		// be possible. TODO start migrate too (mig.0)
 		let mut result = UpdateResult::Unchanged;
+
+		match mig {
+			MultipleMigrate::JournalGc(gc) => {
+				result = self.journaled_gc(gc);
+				if let UpdateResult::Changed(()) = result {
+					let mut new_branch: Option<Branch<I, BI, V, BD>> = None;
+					let mut i = 0;
+					// TODO merge all less than composite treshold in composite treshold index branch.
+					loop {
+						if let Some(mut branch) = self.branches.st_get(i) {
+							if branch.state <= gc.composite_treshold.0 {
+								if let Some(new_branch) = new_branch.as_mut() {
+									for i in 0.. {
+										if let Some(h) = branch.value.st_get(i) {
+											new_branch.value.push(h);
+										} else {
+											break;
+										}
+									}
+								} else {
+									branch.state = gc.composite_treshold.0.clone();
+									new_branch = Some(branch);
+								}
+							} else {
+								break;
+							}
+						} else {
+							break;
+						}
+						i += 1;
+					}
+					if let Some(new_branch) = new_branch {
+						if i == self.branches.len() {
+							self.branches.clear();
+							self.branches.push(new_branch);
+						} else {
+							self.branches.truncate_until(i - 1);
+							self.branches.emplace(0, new_branch);
+						}
+					}
+				}
+			},
+			MultipleMigrate::Rewrite(_gc) => unimplemented!(),
+			MultipleMigrate::Noops => (),
+		}
+
+		/*// This is basis from old gc, it does not do indexing change as it could
+		// be possible. TODO start migrate too (mig.0)
 		let start_len = self.branches.len();
 		let mut gc_iter = mig.1.changes.iter_mut().rev();
 		let mut branch_iter = Some(start_len - 1);
@@ -357,6 +423,7 @@ impl<
 				o_gc = gc_iter.next();
 			}
 		}
+		*/
 
 		if let UpdateResult::Changed(()) = result {
 			if self.branches.len() == 0 {
@@ -449,20 +516,37 @@ impl<
 		let mut result = UpdateResult::Unchanged;
 		let start_composite = gc.composite_treshold_new_start.as_ref();
 		let len = self.branches.len();
+		let mut first_new_start = false;
 		for index in (0..len).rev() {
 			let new_start = start_composite.cloned();
 
 			let mut branch = self.branches.st_get(index).expect("We already fetch its state.");
 			if let Some(mut gc) = if branch.state <= gc.composite_treshold.0 {
-				if start_composite.is_none() {
-					// nothing more to see (branch in composite and no change of start)
-					break;
+				match start_composite.as_ref() {
+					None => {
+						// nothing more to see (branch in composite and no change of start)
+						break;
+					},
+					Some(n_start) => {
+						if first_new_start {
+							self.branches.remove(index);
+							result = UpdateResult::Changed(());
+							None
+						} else {
+							if let Some(b) = branch.value.st_get(0) {
+								if &b.state < n_start {
+									first_new_start = true;
+								}
+							}
+							Some(LinearGC {
+								new_start,
+								new_end:  None,
+								neutral_element: neutral.clone(),
+							})
+						}
+					},
 				}
-				Some(LinearGC {
-					new_start,
-					new_end:  None,
-					neutral_element: neutral.clone(),
-				})
+
 			} else if let Some(change) = gc.storage.get(&branch.state) {
 				if change.is_none() {
 					self.branches.remove(index);

@@ -30,6 +30,7 @@ pub trait SerializeDB: Sized {
 	const ACTIVE: bool = true;
 
 	fn write(&mut self, c: &'static [u8], k: &[u8], v: &[u8]);
+	fn clear(&mut self, c: &'static [u8]);
 	fn remove(&mut self, c: &'static [u8], k: &[u8]);
 	fn read(&self, c: &'static [u8], k: &[u8]) -> Option<Vec<u8>>;
 	fn iter<'a>(&'a self, c: &'static [u8]) -> SerializeDBIter<'a>;
@@ -73,6 +74,9 @@ impl<'a, DB: SerializeDB, Instance: SerializeInstance> CollectionMut<'a, DB, Ins
 	}
 	pub fn iter<'b>(&'b self) -> SerializeDBIter<'b> {
 		self.db.iter(Instance::STATIC_COL)
+	}
+	pub fn clear(&mut self) {
+		self.db.clear(Instance::STATIC_COL)
 	}
 }
 
@@ -180,6 +184,7 @@ impl SerializeDB for () {
 	const ACTIVE: bool = false;
 
 	fn write(&mut self, _c: &[u8], _k: &[u8], _v: &[u8]) { }
+	fn clear(&mut self, _c: &[u8]) { }
 	fn remove(&mut self, _c: &[u8], _k: &[u8]) { }
 	fn read(&self, _c: &[u8], _k: &[u8]) -> Option<Vec<u8>> {
 		None
@@ -226,6 +231,7 @@ impl<'a, K: Ord, V, S, I> SerializeMap<K, V, S, I> {
 		}
 	}
 }
+
 impl<'a, K, V, S, I> SerializeMap<K, V, S, I> 
 	where
 		K: Codec + Ord + Clone,
@@ -241,6 +247,7 @@ impl<'a, K, V, S, I> SerializeMap<K, V, S, I>
 			SerializeMapIter::Collection(collection.iter())
 		}
 	}
+
 }
 
 pub struct SerializeMapHandle<'a, K, V, S, I> {
@@ -282,6 +289,7 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 			self.cache.get(k).and_then(|r|r.as_ref())
 		}
 	}
+
 	pub fn remove(&mut self, k: &K) -> Option<V> {
 		if !S::ACTIVE {
 			return self.cache.remove(k).flatten()
@@ -301,6 +309,12 @@ impl<'a, K, V, S, I> SerializeMapHandle<'a, K, V, S, I>
 		self.collection.remove(k.as_slice());
 		value
 	}
+
+	pub fn clear(&mut self) {
+		self.cache.clear();
+		self.collection.clear();
+	}
+
 	pub fn insert(&'a mut self, k: K, v: V) -> &V {
 		self.collection.write(k.encode().as_slice(), v.encode().as_slice());
 		let res = self.cache.entry(k)
@@ -585,6 +599,7 @@ impl<'a, V, S, I> SerializeVariable<V, S, I>
 			need_write: false,
 		}
 	}
+
 	pub fn get(&self) -> &V {
 		&self.inner
 	}
