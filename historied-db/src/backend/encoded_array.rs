@@ -27,20 +27,15 @@ use crate::rstd::ops::Range;
 use crate::historied::HistoriedValue;
 use super::{LinearStorage, LinearStorageSlice, LinearStorageRange};
 use codec::{Encode, Decode, Input as CodecInput};
+use derivative::Derivative;
 
-#[derive(Debug)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Derivative, Debug)]
+#[cfg_attr(test, derivative(PartialEq(bound="")))]
 /// Arraylike buffer with in place byte data.
 /// Can be written as is in underlying
 /// storage.
 /// Could be use for direct access memory to.
 pub struct EncodedArray<'a, V, F>(EncodedArrayBuff<'a>, PhantomData<(F, V)>);
-
-impl<'a, V, F> Clone for EncodedArray<'a, V, F> {
-	fn clone(&self) -> Self {
-		EncodedArray(self.0.clone(), PhantomData)
-	}
-}
 
 pub trait EncodedArrayValue: AsRef<[u8]> + AsMut<[u8]> + Sized {
 	fn from_slice(slice: &[u8]) -> Self;

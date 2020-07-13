@@ -18,6 +18,7 @@
 
 use crate::{
 	Management, StateDB, ForkableManagement, ManagementRef, StateDBRef,
+	historied::Value,
 };
 use crate::test::simple_impl::StateInput;
 
@@ -55,11 +56,10 @@ mod bindings {
 	static_instance_variable!(LastIndex, CST, b"tree_mgmt/last_index", false);
 	static_instance_variable!(NeutralElt,CST, b"tree_mgmt/neutral_elt", false);
 	static_instance_variable!(TreeMeta, CST, b"tree_mgmt/tree_meta", true);
-	
 }
 
 impl crate::management::tree::TreeManagementStorage for SerFuzz {
-	const JOURNAL_DELETE: bool = false;
+	const JOURNAL_DELETE: bool = true;
 	type Storage = crate::test::InMemorySimpleDB5;
 	type Mapping = bindings::Mapping;
 	type JournalDelete = bindings::JournalDelete;
@@ -359,6 +359,19 @@ pub fn inmemory_forkable(data: &[u8], with_ser: bool) {
 		fuzz_state.apply(action);
 	}
 	fuzz_state.compare();
+	let gc_journal = fuzz_state.in_memory_mgmt_ser.get_gc();
+	let gc_state = fuzz_state.in_memory_mgmt.get_gc().unwrap();
+	for key in 0..NUMBER_POSSIBLE_KEYS {
+		if let Some(value) = fuzz_state.in_memory_db.0.get_mut(&vec![key]) {
+			let mut value2 = value.clone();
+			value2.gc(gc_state.as_ref());
+			if let Some(gc_journal) = gc_journal.as_ref() {
+				value.gc(gc_journal.as_ref());
+			}
+			assert_eq!(value, &value2);
+		}
+	}
+	fuzz_state.compare();
 }
 
 #[test]
@@ -377,6 +390,7 @@ fn inmemory_forkable_no_regression() {
 		&[122, 122, 255, 117, 255, 1, 179, 122][..],
 		&[255, 255, 254, 255, 1, 1, 0, 32, 122][..],
 		&[255, 255, 152, 116, 255, 133, 217, 162, 253, 14, 14, 116, 255, 122, 24, 122, 255][..],
+		&[0x26,0x5c,0x60,0x26,0x26,0xfa][..],
 	];
 	for input in inputs.iter() {
 		println!("{:?}", FuzzerAction::into_actions(input));

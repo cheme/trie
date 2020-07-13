@@ -19,11 +19,12 @@
 use super::{HistoriedValue, ValueRef, Value, InMemoryValueRef, InMemoryValue, InMemoryValueSlice, InMemoryValueRange, UpdateResult};
 use crate::backend::{LinearStorage, LinearStorageRange, LinearStorageSlice, LinearStorageMem};
 use crate::historied::linear::{Linear, LinearState, LinearGC};
-use crate::management::tree::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc};
+use crate::management::tree::{ForkPlan, BranchesContainer, TreeMigrate, TreeStateGc, DeltaTreeStateGc, MultipleGc};
 use crate::rstd::ops::SubAssign;
 use crate::rstd::marker::PhantomData;
 use crate::Latest;
 use codec::{Encode, Decode};
+use derivative::Derivative;
 
 // TODO for not in memory we need some direct or indexed api, returning value
 // and the info if there can be lower value index (not just a direct index).
@@ -80,8 +81,8 @@ macro_rules! tree_get {
 	}
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
-#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
+#[derive(Derivative, Debug, Clone, Encode, Decode)]
+#[derivative(PartialEq(bound="D: PartialEq"))]
 pub struct Tree<I, BI, V, D, BD> {
 	branches: D,
 	_ph: PhantomData<(I, BI, V, BD)>,
@@ -172,7 +173,7 @@ impl<
 > Value<V> for Tree<I, BI, V, D, BD> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
-	type GC = TreeStateGc<I, BI, V>;
+	type GC = MultipleGc<I, BI, V>;
 	type Migrate = (BI, TreeMigrate<I, BI, V>);
 
 	fn new(value: V, at: &Self::SE) -> Self {
@@ -286,72 +287,10 @@ impl<
 	}
 
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
-
-		let neutral = &gc.neutral_element;
-		let mut result = UpdateResult::Unchanged;
-		let mut gc_iter = gc.storage.iter().rev();
-		let start_composite = gc.composite_treshold.1.clone();
-		let len = self.branches.len();
-		// TODO use rev iter mut implementation
-		let mut branch_iter = Some(len - 1);
-//		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
-//			let iter_branch_index = self.branches.get_state(iter_index).expect("previous code");
-	
-		let mut o_gc = gc_iter.next();
-		let mut o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
-		while let (Some(gc), Some((index, branch_index))) = (o_gc.as_ref(), o_branch.as_ref()) {
-			branch_iter = branch_iter.and_then(|v| if v > 0 {
-				Some(v - 1)
-			} else {
-				None
-			});
-			if gc.0 == branch_index {
-				// TODO using linear gc does not make sense here (no sense of delta: TODO change
-				// linear to use a simple range with neutral).
-				let (start, end) = gc.1.range();
-				let start = if start < start_composite {
-					start_composite.clone()
-				} else {
-					start
-				};
-				let mut gc = LinearGC {
-					new_start: Some(start),
-					new_end:  Some(end),
-					neutral_element: neutral.clone(),
-				};
-
-				let mut branch = self.branches.st_get(*index).expect("previous code");
-				match branch.value.gc(&mut gc) {
-					UpdateResult::Unchanged => (),
-					UpdateResult::Changed(_) => { 
-						self.branches.emplace(*index, branch);
-						result = UpdateResult::Changed(());
-					},
-					UpdateResult::Cleared(_) => {
-						self.branches.remove(*index);
-						result = UpdateResult::Changed(());
-					}
-				}
-
-				o_gc = gc_iter.next();
-
-				o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
-			} else if gc.0 < &branch_index {
-				self.branches.remove(*index);
-				result = UpdateResult::Changed(());
-				o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
-			} else {
-				o_gc = gc_iter.next();
-			}
+		match gc {
+			MultipleGc::Journaled(gc) => self.journaled_gc(gc),
+			MultipleGc::State(gc) => self.state_gc(gc),
 		}
-
-		if let UpdateResult::Changed(()) = result {
-			if self.branches.len() == 0 {
-				result = UpdateResult::Cleared(());
-			}
-		}
-
-		result
 	}
 
 	// TODO this is rather costy and would run in a loop, consider using btreemap instead of vec in
@@ -427,6 +366,136 @@ impl<
 		result
 	}
 }
+
+impl<
+	I: Default + Eq + Ord + Clone,
+	BI: LinearState + SubAssign<u32> + SubAssign<BI> + Clone,
+	V: Clone + Eq,
+	D: LinearStorage<Linear<V, BI, BD>, I>,
+	BD: LinearStorage<V, BI>,
+> Tree<I, BI, V, D, BD> {
+	fn state_gc(&mut self, gc: &TreeStateGc<I, BI, V>) -> UpdateResult<()> {
+		let neutral = &gc.neutral_element;
+		let mut result = UpdateResult::Unchanged;
+		let start_composite = &gc.composite_treshold_new_start;
+		let mut gc_iter = gc.storage.iter().rev();
+		let len = self.branches.len();
+		// TODO use rev iter mut implementation
+		let mut branch_iter = Some(len - 1);
+//		let mut branch_iter = self.branches.iter_mut().enumerate().rev();
+//			let iter_branch_index = self.branches.get_state(iter_index).expect("previous code");
+	
+		let mut o_gc = gc_iter.next();
+		let mut o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
+		while let (Some(gc), Some((index, branch_index))) = (o_gc.as_ref(), o_branch.as_ref()) {
+			branch_iter = branch_iter.and_then(|v| if v > 0 {
+				Some(v - 1)
+			} else {
+				None
+			});
+			if gc.0 == branch_index {
+				// TODO using linear gc does not make sense here (no sense of delta: TODO change
+				// linear to use a simple range with neutral).
+				let (start, end) = gc.1.range();
+				let start = start_composite.as_ref().and_then(|start_composite| if &start < start_composite {
+					Some(start_composite.clone())
+				} else {
+					None
+				}).unwrap_or(start);
+				let mut gc = LinearGC {
+					new_start: Some(start),
+					new_end:  Some(end),
+					neutral_element: neutral.clone(),
+				};
+
+				let mut branch = self.branches.st_get(*index).expect("previous code");
+				match branch.value.gc(&mut gc) {
+					UpdateResult::Unchanged => (),
+					UpdateResult::Changed(_) => { 
+						self.branches.emplace(*index, branch);
+						result = UpdateResult::Changed(());
+					},
+					UpdateResult::Cleared(_) => {
+						self.branches.remove(*index);
+						result = UpdateResult::Changed(());
+					}
+				}
+
+				o_gc = gc_iter.next();
+
+				o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
+			} else if gc.0 < &branch_index {
+				self.branches.remove(*index);
+				result = UpdateResult::Changed(());
+				o_branch = branch_iter.and_then(|i| self.branches.get_state(i).map(|s| (i, s)));
+			} else {
+				o_gc = gc_iter.next();
+			}
+		}
+
+		if let UpdateResult::Changed(()) = result {
+			if self.branches.len() == 0 {
+				result = UpdateResult::Cleared(());
+			}
+		}
+
+		result
+	}
+
+	fn journaled_gc(&mut self, gc: &DeltaTreeStateGc<I, BI, V>) -> UpdateResult<()> {
+		// for all branch check if in deleted.
+		// Also apply new start on all.
+		let neutral = &gc.neutral_element;
+		let mut result = UpdateResult::Unchanged;
+		let start_composite = gc.composite_treshold_new_start.as_ref();
+		let len = self.branches.len();
+		for index in (0..len).rev() {
+			let new_start = start_composite.cloned();
+
+			let mut branch = self.branches.st_get(index).expect("We already fetch its state.");
+			if let Some(mut gc) = if branch.state <= gc.composite_treshold.0 {
+				if start_composite.is_none() {
+					// nothing more to see (branch in composite and no change of start)
+					break;
+				}
+				Some(LinearGC {
+					new_start,
+					new_end:  None,
+					neutral_element: neutral.clone(),
+				})
+			} else if let Some(change) = gc.storage.get(&branch.state) {
+				Some(LinearGC {
+					new_start,
+					new_end: change.clone(),
+					neutral_element: neutral.clone(),
+				})
+			} else {
+				None
+			} {
+				match branch.value.gc(&mut gc) {
+					UpdateResult::Unchanged => (),
+						UpdateResult::Changed(_) => { 
+						self.branches.emplace(index, branch);
+						result = UpdateResult::Changed(());
+					},
+					UpdateResult::Cleared(_) => {
+						self.branches.remove(index);
+						result = UpdateResult::Changed(());
+					}
+				}
+			}
+		}
+
+		if let UpdateResult::Changed(()) = result {
+			if self.branches.len() == 0 {
+				result = UpdateResult::Cleared(());
+			}
+		}
+
+		result
+	}
+}
+
 
 impl<
 	I: Default + Eq + Ord + Clone,

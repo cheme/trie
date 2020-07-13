@@ -25,6 +25,7 @@ use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use codec::{Encode, Decode};
 use crate::backend::{LinearStorage, LinearStorageMem, LinearStorageSlice, LinearStorageRange};
 use crate::backend::encoded_array::EncodedArrayValue;
+use derivative::Derivative;
 
 /// Basic usage case should be integers and byte representation, but
 /// only integer should really be use.
@@ -60,8 +61,8 @@ impl<S> LinearState for S where S:
 { }
 
 /// Implementation of linear value history storage.
-#[derive(Debug, Encode, Decode)]
-#[cfg_attr(any(test, feature = "test"), derive(PartialEq))]
+#[derive(Derivative, Debug, Encode, Decode)]
+#[derivative(PartialEq(bound="D: PartialEq"))]
 pub struct Linear<V, S, D>(D, PhantomData<(V, S)>);
 
 impl<V, S, D: AsRef<[u8]>> AsRef<[u8]> for Linear<V, S, D> {

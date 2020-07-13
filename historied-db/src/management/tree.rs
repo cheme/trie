@@ -1092,8 +1092,10 @@ impl<
 	S: TreeManagementStorage,
 > ManagementRef<H> for TreeManagement<H, I, BI, V, S> {
 	type S = ForkPlan<I, BI>;
-	/// Start treshold and neutral element
-	type GC = TreeStateGc<I, BI, V>;
+	/// Garbage collect over current
+	/// state or registered changes.
+	/// Choice is related to `TreeManagementStorage::JOURNAL_DELETE`.
+	type GC = MultipleGc<I, BI, V>;
 	/// TODO this needs some branch index mappings.
 	type Migrate = TreeMigrate<I, BI, V>;
 
@@ -1102,19 +1104,38 @@ impl<
 	}
 
 	fn get_gc(&self) -> Option<crate::Ref<Self::GC>> {
-		let mut storage: BTreeMap<I, BranchState<I, BI>> = Default::default();
+		let composite_treshold = self.state.tree.meta.get().composite_treshold.clone();
+		let composite_treshold_new_start = self.state.tree.meta.get().composite_pruning_treshold.clone();
+		let neutral_element = self.neutral_element.get().clone();
+		let gc = if Self::JOURNAL_DELETE {
+			let mut storage = BTreeMap::new();
+			for (k, v) in self.state.tree.journal_delete.iter(&self.state.tree.serialize) {
+				storage.insert(k, v);
+			}
+			let gc = DeltaTreeStateGc {
+				storage,
+				composite_treshold,
+				composite_treshold_new_start,
+				neutral_element,
+			};
 
-		// TODO can have a ref to the serialized collection instead (if S is ACTIVE)
-		// or TODO restor to ref of treestate if got non mutable interface for access.
-		//  + could remove default and codec of V
-		for (ix, v) in self.state.tree.storage.iter(&self.state.tree.serialize) {
-			storage.insert(ix, v);
-		}
-		let gc = TreeStateGc {
-			storage,
-			composite_treshold: self.state.tree.meta.get().composite_treshold.clone(),
-			composite_treshold_new_start: self.state.tree.meta.get().composite_pruning_treshold.clone(),
-			neutral_element: self.neutral_element.get().clone(),
+			MultipleGc::Journaled(gc)
+		} else {
+			let mut storage: BTreeMap<I, BranchState<I, BI>> = Default::default();
+
+			// TODO can have a ref to the serialized collection instead (if S is ACTIVE)
+			// or TODO restor to ref of treestate if got non mutable interface for access.
+			//  + could remove default and codec of V
+			for (ix, v) in self.state.tree.storage.iter(&self.state.tree.serialize) {
+				storage.insert(ix, v);
+			}
+			let gc = TreeStateGc {
+				storage,
+				composite_treshold,
+				composite_treshold_new_start,
+				neutral_element,
+			};
+			MultipleGc::State(gc)
 		};
 
 		Some(crate::Ref::Owned(gc))

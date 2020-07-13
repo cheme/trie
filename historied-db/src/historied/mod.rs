@@ -108,8 +108,7 @@ pub trait InMemoryValue<V>: Value<V> {
 }
 
 /// An entry at a given history index.
-#[derive(Debug, Clone, Encode, Decode)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 pub struct HistoriedValue<V, S> {
 	/// The stored value.
 	pub value: V,
@@ -151,7 +150,7 @@ impl<V, S> From<(V, S)> for HistoriedValue<V, S> {
 }
 
 /// Implementation for plain db.
-pub struct BTreeMap<K, V, H>(crate::rstd::BTreeMap<K, H>, PhantomData<V>);
+pub struct BTreeMap<K, V, H>(pub(crate) crate::rstd::BTreeMap<K, H>, PhantomData<V>);
 
 impl<K: Ord, V, H> BTreeMap<K, V, H> {
 	pub fn new() -> Self {
