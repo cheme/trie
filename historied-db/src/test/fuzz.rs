@@ -22,10 +22,11 @@ use crate::{
 };
 use crate::test::simple_impl::StateInput;
 
-type InMemoryMgmt = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, ()>;
-type InMemoryMgmtSer = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, SerFuzz>;
+pub type InMemoryMgmt = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, ()>;
+pub type InMemoryMgmtSer = crate::management::tree::TreeManagement<StateInput, u32, u32, u16, SerFuzz>;
 
-struct SerFuzz;
+/// Serialize for fuzzer.
+pub struct SerFuzz;
 
 mod bindings {
 	macro_rules! static_instance {

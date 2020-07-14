@@ -328,7 +328,10 @@ impl<
 	S: TreeManagementStorage,
 > TreeManagement<H, I, BI, V, S> {
 	pub fn define_neutral_element(mut self, n: V) -> Self {
+		// TODO refactor bound and put V to clone probably
+		let n2 = V::decode(&mut &n.encode()[..]).expect("Directly from encode");
 		self.neutral_element.handle(self.state.ser()).set(Some(n));
+		self.state.neutral_element = Some(n2);
 		self
 	}
 }
@@ -428,7 +431,7 @@ impl<
 	// TODO subfunction in tree (more tree related)? This is a migrate (we change
 	// composite_treshold).
 	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
-
+		unimplemented!("TODO feed journal of changed branch!!");
 		println!("cano : {:?} {:?}", &branch, &switch_index);
 		// TODO makes last index the end of this canonicalize branch
 
@@ -447,7 +450,8 @@ impl<
 		// use case.
 		let mut filter: BTreeMap<_, _> = Default::default();
 		for h in branch.history.into_iter() {
-			if h.state.end > switch_index.1 {
+			//if h.state.end > switch_index.1 {
+			if h.state.start < switch_index.1 {
 				println!("ins {:?}", h.branch_index);
 				filter.insert(h.branch_index, h.state);
 			}
@@ -468,7 +472,7 @@ impl<
 						// TODO EMCH clean mapping for ends shifts
 					}
 				} else {
-				println!("rem {:?}", branch_ix);
+					println!("rem {:?}", branch_ix);
 					to_remove.push(branch_ix.clone());
 				}
 			}
@@ -1279,16 +1283,15 @@ impl<
 	}
 
 	// note that se must be valid.
-	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::S> {
+	fn append_external_state(&mut self, state: H, at: &Self::SF) -> Option<Self::SF> {
 		let (branch_index, index) = at;
 		let mut index = index.clone();
 		index += 1;
 		if let Some(branch_index) = self.state.tree.add_state(branch_index.clone(), index.clone()) {
-			let result = self.state.tree.query_plan(branch_index.clone());
 			let last_in_use_index = (branch_index.clone(), index);
 			self.last_in_use_index.handle(self.state.ser()).set(last_in_use_index.clone());
-			self.mapping.handle(self.state.ser()).insert(state, last_in_use_index);
-			Some(result)
+			self.mapping.handle(self.state.ser()).insert(state, last_in_use_index.clone());
+			Some(last_in_use_index)
 		} else {
 			None
 		}
@@ -1312,6 +1315,10 @@ pub(crate) mod test {
 	pub(crate) fn test_states() -> Tree<u32, u32, ()> {
 		test_states_inner()
 	}
+	pub(crate) fn test_states_st() -> Tree<u32, u32, crate::test::fuzz::SerFuzz> {
+		test_states_inner()
+	}
+	
 	// TODO switch to management function?
 	pub(crate) fn test_states_inner<T: TreeManagementStorage>() -> Tree<u32, u32, T> {
 		let mut states = Tree::default();

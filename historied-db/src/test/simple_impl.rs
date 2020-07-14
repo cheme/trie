@@ -220,7 +220,7 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 		self.get_state(state)
 	}
 
-	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::S> {
+	fn append_external_state(&mut self, state: StateInput, at: &Self::SF) -> Option<Self::SF> {
 		debug_assert!(state.to_index() as usize == self.db.len(), "Test simple implementation only allow sequential new identifier");
 		if self.db.get_mut(*at as usize).and_then(|v| v.as_mut().map(|v| {
 			v.is_latest = false;
@@ -233,9 +233,9 @@ impl<K: Eq + Hash, V> ForkableManagement<StateInput> for Db<K, V> {
 			previous: *at,
 			is_latest: true,
 		}));
-		self.latest_state = Latest::unchecked_latest(self.db.len() as u32 - 1);
-
-		self.get_db_state(&state)
+		let new = self.db.len() as u32 - 1;
+		self.latest_state = Latest::unchecked_latest(new);
+		Some(new)
 	}
 
 	/// Warning this recurse over children and can be slow for some

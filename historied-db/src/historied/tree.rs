@@ -683,7 +683,7 @@ impl<
 #[cfg(test)]
 mod test {
 	use super::*;
-	use crate::management::tree::test::test_states;
+	use crate::management::tree::test::{test_states, test_states_st};
 
 	#[test]
 	fn compile_double_encoded() {
@@ -770,5 +770,67 @@ mod test {
 				assert_eq!(item.get_ref(&states.query_plan(*i)), Some(i));
 			}
 		}
+	}
+
+	#[test]
+	fn test_migrate() {
+		use crate::{Management, ManagementRef, ForkableManagement};
+		use crate::test::simple_impl::StateInput;
+		type BD = crate::backend::in_memory::MemoryOnly<u32, u32>;
+		type D = crate::backend::in_memory::MemoryOnly<
+			crate::historied::linear::Linear<u32, u32, BD>,
+			u32,
+		>;
+		let mut states = crate::test::fuzz::InMemoryMgmtSer::default()
+			.define_neutral_element(0);
+		let s0 = states.latest_state_fork();
+
+		let s1 = states.append_external_state(StateInput(1), &s0).unwrap();
+		let s2 = states.append_external_state(StateInput(2), &s0).unwrap();
+		let s1b = states.append_external_state(StateInput(12), &s1).unwrap();
+		let s1 = states.append_external_state(StateInput(13), &s1b).unwrap();
+		let sx = states.append_external_state(StateInput(14), &s1).unwrap();
+		assert_eq!(states.drop_state(&sx, true).unwrap().len(), 1);
+		let s3 = states.append_external_state(StateInput(3), &s1).unwrap();
+		let s4 = states.append_external_state(StateInput(4), &s1).unwrap();
+		let s5 = states.append_external_state(StateInput(5), &s1b).unwrap();
+		// 0> 1: _ _ X
+		// |			 |> 3: 1
+		// |			 |> 4: 1
+		// |		 |> 5: 1
+		// |> 2: _ _
+		let mut item1: Tree<u32, u32, u32, D, BD> = Default::default();
+		let mut item2: Tree<u32, u32, u32, D, BD> = Default::default();
+		let mut item3: Tree<u32, u32, u32, D, BD> = Default::default();
+		let mut item4: Tree<u32, u32, u32, D, BD> = Default::default();
+		item1.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
+		item2.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
+		item1.set(12, &states.get_db_state_mut(&StateInput(2)).unwrap());
+
+		let s3head = states.append_external_state(StateInput(32), &s3).unwrap();
+		item1.set(13, &states.get_db_state_mut(&StateInput(32)).unwrap());
+		item2.set(13, &states.get_db_state_mut(&StateInput(32)).unwrap());
+		item3.set(13, &states.get_db_state_mut(&StateInput(32)).unwrap());
+		item4.set(13, &states.get_db_state_mut(&StateInput(32)).unwrap());
+		let s3tmp = states.append_external_state(StateInput(33), &s3head).unwrap();
+		item1.set(14, &states.get_db_state_mut(&StateInput(33)).unwrap());
+		item3.set(0, &states.get_db_state_mut(&StateInput(33)).unwrap());
+		let s3head = states.append_external_state(StateInput(34), &s3tmp).unwrap();
+		let s6 = states.append_external_state(StateInput(6), &s3tmp).unwrap();
+		let s3head = states.append_external_state(StateInput(35), &s3head).unwrap();
+		item1.set(15, &states.get_db_state_mut(&StateInput(35)).unwrap());
+		item2.set(15, &states.get_db_state_mut(&StateInput(35)).unwrap());
+		item4.set(0, &states.get_db_state_mut(&StateInput(35)).unwrap());
+		item1.set(0, &states.get_db_state_mut(&StateInput(6)).unwrap());
+
+		let old_state = states.clone();
+		// Apply change of composite to 33
+		let fp = states.get_db_state(&StateInput(35)).unwrap();
+		states.canonicalize(fp, s3tmp);
+		panic!("{:?} \n {:?}", old_state, states);
+
+
+		// on previous state set composite_treshold_new_start and migrate 
+
 	}
 }

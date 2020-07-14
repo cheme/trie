@@ -123,4 +123,3 @@ impl<V: Clone, S: Clone> LinearStorage<V, S> for MemoryOnly<V, S> {
 		self.0[at] = value;
 	}
 }
-
