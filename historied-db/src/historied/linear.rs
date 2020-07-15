@@ -25,6 +25,7 @@ use crate::rstd::ops::{AddAssign, SubAssign, Range};
 use codec::{Encode, Decode};
 use crate::backend::{LinearStorage, LinearStorageMem, LinearStorageSlice, LinearStorageRange};
 use crate::backend::encoded_array::EncodedArrayValue;
+use crate::InitFrom;
 use derivative::Derivative;
 
 /// Basic usage case should be integers and byte representation, but
@@ -94,6 +95,13 @@ impl<V, S, D: Default> Default for Linear<V, S, D> {
 	fn default() -> Self {
 		let v = D::default();
 		Linear(v, PhantomData)
+	}
+}
+
+impl<V, S, D: InitFrom> InitFrom for Linear<V, S, D> {
+	type Init = <D as InitFrom>::Init;
+	fn init_from(init: Self::Init) -> Self {
+		Linear(<D as InitFrom>::init_from(init), PhantomData)
 	}
 }
 
@@ -339,8 +347,8 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 	/// will be removed after migration.
 	type Migrate = (S, Self::GC);
 
-	fn new(value: V, at: &Self::SE) -> Self {
-		let mut v = D::default();
+	fn new(value: V, at: &Self::SE, init: Self::Init) -> Self {
+		let mut v = D::init_from(init);
 		let state = at.latest().clone();
 		v.push(HistoriedValue{ value, state });
 		Linear(v, PhantomData)
@@ -559,3 +567,7 @@ impl Linear<Option<Vec<u8>>, u32, crate::backend::in_memory::MemoryOnly<Option<V
 		size
 	}
 }
+
+
+// test for gc: [1, 2, 3, 4] and [1, ~, 2, ~] -> new end at all ix is straight forward and new
+// start ith at 1 for 2 [2, ~] and at 2 for 2 [] and 4 [] for both

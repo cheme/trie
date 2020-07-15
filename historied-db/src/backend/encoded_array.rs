@@ -28,6 +28,7 @@ use crate::historied::HistoriedValue;
 use super::{LinearStorage, LinearStorageSlice, LinearStorageRange};
 use codec::{Encode, Decode, Input as CodecInput};
 use derivative::Derivative;
+use crate::InitFrom;
 
 #[derive(Derivative, Debug)]
 #[cfg_attr(test, derivative(PartialEq(bound="")))]
@@ -383,6 +384,14 @@ impl<'a, V, F: EncodedArrayConfig> EncodedArray<'a, V, F>
 
 }
 
+impl<'a, F: EncodedArrayConfig, V> InitFrom for EncodedArray<'a, V, F>
+{
+	type Init = ();
+	fn init_from(_init: Self::Init) -> Self {
+		Self::default()
+	}
+}
+
 impl<'a, F: EncodedArrayConfig, V> LinearStorage<V, u32> for EncodedArray<'a, V, F>
 	where V: EncodedArrayValue,
 {
@@ -581,7 +590,6 @@ impl<'a, F: EncodedArrayConfig, V> LinearStorageRange<V, u32> for EncodedArray<'
 	fn from_slice(slice: &[u8]) -> Option<Self> {
 		Some(<Self as EncodedArrayValue>::from_slice(slice))
 	}
-
 }
 
 #[cfg(test)]

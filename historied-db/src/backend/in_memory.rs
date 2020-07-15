@@ -18,6 +18,7 @@ use crate::historied::HistoriedValue;
 use codec::{Encode, Decode, Input as CodecInput};
 use super::{LinearStorage, LinearStorageMem};
 use crate::rstd::mem::replace;
+use crate::InitFrom;
 
 /// Size of preallocated history per element.
 /// Currently at two for committed and prospective only.
@@ -75,6 +76,13 @@ impl<V: Clone, S: Clone> LinearStorageMem<V, S> for MemoryOnly<V, S> {
 		} else {
 			None
 		}
+	}
+}
+
+impl<V, S> InitFrom for MemoryOnly<V, S> {
+	type Init = ();
+	fn init_from(_init: Self::Init) -> Self {
+		Self::default()
 	}
 }
 

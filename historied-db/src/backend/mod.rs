@@ -16,6 +16,7 @@
 
 use crate::historied::HistoriedValue;
 use crate::rstd::ops::Range;
+use crate::InitFrom;
 
 /// Data stored as rust structs in memory.
 pub mod in_memory;
@@ -24,8 +25,11 @@ pub mod in_memory;
 /// stractures.
 pub mod encoded_array;
 
+/// Content can be split between multiple nodes.
+pub mod nodes;
+
 /// Backend for linear storage.
-pub trait LinearStorage<V, S>: Default {
+pub trait LinearStorage<V, S>: InitFrom {
 	/// This does not need to be very efficient as it is mainly for
 	/// garbage collection.
 	fn truncate_until(&mut self, split_off: usize);

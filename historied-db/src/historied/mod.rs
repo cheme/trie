@@ -22,6 +22,7 @@ use hash_db::{PlainDB, PlainDBRef};
 use crate::Latest;
 use codec::{Encode, Decode};
 use crate::rstd::ops::Range;
+use crate::InitFrom;
 
 pub mod linear;
 pub mod tree;
@@ -60,7 +61,7 @@ pub trait InMemoryValueRange<S> {
 }
 
 /// Trait for historied value.
-pub trait Value<V>: ValueRef<V> {
+pub trait Value<V>: ValueRef<V> + InitFrom {
 	/// State to use here.
 	/// We use a different state than
 	/// for the ref as it can use different
@@ -79,7 +80,7 @@ pub trait Value<V>: ValueRef<V> {
 	type Migrate;
 
 	/// Initiate a new value.
-	fn new(value: V, at: &Self::SE) -> Self;
+	fn new(value: V, at: &Self::SE, init: Self::Init) -> Self;
 
 	/// Insert or update a value.
 	fn set(&mut self, value: V, at: &Self::SE) -> UpdateResult<()>;
@@ -150,15 +151,15 @@ impl<V, S> From<(V, S)> for HistoriedValue<V, S> {
 }
 
 /// Implementation for plain db.
-pub struct BTreeMap<K, V, H>(pub(crate) crate::rstd::BTreeMap<K, H>, PhantomData<V>);
+pub struct BTreeMap<K, V, H: InitFrom>(pub(crate) crate::rstd::BTreeMap<K, H>, H::Init, PhantomData<V>);
 
-impl<K: Ord, V, H> BTreeMap<K, V, H> {
-	pub fn new() -> Self {
-		BTreeMap(crate::rstd::BTreeMap::new(), PhantomData)
+impl<K: Ord, V, H: InitFrom> BTreeMap<K, V, H> {
+	pub fn new(init: H::Init) -> Self {
+		BTreeMap(crate::rstd::BTreeMap::new(), init, PhantomData)
 	}
 }
 
-impl<K: Ord, V: Clone, H: ValueRef<V>> StateDBRef<K, V> for BTreeMap<K, V, H> {
+impl<K: Ord, V: Clone, H: ValueRef<V> + InitFrom> StateDBRef<K, V> for BTreeMap<K, V, H> {
 	type S = H::S;
 
 	fn get(&self, key: &K, at: &Self::S) -> Option<V> {
@@ -174,7 +175,7 @@ impl<K: Ord, V: Clone, H: ValueRef<V>> StateDBRef<K, V> for BTreeMap<K, V, H> {
 }
 
 // note that the constraint on state db ref for the associated type is bad (forces V as clonable).
-impl<K: Ord, V, H: InMemoryValueRef<V>> InMemoryStateDBRef<K, V> for BTreeMap<K, V, H> {
+impl<K: Ord, V, H: InMemoryValueRef<V> + InitFrom> InMemoryStateDBRef<K, V> for BTreeMap<K, V, H> {
 	type S = H::S;
 
 	fn get_ref(&self, key: &K, at: &Self::S) -> Option<&V> {
@@ -195,7 +196,7 @@ impl<K: Ord + Clone, V: Clone + Eq, H: Value<V>> StateDB<K, V> for BTreeMap<K, V
 		if let Some(hist) = self.0.get_mut(&key) {
 			hist.set(value, at);
 		} else {
-			self.0.insert(key, H::new(value, at));
+			self.0.insert(key, H::new(value, at, self.1.clone()));
 		}
 	}
 
@@ -263,7 +264,7 @@ impl<K, V: Clone, H: ValueRef<V>, DB: PlainDBRef<K, H>, S> StateDBRef<K, V> for 
 impl<
 	K: Ord + Clone,
 	V: Clone + Eq,
-	H: Value<V>,
+	H: Value<V, Init = ()>,
 	DB: PlainDBRef<K, H> + PlainDB<K, H>,
 > StateDB<K, V> for PlainDBState<K, DB, H, H::Index>
 	where
@@ -284,7 +285,7 @@ impl<
 				UpdateResult::Unchanged => return,
 			}
 		} else {
-			self.db.emplace(key.clone(), H::new(value, at));
+			self.db.emplace(key.clone(), H::new(value, at, ()));
 		}
 		self.touched_keys.entry(at.index()).or_default().push(key);
 	}

@@ -23,6 +23,7 @@ use crate::management::tree::{ForkPlan, BranchesContainer, TreeStateGc, DeltaTre
 use crate::rstd::ops::SubAssign;
 use crate::rstd::marker::PhantomData;
 use crate::Latest;
+use crate::InitFrom;
 use codec::{Encode, Decode};
 use derivative::Derivative;
 
@@ -83,8 +84,10 @@ macro_rules! tree_get {
 
 #[derive(Derivative, Debug, Clone, Encode, Decode)]
 #[derivative(PartialEq(bound="D: PartialEq"))]
-pub struct Tree<I, BI, V, D, BD> {
+pub struct Tree<I, BI, V, D: InitFrom, BD> {
 	branches: D,
+	#[derivative(PartialEq="ignore" )]
+	init: D::Init,
 	_ph: PhantomData<(I, BI, V, BD)>,
 	// TODO add optional range indexing.
 	// Indexing is over couple (I, BI), runing on fix size batches (aka max size).
@@ -98,10 +101,13 @@ pub struct Tree<I, BI, V, D, BD> {
 	// (conf needed in state also with optional indexing).
 }
 
-impl<I, BI, V, D: Default, BD> Default for Tree<I, BI, V, D, BD> {
-	fn default() -> Self {
+impl<I, BI, V, D: InitFrom, BD> InitFrom for Tree<I, BI, V, D, BD> {
+	type Init = D::Init;
+
+	fn init_from(init: D::Init) -> Self {
 		Tree {
-			branches: D::default(),
+			branches: D::init_from(init.clone()),
+			init,
 			_ph: PhantomData,
 		}
 	}
@@ -122,10 +128,10 @@ impl<
 	BD: LinearStorage<V, BI>,
 > Branch<I, BI, V, BD>
 {
-	pub fn new(value: V, state: &Latest<(I, BI)>) -> Self {
+	pub fn new(value: V, state: &Latest<(I, BI)>, init: BD::Init) -> Self {
 		let (branch_index, index) = state.latest().clone();
 		let index = Latest::unchecked_latest(index); // TODO cast ptr?
-		let history = Linear::new(value, &index);
+		let history = Linear::new(value, &index, init);
 		Branch {
 			state: branch_index,
 			value: history,
@@ -169,7 +175,7 @@ impl<
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 	D: LinearStorage<Linear<V, BI, BD>, I>,
-	BD: LinearStorage<V, BI>,
+	BD: LinearStorage<V, BI> + InitFrom<Init = <D as InitFrom>::Init>,
 > Value<V> for Tree<I, BI, V, D, BD> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
@@ -177,11 +183,12 @@ impl<
 	//type Migrate = (BI, TreeMigrate<I, BI, V>);
 	type Migrate = MultipleMigrate<I, BI, V>;
 
-	fn new(value: V, at: &Self::SE) -> Self {
-		let mut v = D::default();
-		v.push(Branch::new(value, at));
+	fn new(value: V, at: &Self::SE, init: Self::Init) -> Self {
+		let mut v = D::init_from(init.clone());
+		v.push(Branch::new(value, at, init.clone()));
 		Tree {
 			branches: v,
+			init: init,
 			_ph: PhantomData,
 		}
 	}
@@ -235,7 +242,7 @@ impl<
 			}
 		}
 
-		let branch = Branch::new(value, at);
+		let branch = Branch::new(value, at, self.init.clone());
 		if insert_at == self.branches.len() {
 			self.branches.push(branch);
 		} else {
@@ -610,7 +617,7 @@ impl<
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 	D: LinearStorageMem<Linear<V, BI, BD>, I>,
-	BD: LinearStorageMem<V, BI>,
+	BD: LinearStorageMem<V, BI, Init = D::Init>,
 > InMemoryValue<V> for Tree<I, BI, V, D, BD> {
 	fn get_mut(&mut self, at: &Self::SE) -> Option<&mut V> {
 		let (branch_index, index) = at.latest();
@@ -653,7 +660,7 @@ impl<
 				insert_at = iter_index;
 			}
 		}
-		let branch = Branch::new(value, at);
+		let branch = Branch::new(value, at, self.init.clone());
 		if insert_at == self.branches.len() {
 			self.branches.push(branch);
 		} else {
@@ -702,6 +709,7 @@ impl<
 mod test {
 	use super::*;
 	use crate::management::tree::test::{test_states, test_states_st};
+	use crate::InitFrom;
 
 	#[test]
 	fn compile_double_encoded() {
@@ -715,12 +723,12 @@ mod test {
 			NoVersion,
 //			u32
 		>;
-		let item: Tree<u32, u32, Vec<u8>, D, BD> = Default::default();
+		let item: Tree<u32, u32, Vec<u8>, D, BD> = InitFrom::init_from(());
 		let at: ForkPlan<u32, u32> = Default::default();
 		item.get(&at);
 		item.get_slice(&at);
 		let latest = Latest::unchecked_latest((0, 0));
-		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest);
+		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest, ());
 //		let slice = &b"dtdt"[..];
 //		use crate::backend::encoded_array::{EncodedArrayValue};
 //		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
@@ -744,7 +752,7 @@ mod test {
 		// |		 |> 5: 1
 		// |> 2: _
 		let mut states = test_states();
-		let mut item: Tree<u32, u32, u32, D, BD> = Default::default();
+		let mut item: Tree<u32, u32, u32, D, BD> = InitFrom::init_from(());
 
 		for i in 0..6 {
 			assert_eq!(item.get(&states.query_plan(i)), None);
@@ -770,7 +778,7 @@ mod test {
 		assert_eq!(item.get(&ref_1), Some(11));
 		assert_eq!(item.get(&ref_1_bis), Some(11));
 
-		item = Default::default();
+		item = InitFrom::init_from(());
 
 		// need fresh state as previous modification leaves unattached branches
 		let mut states = test_states();
@@ -803,8 +811,8 @@ mod test {
 			.define_neutral_element(0);
 		let s0 = states.latest_state_fork();
 
-		let mut item1: Tree<u32, u32, u16, D, BD> = Default::default();
-		let mut item2: Tree<u32, u32, u16, D, BD> = Default::default();
+		let mut item1: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
+		let mut item2: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
 		let s1 = states.append_external_state(StateInput(1), &s0).unwrap();
 		item1.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
 		item2.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
@@ -836,8 +844,8 @@ mod test {
 		// |			 |> 4: 1
 		// |		 |> 5: 1
 		// |> 2: _ _
-		let mut item3: Tree<u32, u32, u16, D, BD> = Default::default();
-		let mut item4: Tree<u32, u32, u16, D, BD> = Default::default();
+		let mut item3: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
+		let mut item4: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
 		item1.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item2.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item1.set(12, &states.get_db_state_mut(&StateInput(2)).unwrap());

@@ -25,7 +25,7 @@ extern crate alloc;
 
 #[cfg(feature = "std")]
 mod rstd {
-	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
+	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec, cell};
 	pub use std::collections::VecDeque;
 	pub use std::collections::{BTreeMap, BTreeSet, btree_map};
 	pub use std::error::Error;
@@ -33,7 +33,7 @@ mod rstd {
 
 #[cfg(not(feature = "std"))]
 mod rstd {
-	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
+	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result, cell};
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
 	pub use alloc::collections::{BTreeMap, BTreeSet, btreemap};
@@ -56,6 +56,11 @@ pub mod simple_db;
 
 /// Management for state of historied data.
 pub mod management;
+
+pub trait InitFrom: Sized {
+	type Init: Clone;
+	fn init_from(init: Self::Init) -> Self;
+}
 
 /// Minimal simple implementation.
 #[cfg(any(test, feature = "test-helpers"))]
