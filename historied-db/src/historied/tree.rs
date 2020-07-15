@@ -338,41 +338,42 @@ impl<
 		match mig {
 			MultipleMigrate::JournalGc(gc) => {
 				result = self.journaled_gc(gc);
-				if let UpdateResult::Changed(()) = result {
-					let mut new_branch: Option<Branch<I, BI, V, BD>> = None;
-					let mut i = 0;
-					// TODO merge all less than composite treshold in composite treshold index branch.
-					loop {
-						if let Some(mut branch) = self.branches.st_get(i) {
-							if branch.state <= gc.composite_treshold.0 {
+				if let UpdateResult::Cleared(()) = result {
+					return UpdateResult::Cleared(());
+				}
+				let mut new_branch: Option<Branch<I, BI, V, BD>> = None;
+				let mut i = 0;
+				// TODO merge all less than composite treshold in composite treshold index branch.
+				loop {
+					if let Some(mut branch) = self.branches.st_get(i) {
+						if branch.state <= gc.composite_treshold.0 {
 								if let Some(new_branch) = new_branch.as_mut() {
-									for i in 0.. {
-										if let Some(h) = branch.value.st_get(i) {
-											new_branch.value.push(h);
-										} else {
-											break;
-										}
+								for i in 0.. {
+									if let Some(h) = branch.value.st_get(i) {
+										new_branch.value.push(h);
+									} else {
+										break;
 									}
-								} else {
-									branch.state = gc.composite_treshold.0.clone();
-									new_branch = Some(branch);
 								}
 							} else {
-								break;
+								branch.state = gc.composite_treshold.0.clone();
+								new_branch = Some(branch);
 							}
 						} else {
 							break;
 						}
-						i += 1;
+					} else {
+						break;
 					}
-					if let Some(new_branch) = new_branch {
-						if i == self.branches.len() {
-							self.branches.clear();
-							self.branches.push(new_branch);
-						} else {
-							self.branches.truncate_until(i - 1);
-							self.branches.emplace(0, new_branch);
-						}
+					i += 1;
+				}
+				if let Some(new_branch) = new_branch {
+					if i == self.branches.len() {
+						self.branches.clear();
+						self.branches.push(new_branch);
+					} else {
+						self.branches.truncate_until(i - 1);
+						self.branches.emplace(0, new_branch);
 					}
 				}
 			},
@@ -518,36 +519,30 @@ impl<
 		let len = self.branches.len();
 		let mut first_new_start = false;
 		for index in (0..len).rev() {
-			let new_start = start_composite.cloned();
 
 			let mut branch = self.branches.st_get(index).expect("We already fetch its state.");
-			if let Some(mut gc) = if branch.state <= gc.composite_treshold.0 {
+			let new_start = if branch.state <= gc.composite_treshold.0 {
 				match start_composite.as_ref() {
-					None => {
-						// nothing more to see (branch in composite and no change of start)
-						break;
-					},
+					None => None,
 					Some(n_start) => {
 						if first_new_start {
 							self.branches.remove(index);
 							result = UpdateResult::Changed(());
-							None
+							continue;
 						} else {
 							if let Some(b) = branch.value.st_get(0) {
 								if &b.state < n_start {
 									first_new_start = true;
 								}
 							}
-							Some(LinearGC {
-								new_start,
-								new_end:  None,
-								neutral_element: neutral.clone(),
-							})
+							start_composite.cloned()
 						}
 					},
 				}
-
-			} else if let Some(change) = gc.storage.get(&branch.state) {
+			} else {
+				None
+			};
+			if let Some(mut gc) = if let Some(change) = gc.storage.get(&branch.state) {
 				if change.is_none() {
 					self.branches.remove(index);
 					result = UpdateResult::Changed(());
@@ -560,7 +555,15 @@ impl<
 					})
 				}
 			} else {
-				None
+				if first_new_start {
+					Some(LinearGC {
+						new_start,
+						new_end: None,
+						neutral_element: neutral.clone(),
+					})
+				} else {
+					None
+				}
 			} {
 				match branch.value.gc(&mut gc) {
 					UpdateResult::Unchanged => (),
@@ -583,6 +586,21 @@ impl<
 		}
 
 		result
+	}
+
+
+	#[cfg(test)]
+	fn nb_internal_history(&self) -> usize {
+		let mut nb = 0;
+		for i in 0..self.branches.len() {
+			let branch = self.branches.st_get(i).unwrap();
+			nb += branch.value.len();
+		}
+		nb
+	}
+	#[cfg(test)]
+	fn nb_internal_branch(&self) -> usize {
+		self.branches.len()
 	}
 }
 
@@ -776,20 +794,39 @@ mod test {
 	fn test_migrate() {
 		use crate::{Management, ManagementRef, ForkableManagement};
 		use crate::test::simple_impl::StateInput;
-		type BD = crate::backend::in_memory::MemoryOnly<u32, u32>;
+		type BD = crate::backend::in_memory::MemoryOnly<u16, u32>;
 		type D = crate::backend::in_memory::MemoryOnly<
-			crate::historied::linear::Linear<u32, u32, BD>,
+			crate::historied::linear::Linear<u16, u32, BD>,
 			u32,
 		>;
 		let mut states = crate::test::fuzz::InMemoryMgmtSer::default()
 			.define_neutral_element(0);
 		let s0 = states.latest_state_fork();
 
+		let mut item1: Tree<u32, u32, u16, D, BD> = Default::default();
+		let mut item2: Tree<u32, u32, u16, D, BD> = Default::default();
 		let s1 = states.append_external_state(StateInput(1), &s0).unwrap();
+		item1.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
+		item2.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
+		// fusing cano
+		let _ = states.append_external_state(StateInput(101), &s1).unwrap();
+		item1.set(2, &states.get_db_state_mut(&StateInput(101)).unwrap());
+		item2.set(2, &states.get_db_state_mut(&StateInput(101)).unwrap());
+		let s1 = states.append_external_state(StateInput(102), &s1).unwrap();
+		item1.set(3, &states.get_db_state_mut(&StateInput(102)).unwrap());
+		let s1 = states.append_external_state(StateInput(103), &s1).unwrap();
+		item1.set(4, &states.get_db_state_mut(&StateInput(103)).unwrap());
+		let _ = states.append_external_state(StateInput(104), &s1).unwrap();
+		item1.set(5, &states.get_db_state_mut(&StateInput(104)).unwrap());
+		let s1 = states.append_external_state(StateInput(105), &s1).unwrap();
+		item1.set(6, &states.get_db_state_mut(&StateInput(105)).unwrap());
+		item2.set(6, &states.get_db_state_mut(&StateInput(105)).unwrap());
+		// end fusing (shift following branch index by 2)
 		let s2 = states.append_external_state(StateInput(2), &s0).unwrap();
 		let s1b = states.append_external_state(StateInput(12), &s1).unwrap();
 		let s1 = states.append_external_state(StateInput(13), &s1b).unwrap();
 		let sx = states.append_external_state(StateInput(14), &s1).unwrap();
+		let qp14 = states.get_db_state(&StateInput(14)).unwrap();
 		assert_eq!(states.drop_state(&sx, true).unwrap().len(), 1);
 		let s3 = states.append_external_state(StateInput(3), &s1).unwrap();
 		let s4 = states.append_external_state(StateInput(4), &s1).unwrap();
@@ -799,10 +836,8 @@ mod test {
 		// |			 |> 4: 1
 		// |		 |> 5: 1
 		// |> 2: _ _
-		let mut item1: Tree<u32, u32, u32, D, BD> = Default::default();
-		let mut item2: Tree<u32, u32, u32, D, BD> = Default::default();
-		let mut item3: Tree<u32, u32, u32, D, BD> = Default::default();
-		let mut item4: Tree<u32, u32, u32, D, BD> = Default::default();
+		let mut item3: Tree<u32, u32, u16, D, BD> = Default::default();
+		let mut item4: Tree<u32, u32, u16, D, BD> = Default::default();
 		item1.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item2.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item1.set(12, &states.get_db_state_mut(&StateInput(2)).unwrap());
@@ -825,12 +860,119 @@ mod test {
 
 		let old_state = states.clone();
 		// Apply change of composite to 33
+		let filter_out = [101, 104, 2, 4, 5];
+		let mut filter_qp = vec![qp14];
+		for i in filter_out.iter() {
+			let qp = states.get_db_state(&StateInput(*i)).unwrap();
+			filter_qp.push(qp);
+		}
+
 		let fp = states.get_db_state(&StateInput(35)).unwrap();
-		states.canonicalize(fp, s3tmp);
-		panic!("{:?} \n {:?}", old_state, states);
+		states.canonicalize(fp, s3tmp, None);
+		let filter_in = [1, 102, 103, 105, 12, 13, 32, 33, 34, 35, 6];
+		let no_qp = [14];
+		//panic!("{:?} \n {:?}", old_state, states);
+		let mut gc_item1 = item1.clone();
+		let mut gc_item2 = item2.clone();
+		let mut gc_item3 = item3.clone();
+		let mut gc_item4 = item4.clone();
+		{
+			let gc = states.get_gc().unwrap();
+			gc_item1.gc(gc.as_ref());
+			gc_item2.gc(gc.as_ref());
+			gc_item3.gc(gc.as_ref());
+			gc_item4.gc(gc.as_ref());
+			//panic!("{:?}", (gc.as_ref(), item4, gc_item4));
+		}
+		assert_eq!(gc_item1.nb_internal_history(), 8);
+		assert_eq!(gc_item2.nb_internal_history(), 4);
+		assert_eq!(gc_item3.nb_internal_history(), 2); // actually untouched
+		assert_eq!(gc_item4.nb_internal_history(), 2); // actually untouched
+		assert_eq!(gc_item1.nb_internal_branch(), 5);
+		assert_eq!(gc_item2.nb_internal_branch(), 3);
+		assert_eq!(gc_item3.nb_internal_branch(), 1);
+		assert_eq!(gc_item4.nb_internal_branch(), 1);
+		/* TODO only with new_start where we actually prune stuff
+		for fp in filter_qp.iter() {
+			assert_ne!(
+				gc_item1.get_ref(fp),
+				item1.get_ref(&fp),
+			);
+		}
+		*/
 
+		for i in filter_in.iter() {
+			let fp = states.get_db_state(&StateInput(*i)).unwrap();
+			assert_eq!(gc_item1.get_ref(&fp), item1.get_ref(&fp));
+			assert_eq!(gc_item2.get_ref(&fp), item2.get_ref(&fp));
+			assert_eq!(gc_item3.get_ref(&fp), item3.get_ref(&fp));
+			assert_eq!(gc_item4.get_ref(&fp), item4.get_ref(&fp));
+		}
+//		panic!("{:?}", (gc, item1, gc_item1));
 
-		// on previous state set composite_treshold_new_start and migrate 
+		// migrate 
+		let filter_in = [33, 34, 35, 6];
+		let mut gc_item1 = item1.clone();
+		let mut gc_item2 = item2.clone();
+		let mut gc_item3 = item3.clone();
+		let mut gc_item4 = item4.clone();
+		let mut states = states;
+		{
+			let (mig, mut gc) = states.get_migrate();
+			gc_item1.migrate(&mut gc);
+			gc_item2.migrate(&mut gc);
+			gc_item3.migrate(&mut gc);
+			gc_item4.migrate(&mut gc);
+			states = mig.applied_migrate();
+		}
+		for i in filter_in.iter() {
+			let fp = states.get_db_state(&StateInput(*i)).unwrap();
+			assert_eq!(gc_item1.get_ref(&fp), item1.get_ref(&fp));
+			assert_eq!(gc_item2.get_ref(&fp), item2.get_ref(&fp));
+			assert_eq!(gc_item3.get_ref(&fp), item3.get_ref(&fp));
+			assert_eq!(gc_item4.get_ref(&fp), item4.get_ref(&fp));
+		}
+		assert_eq!(gc_item1.nb_internal_history(), 8);
+		assert_eq!(gc_item2.nb_internal_history(), 4);
+		assert_eq!(gc_item3.nb_internal_history(), 2);
+		assert_eq!(gc_item4.nb_internal_history(), 2);
+		assert_eq!(gc_item1.nb_internal_branch(), 2);
+		assert_eq!(gc_item2.nb_internal_branch(), 1);
+		assert_eq!(gc_item3.nb_internal_branch(), 1);
+		assert_eq!(gc_item4.nb_internal_branch(), 1);
 
+		// on previous state set migrate with composite_treshold_new_start 
+		let filter_in = [33, 34, 35, 6];
+		let mut gc_item1 = item1.clone();
+		let mut gc_item2 = item2.clone();
+		let mut gc_item3 = item3.clone();
+		let mut gc_item4 = item4.clone();
+		let mut states = old_state;
+		let fp = states.get_db_state(&StateInput(35)).unwrap();
+		states.canonicalize(fp, s3tmp, Some(s3tmp.1));
+		{
+			let (mig, mut gc) = states.get_migrate();
+			gc_item1.migrate(&mut gc);
+			gc_item2.migrate(&mut gc);
+			gc_item3.migrate(&mut gc);
+			gc_item4.migrate(&mut gc);
+			states = mig.applied_migrate();
+			//panic!("{:?}", (gc, item3, gc_item3));
+		}
+		for i in filter_in.iter() {
+			let fp = states.get_db_state(&StateInput(*i)).unwrap();
+			assert_eq!(gc_item1.get_ref(&fp), item1.get_ref(&fp));
+			assert_eq!(gc_item2.get_ref(&fp), item2.get_ref(&fp));
+			assert_eq!(gc_item3.get_ref(&fp), None); // neutral element
+			assert_eq!(gc_item4.get_ref(&fp), item4.get_ref(&fp));
+		}
+		assert_eq!(gc_item1.nb_internal_history(), 4);
+		assert_eq!(gc_item2.nb_internal_history(), 2);
+		assert_eq!(gc_item3.nb_internal_history(), 0);
+		assert_eq!(gc_item4.nb_internal_history(), 2);
+		assert_eq!(gc_item1.nb_internal_branch(), 2);
+		assert_eq!(gc_item2.nb_internal_branch(), 1);
+		assert_eq!(gc_item3.nb_internal_branch(), 0);
+		assert_eq!(gc_item4.nb_internal_branch(), 1);
 	}
 }

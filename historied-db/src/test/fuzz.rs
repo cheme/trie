@@ -352,7 +352,7 @@ impl FuzzerAction {
 }
 
 /// Entry point for fuzzing in memory forkable scenario.
-pub fn inmemory_forkable(data: &[u8], with_ser: bool) {
+pub fn inmemory_forkable(data: &[u8], with_ser: bool, with_gc: bool) {
 	let mut fuzz_state = FuzzerState::new();
 	fuzz_state.with_ser = with_ser;
 	let data = &mut &data[..];
@@ -360,19 +360,21 @@ pub fn inmemory_forkable(data: &[u8], with_ser: bool) {
 		fuzz_state.apply(action);
 	}
 	fuzz_state.compare();
-	let gc_journal = fuzz_state.in_memory_mgmt.get_gc();
-	let gc_state = fuzz_state.in_memory_mgmt.get_gc().unwrap();
-	for key in 0..NUMBER_POSSIBLE_KEYS {
-		if let Some(value) = fuzz_state.in_memory_db.0.get_mut(&vec![key]) {
-			let mut value2 = value.clone();
-			value2.gc(gc_state.as_ref());
-			if let Some(gc_journal) = gc_journal.as_ref() {
-				value.gc(gc_journal.as_ref());
+	if with_gc {
+		let gc_journal = fuzz_state.in_memory_mgmt.get_gc();
+		let gc_state = fuzz_state.in_memory_mgmt.get_gc().unwrap();
+		for key in 0..NUMBER_POSSIBLE_KEYS {
+			if let Some(value) = fuzz_state.in_memory_db.0.get_mut(&vec![key]) {
+				let mut value2 = value.clone();
+				value2.gc(gc_state.as_ref());
+				if let Some(gc_journal) = gc_journal.as_ref() {
+					value.gc(gc_journal.as_ref());
+				}
+				assert_eq!(value, &value2);
 			}
-			assert_eq!(value, &value2);
 		}
+		fuzz_state.compare();
 	}
-	fuzz_state.compare();
 }
 
 #[test]
@@ -395,7 +397,7 @@ fn inmemory_forkable_no_regression() {
 	];
 	for input in inputs.iter() {
 		println!("{:?}", FuzzerAction::into_actions(input));
-		inmemory_forkable(input, true);
+		inmemory_forkable(input, true, true);
 	}
 }
 

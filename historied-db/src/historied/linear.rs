@@ -390,6 +390,7 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 		UpdateResult::Unchanged
 	}
 
+	// TODO this requires some test cases!! (especially with neutral element)
 	fn gc(&mut self, gc: &Self::GC) -> UpdateResult<()> {
 		if gc.new_start.is_some() && gc.new_start == gc.new_end {
 			self.0.clear();
@@ -423,8 +424,14 @@ impl<V: Clone + Eq, S: LinearState + SubAssign<S>, D: LinearStorage<V, S>> Value
 		if let Some(start_treshold) = gc.new_start.as_ref() {
 			let mut index = 0;
 			loop {
-				if let Some(HistoriedValue{ value: _, state }) = self.0.st_get(index) {
-					if &state >= start_treshold {
+				if let Some(HistoriedValue{ value, state }) = self.0.st_get(index) {
+					if &state == start_treshold {
+						if Some(&value) != gc.neutral_element.as_ref() {
+							index = index.saturating_sub(1);
+							break;
+						} 
+					}
+					if &state > start_treshold {
 						index = index.saturating_sub(1);
 						break;
 					}

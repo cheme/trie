@@ -168,6 +168,9 @@ pub(crate) struct TreeMeta<I, BI> {
 	/// TODO move in tree management??
 	/// TODO only store BI, mgmt rule out all that is > bi and
 	pub(crate) composite_treshold: (I, BI),
+	/// Next value for composite treshold (requires data migration
+	/// to switch current treshold but can already be use by gc).
+	pub(crate) next_composite_treshold: Option<(I, BI)>,
 	/// Changed pruning treshold for composite part.
 	pub(crate) composite_pruning_treshold: Option<BI>,
 	/// Is composite latest, so can we write its last state (only
@@ -180,6 +183,7 @@ impl<I: Default, BI: Default> Default for TreeMeta<I, BI> {
 		TreeMeta {
 			last_index: I::default(),
 			composite_treshold: Default::default(),
+			next_composite_treshold: None,
 			composite_pruning_treshold: None,
 			composite_latest: true,
 		}
@@ -250,6 +254,7 @@ pub struct DeltaTreeStateGc<I, BI, V> {
 	pub(crate) neutral_element: Option<V>,
 }
 
+#[derive(Clone, Debug)]
 pub enum MultipleGc<I, BI, V> {
 	Journaled(DeltaTreeStateGc<I, BI, V>),
 	State(TreeStateGc<I, BI, V>),
@@ -424,15 +429,14 @@ impl<
 				break;
 			}
 		}
+		let prune_index = Some(switch_index.clone());
 		// this is the actual operation that should go in a trait TODO EMCH
-		self.canonicalize(qp, (branch_index, switch_index))
+		self.canonicalize(qp, (branch_index, switch_index.clone()), prune_index)
 	}
 
 	// TODO subfunction in tree (more tree related)? This is a migrate (we change
 	// composite_treshold).
-	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI)) -> bool {
-		unimplemented!("TODO feed journal of changed branch!!");
-		println!("cano : {:?} {:?}", &branch, &switch_index);
+	pub fn canonicalize(&mut self, branch: ForkPlan<I, BI>, switch_index: (I, BI), prune_index: Option<BI>) -> bool {
 		// TODO makes last index the end of this canonicalize branch
 
 		// TODO move fork plan resolution in?? -> wrong fork plan usage can result in incorrect
@@ -480,24 +484,26 @@ impl<
 		if to_remove.len() > 0 {
 			change = true;
 			for to_remove in to_remove {
+				self.state.tree.register_drop(&to_remove, None); 
 				self.state.tree.storage.handle(&mut self.state.tree.serialize).remove(&to_remove);
-				// TODO EMCH clean mapping for range
+				// TODO EMCH clean mapping for range -> in applied_migrate
 			}
 		}
 		if to_change.len() > 0 {
 			change = true;
 			for (branch_ix, branch) in to_change {
+				self.state.tree.register_drop(&branch_ix, Some(branch.state.end.clone())); 
 				self.state.tree.storage.handle(&mut self.state.tree.serialize).insert(branch_ix, branch);
-				// TODO EMCH clean mapping for range
 			}
 		}
 
 		let mut handle = self.state.tree.meta.handle(&mut self.state.tree.serialize);
 		let tree_meta = handle.get();
 		println!("new ct: {:?}", switch_index);
-		if switch_index != tree_meta.composite_treshold {
+		if switch_index != tree_meta.composite_treshold || prune_index.is_some() {
 			let mut tree_meta = tree_meta.clone();
-			tree_meta.composite_treshold = switch_index;
+			tree_meta.next_composite_treshold = Some(switch_index);
+			tree_meta.composite_pruning_treshold = prune_index;
 			handle.set(tree_meta);
 			change = true;
 		}
@@ -819,12 +825,27 @@ impl<
 
 	fn clear_journal_delete(&mut self) {
 		let mut journal_delete = self.journal_delete.handle(&mut self.serialize);
+		// TODO remove mapping for all delete!!
 		journal_delete.clear()
 	}
 
+	// TODO should not be a function, this is very specific
 	fn clear_composite(&mut self) {
-		unimplemented!("TODO parse all branche and remove them that are in composite range");
+		let mut to_remove = Vec::new();
+		if let Some(composite_treshold) = self.meta.get().next_composite_treshold.clone() {
+			for (ix, branch) in self.storage.iter(&mut self.serialize) {
+				if branch.state.start < composite_treshold.1 {
+					to_remove.push(ix.clone());
+				}
+			}
+		}
+
+		let mut storage = self.storage.handle(&mut self.serialize);
+		for i in to_remove {
+			storage.remove(&i);
+		}
 	}
+
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1072,8 +1093,12 @@ pub struct TreeMigrate<I, BI, V> {
 /// Same as `DeltaTreeStateGc`, but also
 /// indicates the changes journaling can be clean.
 /// TODO requires a function returning all H indices.
-pub struct TreeMigrateGC<I, BI, V>(DeltaTreeStateGc<I, BI, V>);
+pub struct TreeMigrateGC<I, BI, V> {
+	pub gc: DeltaTreeStateGc<I, BI, V>, 
+	pub changed_composite_treshold: bool,
+}
 
+#[derive(Debug, Clone)]
 /// A migration that swap some branch indices.
 /// Note that we do not touch indices into branch.
 pub struct TreeRewrite<I, BI, V> {
@@ -1081,12 +1106,14 @@ pub struct TreeRewrite<I, BI, V> {
 	pub rewrite: Vec<((I, Option<BI>), Option<I>)>,
 	/// Possible change in composite treshold.
 	pub composite_treshold: (I, BI),
+	pub changed_composite_treshold: bool,
 	/// All data before this can get pruned for composite non forked part.
 	pub composite_treshold_new_start: Option<BI>,
 	/// see TreeManagement `neutral_element`
 	pub neutral_element: Option<V>,
 }
 
+#[derive(Debug, Clone)]
 pub enum MultipleMigrate<I, BI, V> {
 	JournalGc(DeltaTreeStateGc<I, BI, V>),
 	Rewrite(TreeRewrite<I, BI, V>),
@@ -1110,8 +1137,10 @@ impl<
 	S: TreeManagementStorage,
 > TreeManagement<H, I, BI, V, S> {
 	fn get_inner_gc(&self) -> Option<MultipleGc<I, BI, V>> {
-		let composite_treshold = self.state.tree.meta.get().composite_treshold.clone();
-		let composite_treshold_new_start = self.state.tree.meta.get().composite_pruning_treshold.clone();
+		let tree_meta = self.state.tree.meta.get();
+		let composite_treshold = tree_meta.next_composite_treshold.clone()
+			.unwrap_or(tree_meta.composite_treshold.clone());
+		let composite_treshold_new_start = tree_meta.composite_pruning_treshold.clone();
 		let neutral_element = self.neutral_element.get().clone();
 		let gc = if Self::JOURNAL_DELETE {
 			let mut storage = BTreeMap::new();
@@ -1246,9 +1275,17 @@ impl<
 		if S::JOURNAL_DELETE {
 			self.state.tree.clear_journal_delete();
 			self.state.tree.clear_composite();
+			let mut meta_change = false;
 			let mut handle = self.state.tree.meta.handle(&mut self.state.tree.serialize);
 			let mut tree_meta = handle.get().clone();
+			if let Some(treshold) = tree_meta.next_composite_treshold.take() {
+				tree_meta.composite_treshold = treshold;
+				meta_change = true;
+			}
 			if tree_meta.composite_pruning_treshold.take().is_some() {
+				meta_change = true;
+			}
+			if meta_change {
 				handle.set(tree_meta);
 			}
 		}
