@@ -364,13 +364,18 @@ impl<D, M, B> AsMut<[u8]> for Head<Vec<u8>, u32, D, M, B>
 	}
 }
 
-impl<V, S, D: EstimateSize, M, B> EstimateSize for Head<V, S, D, M, B> {
+impl<V, S, D, M, B> EstimateSize for Head<V, S, D, M, B> {
 	fn estimate_size(&self) -> usize {
-		// TODO this is true for encoded but not inmemory where we encode
-		// consider different implemetation
-		self.inner.data.estimate_size()
+		self.inner.reference_len
 	}
 }
+
+impl<V, S, D, M> EstimateSize for Node<V, S, D, M> {
+	fn estimate_size(&self) -> usize {
+		self.reference_len
+	}
+}
+
 
 #[cfg(test)]
 pub(crate) mod test {
