@@ -84,10 +84,12 @@ macro_rules! tree_get {
 
 #[derive(Derivative, Debug, Clone, Encode, Decode)]
 #[derivative(PartialEq(bound="D: PartialEq"))]
-pub struct Tree<I, BI, V, D: InitFrom, BD> {
+pub struct Tree<I, BI, V, D: InitFrom, BD: InitFrom> {
 	branches: D,
 	#[derivative(PartialEq="ignore" )]
 	init: D::Init,
+	#[derivative(PartialEq="ignore" )]
+	init_child: BD::Init,
 	_ph: PhantomData<(I, BI, V, BD)>,
 	// TODO add optional range indexing.
 	// Indexing is over couple (I, BI), runing on fix size batches (aka max size).
@@ -101,13 +103,14 @@ pub struct Tree<I, BI, V, D: InitFrom, BD> {
 	// (conf needed in state also with optional indexing).
 }
 
-impl<I, BI, V, D: InitFrom, BD> InitFrom for Tree<I, BI, V, D, BD> {
-	type Init = D::Init;
+impl<I, BI, V, D: InitFrom, BD: InitFrom> InitFrom for Tree<I, BI, V, D, BD> {
+	type Init = (D::Init, BD::Init);
 
-	fn init_from(init: D::Init) -> Self {
+	fn init_from(init: Self::Init) -> Self {
 		Tree {
-			branches: D::init_from(init.clone()),
-			init,
+			branches: D::init_from(init.0.clone()),
+			init: init.0,
+			init_child: init.1,
 			_ph: PhantomData,
 		}
 	}
@@ -175,7 +178,7 @@ impl<
 	BI: LinearState + SubAssign<u32> + SubAssign<BI>,
 	V: Clone + Eq,
 	D: LinearStorage<Linear<V, BI, BD>, I>,
-	BD: LinearStorage<V, BI> + InitFrom<Init = <D as InitFrom>::Init>,
+	BD: LinearStorage<V, BI>,
 > Value<V> for Tree<I, BI, V, D, BD> {
 	type SE = Latest<(I, BI)>;
 	type Index = (I, BI);
@@ -184,11 +187,12 @@ impl<
 	type Migrate = MultipleMigrate<I, BI, V>;
 
 	fn new(value: V, at: &Self::SE, init: Self::Init) -> Self {
-		let mut v = D::init_from(init.clone());
-		v.push(Branch::new(value, at, init.clone()));
+		let mut v = D::init_from(init.0.clone());
+		v.push(Branch::new(value, at, init.1.clone()));
 		Tree {
 			branches: v,
-			init: init,
+			init: init.0,
+			init_child: init.1,
 			_ph: PhantomData,
 		}
 	}
@@ -242,7 +246,7 @@ impl<
 			}
 		}
 
-		let branch = Branch::new(value, at, self.init.clone());
+		let branch = Branch::new(value, at, self.init_child.clone());
 		if insert_at == self.branches.len() {
 			self.branches.push(branch);
 		} else {
@@ -712,7 +716,7 @@ mod test {
 	use crate::InitFrom;
 
 	#[test]
-	fn compile_double_encoded() {
+	fn compile_double_encoded_single() {
 		use crate::backend::encoded_array::{EncodedArray, NoVersion};
 		use crate::historied::ValueRef;
 
@@ -723,12 +727,12 @@ mod test {
 			NoVersion,
 //			u32
 		>;
-		let item: Tree<u32, u32, Vec<u8>, D, BD> = InitFrom::init_from(());
+		let item: Tree<u32, u32, Vec<u8>, D, BD> = InitFrom::init_from(((), ()));
 		let at: ForkPlan<u32, u32> = Default::default();
 		item.get(&at);
 		item.get_slice(&at);
 		let latest = Latest::unchecked_latest((0, 0));
-		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest, ());
+		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest, ((), ()));
 //		let slice = &b"dtdt"[..];
 //		use crate::backend::encoded_array::{EncodedArrayValue};
 //		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
@@ -737,6 +741,53 @@ mod test {
 		use crate::backend::LinearStorage;
 		bd.st_get(1usize);
 	}
+
+	#[test]
+	fn compile_double_encoded_node() {
+		use crate::backend::encoded_array::{EncodedArray, DefaultVersion};
+		use crate::backend::nodes::{Head, Node, InitHead};
+		use crate::backend::nodes::test::{MetaNb, MetaSize};
+		use crate::historied::ValueRef;
+		use crate::rstd::btree_map::BTreeMap;
+
+		type EncArray<'a> = EncodedArray<'a, Vec<u8>, DefaultVersion>;
+		type Backend<'a> = BTreeMap<Vec<u8>, Node<Vec<u8>, u32, EncArray<'a>, MetaSize>>;
+		type BD<'a> = Head<Vec<u8>, u32, EncArray<'a>, MetaSize, Backend<'a>>;
+
+		type V2<'a> = crate::historied::linear::Linear<Vec<u8>, u32, BD<'a>>;
+		type EncArray2<'a> = EncodedArray<'a, V2<'a>, DefaultVersion>;
+		type Backend2<'a> = BTreeMap<Vec<u8>, Node<V2<'a>, u32, EncArray2<'a>, MetaSize>>;
+//		type D<'a> = crate::historied::linear::MemoryOnly<
+		type D<'a> = Head<V2<'a>, u32, EncArray2<'a>, MetaSize, Backend2<'a>>;
+		let init_head = InitHead {
+			backend: Backend2::new(),
+			key: b"any".to_vec(),
+		};
+		let init_head_child = InitHead {
+			backend: Backend::new(),
+			key: b"any".to_vec(),
+		};
+		let item: Tree<u32, u32, Vec<u8>, D, BD> = InitFrom::init_from((init_head.clone(), init_head_child.clone()));
+		let at: ForkPlan<u32, u32> = Default::default();
+		item.get(&at);
+
+//	D: LinearStorage<Linear<V, BI, BD>, I>, // TODO rewrite to be linear storage of BD only.
+//	BD: LinearStorage<V, BI>,
+
+/*
+//		item.get_slice(&at);
+		let latest = Latest::unchecked_latest((0, 0));
+		let _item: Tree<u32, u32, Vec<u8>, D, BD> = Tree::new(b"dtd".to_vec(), &latest, init_head.clone());
+*/
+//		let slice = &b"dtdt"[..];
+//		use crate::backend::encoded_array::{EncodedArrayValue};
+//		let bd = crate::historied::linear::Linear::<Vec<u8>, u32, BD>::from_slice(slice);
+//		let bd = BD::from_slice(slice);
+		let bd = D::init_from(init_head);
+		use crate::backend::LinearStorage;
+		let _a: Option<HistoriedValue<V2, u32>> = bd.st_get(1usize);
+	}
+
 
 	#[test]
 	fn test_set_get() {
@@ -752,7 +803,7 @@ mod test {
 		// |		 |> 5: 1
 		// |> 2: _
 		let mut states = test_states();
-		let mut item: Tree<u32, u32, u32, D, BD> = InitFrom::init_from(());
+		let mut item: Tree<u32, u32, u32, D, BD> = InitFrom::init_from(((), ()));
 
 		for i in 0..6 {
 			assert_eq!(item.get(&states.query_plan(i)), None);
@@ -778,7 +829,7 @@ mod test {
 		assert_eq!(item.get(&ref_1), Some(11));
 		assert_eq!(item.get(&ref_1_bis), Some(11));
 
-		item = InitFrom::init_from(());
+		item = InitFrom::init_from(((), ()));
 
 		// need fresh state as previous modification leaves unattached branches
 		let mut states = test_states();
@@ -811,8 +862,8 @@ mod test {
 			.define_neutral_element(0);
 		let s0 = states.latest_state_fork();
 
-		let mut item1: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
-		let mut item2: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
+		let mut item1: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(((), ()));
+		let mut item2: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(((), ()));
 		let s1 = states.append_external_state(StateInput(1), &s0).unwrap();
 		item1.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
 		item2.set(1, &states.get_db_state_mut(&StateInput(1)).unwrap());
@@ -844,8 +895,8 @@ mod test {
 		// |			 |> 4: 1
 		// |		 |> 5: 1
 		// |> 2: _ _
-		let mut item3: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
-		let mut item4: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(());
+		let mut item3: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(((), ()));
+		let mut item4: Tree<u32, u32, u16, D, BD> = InitFrom::init_from(((), ()));
 		item1.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item2.set(15, &states.get_db_state_mut(&StateInput(5)).unwrap());
 		item1.set(12, &states.get_db_state_mut(&StateInput(2)).unwrap());

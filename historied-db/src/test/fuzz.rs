@@ -106,7 +106,7 @@ impl FuzzerState {
 		in_memory_mgmt.map_root_state(StateInput(0));
 		in_memory_mgmt_ser.map_root_state(StateInput(0));
 		FuzzerState {
-			in_memory_db: crate::historied::BTreeMap::new(()),
+			in_memory_db: crate::historied::BTreeMap::new(((), ())),
 			in_memory_mgmt,
 			in_memory_mgmt_ser,
 			with_ser: false,

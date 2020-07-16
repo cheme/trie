@@ -27,6 +27,7 @@ use crate::backend::{LinearStorage, LinearStorageMem, LinearStorageSlice, Linear
 use crate::backend::encoded_array::EncodedArrayValue;
 use crate::InitFrom;
 use derivative::Derivative;
+use crate::backend::nodes::EstimateSize;
 
 /// Basic usage case should be integers and byte representation, but
 /// only integer should really be use.
@@ -66,6 +67,12 @@ impl<S> LinearState for S where S:
 #[derivative(PartialEq(bound="D: PartialEq"))]
 pub struct Linear<V, S, D>(D, PhantomData<(V, S)>);
 
+impl<V, S, D: EstimateSize> EstimateSize for Linear<V, S, D> {
+	fn estimate_size(&self) -> usize {
+		self.0.estimate_size()
+	}
+}
+
 impl<V, S, D: AsRef<[u8]>> AsRef<[u8]> for Linear<V, S, D> {
 	fn as_ref(&self) -> &[u8] {
 		self.0.as_ref()
@@ -91,12 +98,12 @@ impl<V, S, D: EncodedArrayValue> EncodedArrayValue for Linear<V, S, D> {
 	}
 }
 
-impl<V, S, D: Default> Default for Linear<V, S, D> {
+/*impl<V, S, D: Default> Default for Linear<V, S, D> {
 	fn default() -> Self {
 		let v = D::default();
 		Linear(v, PhantomData)
 	}
-}
+}*/
 
 impl<V, S, D: InitFrom> InitFrom for Linear<V, S, D> {
 	type Init = <D as InitFrom>::Init;

@@ -38,6 +38,20 @@ use crate::InitFrom;
 /// Could be use for direct access memory to.
 pub struct EncodedArray<'a, V, F>(EncodedArrayBuff<'a>, PhantomData<(F, V)>);
 
+
+impl<'a, V, F> crate::backend::nodes::EstimateSize for EncodedArray<'a, V, F> {
+	fn estimate_size(&self) -> usize {
+		self.0.len()
+	}
+}
+
+impl<'a, V, F> Clone for EncodedArray<'a, V, F> {
+	fn clone(&self) -> Self {
+		EncodedArray(self.0.clone(), PhantomData)
+	}
+}
+
+
 pub trait EncodedArrayValue: AsRef<[u8]> + AsMut<[u8]> + Sized {
 	fn from_slice(slice: &[u8]) -> Self;
 }
