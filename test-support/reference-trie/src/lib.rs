@@ -28,6 +28,7 @@ use trie_db::{
 	trie_visit,
 	TrieBuilder,
 	TrieRoot,
+	TrieRootIndexes,
 	Partial,
 };
 use std::borrow::Borrow;
@@ -37,7 +38,7 @@ pub use trie_db::{
 	decode_compact, encode_compact,
 	nibble_ops, NibbleSlice, NibbleVec, NodeCodec, proof, Record, Recorder,
 	Trie, TrieConfiguration, TrieDB, TrieDBIterator, TrieDBMut, TrieDBNodeIterator, TrieError,
-	TrieIterator, TrieLayout, TrieMut,
+	TrieIterator, TrieLayout, TrieMut, partial_db::DepthIndexes,
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -956,6 +957,49 @@ pub fn compare_implementations<X : hash_db::HashDB<KeccakHasher, DBValue> + Eq> 
 	// compare db content for key fuzzing
 	assert!(memdb == hashdb);
 }
+
+/// Compare trie builder and in memory trie.
+pub fn compare_indexing<
+	X: hash_db::HashDB<KeccakHasher, DBValue> + Eq,
+	IB: trie_db::partial_db::IndexBackend + fmt::Debug,
+> (
+	data: Vec<(Vec<u8>, Vec<u8>)>,
+	mut memdb: X,
+	indexes_backend: &mut IB,
+	indexes: &DepthIndexes,
+) {
+	let root_new: <KeccakHasher as Hasher>::Out = {
+		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
+		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+	let root = {
+		let mut root = Default::default();
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for i in 0..data.len() {
+			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
+		}
+		t.commit();
+		*t.root()
+	};
+	//if root_new != root {
+	if root_new == root {
+		println!("{:?}", indexes_backend);
+		{
+			let db : &dyn hash_db::HashDB<_, _> = &memdb;
+			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:x?}", a);
+			}
+		}
+	}
+
+	assert!(false);
+	assert_eq!(root, root_new);
+}
+
+
 
 /// Compare trie builder and trie root implementations.
 pub fn compare_root(

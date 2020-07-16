@@ -24,6 +24,8 @@ use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
 use crate::node_codec::NodeCodec;
 use crate::{TrieLayout, TrieHash};
+use crate::partial_db::{IndexBackend, IndexPosition};
+
 
 macro_rules! exponential_out {
 	(@3, [$($inpp:expr),*]) => { exponential_out!(@2, [$($inpp,)* $($inpp),*]) };
@@ -134,7 +136,7 @@ impl<T, V> CacheAccum<T, V>
 			&k2.as_ref()[..],
 			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 		);
-		let hash = callback.process(pr.left(), encoded, false);
+		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * 8));
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -201,13 +203,13 @@ impl<T, V> CacheAccum<T, V>
 		);
 		self.reset_depth(branch_d);
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
-		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none());
+		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE));
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
-			let h = callback.process(pr.left(), encoded, is_root);
+			let h = callback.process(pr.left(), encoded, is_root, (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE));
 			h
 		} else {
 			branch_hash
@@ -222,7 +224,7 @@ impl<T, V> CacheAccum<T, V>
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
-		) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T>> {
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 == branch_d);
 		// encode branch
@@ -239,7 +241,7 @@ impl<T, V> CacheAccum<T, V>
 			&key_branch,
 			branch_d - ext_length,
 		);
-		callback.process(pr.left(), encoded, is_root)
+		callback.process(pr.left(), encoded, is_root, (key_branch, nkeyix.0 + nkeyix.1))
 	}
 
 }
@@ -297,7 +299,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 				&k2.as_ref()[..],
 				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 			);
-			callback.process(pr.left(), encoded, true);
+			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * 8));
 		} else {
 			depth_queue.flush_value(callback, last_depth, &previous_value);
 			let ref_branches = previous_value.0;
@@ -305,7 +307,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		}
 	} else {
 		// nothing null root corner case
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true);
+		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0));
 	}
 }
 
@@ -313,12 +315,13 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 pub trait ProcessEncodedNode<HO> {
 	/// Function call with prefix, encoded value and a boolean indicating if the
 	/// node is the root for each node of the trie.
+	/// Last parameter `node_key` is the path to the node as a slice of bytes and the depth in bit of this node.
 	///
 	/// Note that the returned value can change depending on implementation,
 	/// but usually it should be the Hash of encoded node.
 	/// This is not something direcly related to encoding but is here for
 	/// optimisation purpose (builder hash_db does return this value).
-	fn process(&mut self, prefix: Prefix, encoded_node: Vec<u8>, is_root: bool) -> ChildReference<HO>;
+	fn process(&mut self, prefix: Prefix, encoded_node: Vec<u8>, is_root: bool, node_key: (&[u8], usize)) -> ChildReference<HO>;
 }
 
 /// Get trie root and insert visited node in a hash_db.
@@ -343,6 +346,7 @@ impl<'a, H: Hasher, V, DB: HashDB<H, V>> ProcessEncodedNode<<H as Hasher>::Out>
 		prefix: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
+		_node_key: (&[u8], usize),
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {
@@ -358,6 +362,51 @@ impl<'a, H: Hasher, V, DB: HashDB<H, V>> ProcessEncodedNode<<H as Hasher>::Out>
 		ChildReference::Hash(hash)
 	}
 }
+
+/// Get trie root and insert index for trie.
+pub struct TrieRootIndexes<'a, H, HO, DB> {
+	db: &'a mut DB,
+	pub root: Option<HO>,
+	indexes: &'a crate::partial_db::DepthIndexes,
+	_ph: PhantomData<H>,
+}
+
+impl<'a, H, HO, DB> TrieRootIndexes<'a, H, HO, DB> {
+	pub fn new(db: &'a mut DB, indexes: &'a crate::partial_db::DepthIndexes) -> Self {
+		TrieRootIndexes { db, indexes, root: None, _ph: PhantomData }
+	}
+}
+
+impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
+	for TrieRootIndexes<'a, H, <H as Hasher>::Out, DB> {
+	fn process(
+		&mut self,
+		prefix: Prefix,
+		encoded_node: Vec<u8>,
+		is_root: bool,
+		node_key: (&[u8], usize),
+	) -> ChildReference<<H as Hasher>::Out> {
+		let len = encoded_node.len();
+		if !is_root && len < <H as Hasher>::LENGTH {
+			let mut h = <<H as Hasher>::Out as Default>::default();
+			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
+
+			return ChildReference::Inline(h, len);
+		}
+		let hash = <H as Hasher>::hash(&encoded_node[..]);
+		let prefix_start = prefix.0.len() * 8 + if prefix.1.is_some() { nibble_ops::BIT_PER_NIBBLE } else { 0 };
+		if let Some(next_save_index) = self.indexes.next_depth(prefix_start) {
+			if node_key.1 >= next_save_index {
+				self.db.write(next_save_index, IndexPosition::new(node_key.0), prefix_start, encoded_node);
+			}
+		}
+		if is_root {
+			self.root = Some(hash);
+		};
+		ChildReference::Hash(hash)
+	}
+}
+
 
 /// Calculate the trie root of the trie.
 pub struct TrieRoot<H, HO> {
@@ -378,6 +427,7 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRoot<H, <H as Has
 		_: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
+		_node_key: (&[u8], usize),
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {
@@ -430,6 +480,7 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootPrint<H, <H a
 		p: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
+		_node_key: (&[u8], usize),
 	) -> ChildReference<<H as Hasher>::Out> {
 		println!("Encoded node: {:x?}", &encoded_node);
 		println!("	with prefix: {:x?}", &p);
@@ -456,6 +507,7 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashed<H> {
 		_: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
+		_node_key: (&[u8], usize),
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {
@@ -557,8 +609,16 @@ mod test {
 		compare_implementations_prefixed(data.clone());
 		compare_implementations_no_extension(data.clone());
 		compare_implementations_no_extension_prefixed(data.clone());
+		compare_indexing(data.clone());
 	}
-
+	fn compare_indexing(data: Vec<(Vec<u8>, Vec<u8>)>) {
+		let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
+		let mut indexes = std::collections::BTreeMap::new();
+		let indexes_conf = reference_trie::DepthIndexes::new(&[
+			4, 8, 16, 32, 44,
+		]);
+		reference_trie::compare_indexing(data, memdb, &mut indexes, &indexes_conf);
+	}
 	fn compare_implementations_prefixed(data: Vec<(Vec<u8>, Vec<u8>)>) {
 		let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 		let hashdb = MemoryDB::<KeccakHasher, PrefixedKey<_>, DBValue>::default();
@@ -780,5 +840,4 @@ mod test {
 			(vec![105, 97, 48, 77, 101, 105, 121, 101], vec![69, 109, 111, 111, 82, 49, 97, 105]),
 		]);
 	}
-
 }

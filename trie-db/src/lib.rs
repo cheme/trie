@@ -22,6 +22,7 @@ extern crate alloc;
 mod rstd {
 	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec};
 	pub use std::collections::VecDeque;
+	pub use std::collections::btree_map;
 	pub use std::error::Error;
 }
 
@@ -30,6 +31,7 @@ mod rstd {
 	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
+	pub use std::collections::btree_map;
 	pub trait Error {}
 	impl<T> Error for T {}
 }
@@ -47,6 +49,7 @@ pub mod triedbmut;
 pub mod sectriedb;
 pub mod sectriedbmut;
 pub mod recorder;
+pub mod partial_db;
 
 mod fatdb;
 mod fatdbmut;
@@ -69,7 +72,7 @@ pub use self::lookup::Lookup;
 pub use self::nibble::{NibbleSlice, NibbleVec, nibble_ops};
 pub use crate::node_codec::{NodeCodec, Partial};
 pub use crate::iter_build::{trie_visit, ProcessEncodedNode,
-	 TrieBuilder, TrieRoot, TrieRootUnhashed};
+	 TrieBuilder, TrieRoot, TrieRootUnhashed, TrieRootIndexes};
 pub use crate::iterator::TrieDBNodeIterator;
 pub use crate::trie_codec::{decode_compact, encode_compact};
 

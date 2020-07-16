@@ -9,7 +9,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4"
-smallvec = "1.0.0"
+smallvec = "1.4.0"
 hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
 hashbrown = { version = "0.8.0", default-features = false }
 rustc-hex = { version = "2.1.0", default-features = false, optional = true }
