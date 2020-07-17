@@ -982,8 +982,7 @@ pub fn compare_indexing<
 		t.commit();
 		*t.root()
 	};
-	//if root_new != root {
-	if root_new == root {
+	if root_new != root {
 		println!("{:?}", indexes_backend);
 		{
 			let db : &dyn hash_db::HashDB<_, _> = &memdb;
@@ -995,11 +994,9 @@ pub fn compare_indexing<
 		}
 	}
 
-	assert!(false);
+	//assert!(false);
 	assert_eq!(root, root_new);
 }
-
-
 
 /// Compare trie builder and trie root implementations.
 pub fn compare_root(
