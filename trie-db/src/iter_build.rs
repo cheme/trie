@@ -135,7 +135,7 @@ impl<T, V> CacheAccum<T, V>
 			&k2.as_ref()[..],
 			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 		);
-		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * 8), true);
+		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), true);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -154,7 +154,8 @@ impl<T, V> CacheAccum<T, V>
 		);
 		// TODO could consider storing hash.
 		// TODO mechanism to avoid writing back indexes (need to know if index was change in iterator)
-		let hash = callback.process(pr.left(), v2.encoded_node, false, (k2.as_ref(), k2.as_ref().len() * 8), v2.is_leaf);
+		// TODO this is not right (actual depth is different)
+		let hash = callback.process(pr.left(), v2.encoded_node, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), v2.is_leaf);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -220,13 +221,15 @@ impl<T, V> CacheAccum<T, V>
 		);
 		self.reset_depth(branch_d);
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
-		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE), false);
+		// index value is incorect here, in fact we shall never index for extension (we shall use the
+		// following branch)
+		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, (branch_d + 1) * nibble_ops::BIT_PER_NIBBLE), false);
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
-			let h = callback.process(pr.left(), encoded, is_root, (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE), false);
+			let h = callback.process(pr.left(), encoded, is_root, (key_branch, (branch_d + 1) * nibble_ops::BIT_PER_NIBBLE), false);
 			h
 		} else {
 			branch_hash
@@ -258,7 +261,7 @@ impl<T, V> CacheAccum<T, V>
 			&key_branch,
 			branch_d - ext_length,
 		);
-		callback.process(pr.left(), encoded, is_root, (key_branch, nkeyix.0 + nkeyix.1), false)
+		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE), false)
 	}
 
 }

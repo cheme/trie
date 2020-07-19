@@ -108,6 +108,12 @@ pub struct Index {
 	pub is_leaf: bool,
 }
 
+impl Index {
+	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Next {
+		unimplemented!()
+	}
+}
+
 /// Key for an index.
 fn index_tree_key(depth: usize, index: &[u8]) -> IndexPosition {
 	let mut result = IndexPosition::new(index);
@@ -409,6 +415,7 @@ impl Range {
 /// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
 pub enum IndexOrValue<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
+	/// Optionally also attach some partial nibble size reduction.
 	/// TODO probably do not need the usize
 	Index(Index),
 	/// Value node value.
@@ -422,26 +429,101 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 		KB: KVBackend,
 		IB: IndexBackend,
 		V: AsRef<[u8]>,
-		ID: IntoIterator<Item = (Vec<u8>, Option<V>)>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
-	pub values: &'a KB,
-	pub indexes: &'a IB,
-	pub indexes_conf: &'a DepthIndexes,
-	pub values_delta: ID,
+	values: &'a KB,
+	indexes: &'a IB,
+	indexes_conf: &'a DepthIndexes,
+	values_delta: ID,
 	pub deleted_indexes: Vec<(usize, IndexPosition)>,
+	current_index_depth: usize,
+	index_iter: Vec<IndexBackendIter<'a>>,
+	next_change: Option<(Vec<u8>, Option<V>)>,
+	next_index: Option<(Vec<u8>, Index)>,
 }
 
+impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	pub fn new(
+		values: &'a KB,
+		indexes: &'a IB,
+		indexes_conf: &'a DepthIndexes,
+		values_delta: ID,
+		deleted_indexes: Vec<(usize, IndexPosition)>,
+	) -> Self {
+		let (current_index_depth, index_iter) = indexes_conf.next_depth(0, &[])
+			.map(|d| (d, vec![indexes.iter(d, &[])]))
+			.unwrap_or((0, Vec::new()));
+		RootIndexIterator {
+			values,
+			indexes,
+			indexes_conf,
+			values_delta,
+			deleted_indexes,
+			current_index_depth,
+			index_iter,
+			next_change: None,
+			next_index: None,
+		}
+	}
+}
+	
 impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
 		IB: IndexBackend,
 		V: AsRef<[u8]>,
-		ID: IntoIterator<Item = (Vec<u8>, Option<V>)>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
 	type Item = (Vec<u8>, IndexOrValue<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
+		if self.next_change.is_none() {
+			self.next_change = self.values_delta.next();
+		}
+		if self.next_index.is_none() {
+			self.next_index = self.index_iter.last_mut().and_then(|i| i.next());
+		}
+		while self.next_index.is_none() {
+			self.index_iter.pop();
+			self.next_index = self.index_iter.last_mut().and_then(|i| i.next());
+		}
+		match (&self.next_change, &self.next_index) {
+			(Some(next_change), Some(next_index)) => {
+				match next_index.1.compare(&next_index.0, &next_change.0) {
+					Next::Ascend => {
+					},
+					Next::Descend => {
+					},
+					Next::Value => {
+					},
+					Next::Index(adjust) => {
+					},
+				}
+			},
+			(Some(next_change), None) => {
+				// next change is over index, we can try to get index for its range
+			},
+			(None, Some(next_index)) => {
+				// no more change, finish iter of indexes
+			},
+			(None, None) => {
+				return None;
+			},
+		}
 
 		None
 	}
+}
+
+pub enum Next {
+	Ascend,
+	Descend,
+	Value,
+	Index(Option<usize>),
 }
