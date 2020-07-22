@@ -18,6 +18,9 @@
 //! a given depth.
 
 use crate::rstd::btree_map::BTreeMap;
+use crate::rstd::cmp::Ordering;
+use crate::nibble::nibble_ops;
+use crate::nibble::LeftNibbleSlice;
 
 /// Storage of key values.
 pub trait KVBackend {
@@ -105,13 +108,34 @@ pub trait IndexBackend {
 pub struct Index {
 	pub encoded_node: Vec<u8>,
 	pub actual_depth: usize,
-	pub is_leaf: bool,
+	pub is_leaf: bool, // TODO probably useless.
 }
 
 impl Index {
-	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Next {
-		unimplemented!()
+	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Ordering {
+		let end = self.actual_depth;
+		let odd = end % 8;
+		let end = end / 8;
+		if odd == 0 {
+			index_key[..end].cmp(change_key)
+		} else {
+			let size = self.actual_depth / nibble_ops::BIT_PER_NIBBLE;
+			let slice1 = LeftNibbleSlice::new(index_key).truncate(size);
+			let slice2 = LeftNibbleSlice::new(change_key);
+			slice1.cmp(&slice2)
+		}
 	}
+}
+/// Calculate the prefix to apply for value iterator start (and end).
+/// TODO consider changing `iter_from` proto to use this input.
+fn value_prefix(actual_index_depth: usize, change_key: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
+	let start = actual_index_depth;
+	let odd = start % 8;
+	let start = start / 8 + if odd > 0 { 2 } else { 1 };
+	// we can round index start since values are only on even position.
+	let index_start = change_key[..start].to_vec();
+	let index_end = end_prefix(index_start.as_slice());
+	(index_start, index_end)
 }
 
 /// Key for an index.
@@ -417,9 +441,11 @@ pub enum IndexOrValue<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
 	/// Optionally also attach some partial nibble size reduction.
 	/// TODO probably do not need the usize
-	Index(Index),
-	/// Value node value.
+	Index(Index, Option<Option<B>>),
+	/// Value node value, from change set.
 	Value(B),
+	/// Value node value, from existing values.
+	StoredValue(Vec<u8>),
 }
 
 /// Iterator over index and value for root calculation
@@ -437,9 +463,14 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	values_delta: ID,
 	pub deleted_indexes: Vec<(usize, IndexPosition)>,
 	current_index_depth: usize,
-	index_iter: Vec<IndexBackendIter<'a>>,
+	/// value iterator in use and the range that needs to be covered.
+	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
+	index_iter: Vec<(IndexBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
 	next_change: Option<(Vec<u8>, Option<V>)>,
+	next_value: Option<(Vec<u8>, Vec<u8>)>,
 	next_index: Option<(Vec<u8>, Index)>,
+	// instead of an iteration we try to stack an index over
+	stack_index_next: bool,
 }
 
 impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
@@ -456,19 +487,20 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		values_delta: ID,
 		deleted_indexes: Vec<(usize, IndexPosition)>,
 	) -> Self {
-		let (current_index_depth, index_iter) = indexes_conf.next_depth(0, &[])
-			.map(|d| (d, vec![indexes.iter(d, &[])]))
-			.unwrap_or((0, Vec::new()));
+
 		RootIndexIterator {
 			values,
 			indexes,
 			indexes_conf,
 			values_delta,
 			deleted_indexes,
-			current_index_depth,
-			index_iter,
+			current_index_depth: 0,
+			current_value_iter: None,
+			index_iter: Vec::new(),
 			next_change: None,
 			next_index: None,
+			next_value: None,
+			stack_index_next: true,
 		}
 	}
 }
@@ -483,44 +515,153 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 	type Item = (Vec<u8>, IndexOrValue<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
+		// init next iterator values
 		if self.next_change.is_none() {
-			self.next_change = self.values_delta.next();
+			if let Some(next_change) = self.values_delta.next() {
+				if next_change.0.len() > self.current_index_depth {
+					self.stack_index_next = true;
+				}
+				self.next_change = Some(next_change)
+			}
 		}
 		if self.next_index.is_none() {
-			self.next_index = self.index_iter.last_mut().and_then(|i| i.next());
+			if self.stack_index_next {
+				self.stack_index_next = false;
+				if let Some(next_change) = self.next_change.as_ref() {
+					let next_change_index = next_change.0.as_slice();
+					let current_index_depth = if self.index_iter.is_empty() {
+						0
+					} else {
+						self.current_index_depth + 1
+					};
+					let index_iter = &mut self.index_iter;
+					let indexes = &self.indexes;
+					self.indexes_conf.next_depth(current_index_depth, next_change_index)
+						.map(|d| (d, {
+							let range = value_prefix(d, next_change_index);
+							index_iter.push((indexes.iter(d, next_change_index), range))
+						}));
+				}
+			}
+			self.next_index = self.index_iter.last_mut().and_then(|i| {
+				i.0.next()
+					.filter(|kv| (i.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true))
+			});
 		}
+		// end of an indexing range
 		while self.next_index.is_none() {
-			self.index_iter.pop();
-			self.next_index = self.index_iter.last_mut().and_then(|i| i.next());
+			if self.index_iter.pop().is_none() {
+				break;
+			}
+			self.current_value_iter = None;
+			self.next_index = self.index_iter.last_mut().and_then(|i| {
+				i.0.next()
+					.filter(|kv| (i.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true))
+			});
 		}
-		match (&self.next_change, &self.next_index) {
-			(Some(next_change), Some(next_index)) => {
-				match next_index.1.compare(&next_index.0, &next_change.0) {
-					Next::Ascend => {
+		if let Some(next_change) = &self.next_change {
+			if self.current_value_iter.is_none() {
+				// init a new
+				let start_depth = self.current_index_depth + nibble_ops::BIT_PER_NIBBLE; // TODO switch depth to nibble depth
+				let range = value_prefix(start_depth, next_change.0.as_slice());
+				let iter = self.values.iter_from(range.0.as_slice());
+				self.current_value_iter = Some((iter, range));
+			}
+		}
+		if self.next_value.is_none() {
+			self.next_value = self.current_value_iter.as_mut().and_then(|iter|
+				iter.0.next().filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)));
+		}
+
+		// return lesser item and apply equality rule.
+		match (&self.next_change, &self.next_value) {
+			(Some(next_change), Some(next_value)) => {
+				match next_change.0.cmp(&next_value.0) {
+					Ordering::Equal => {
+						// use change (not that a delete change also drop value)
+						self.next_value = None;
+						self.next_change_or_index()
 					},
-					Next::Descend => {
+					Ordering::Greater => {
+						self.next_value_or_index()
 					},
-					Next::Value => {
-					},
-					Next::Index(adjust) => {
+					Ordering::Less => {
+						self.next_change_or_index()
 					},
 				}
 			},
-			(Some(next_change), None) => {
-				// next change is over index, we can try to get index for its range
+			(Some(_next_change), None) => {
+				self.next_change_or_index()
 			},
-			(None, Some(next_index)) => {
-				// no more change, finish iter of indexes
+			(None, Some(_next_value)) => {
+				self.next_value_or_index()
 			},
 			(None, None) => {
-				return None;
+				return self.next_index(None);
 			},
 		}
-
-		None
 	}
 }
 
+impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	fn next_change_or_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		match (&self.next_index, &self.next_change) {
+			(Some(next_index), Some(next_change)) => {
+				match next_index.1.compare(&next_index.0, &next_change.0) {
+					Ordering::Equal => {
+						// use a fused changed index
+						let next_change = self.next_change.take();
+						self.next_index(Some(next_change.and_then(|c| c.1)))
+					},
+					Ordering::Greater => self.next_change(),
+					Ordering::Less => self.next_index(None),
+				}
+			},
+			(Some(_next_index), None) => self.next_index(None),
+			(None, Some(_next_change)) => self.next_change(),
+			(None, None) => None,
+		}
+	}
+
+	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		let next_change = self.next_change.take();
+		if let Some((key, Some(change))) = next_change {
+			Some((key, IndexOrValue::Value(change)))
+		} else {
+			// skip delete
+			self.next()
+		}
+	}
+
+	fn next_index(&mut self, change: Option<Option<V>>) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		self.next_index.take().map(|index| {
+			self.current_index_depth = (index.1).actual_depth;
+			(index.0, IndexOrValue::Index(index.1, change))
+		})
+	}
+
+	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		self.next_value.take().map(|value| (value.0, IndexOrValue::StoredValue(value.1)))
+	}
+
+	fn next_value_or_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		match (&self.next_index, &self.next_value) {
+			(Some(_next_index), Some(_next_value)) => {
+				unreachable!("value iterator should not overlap an index");
+			},
+			(Some(_next_index), None) => self.next_index(None),
+			(None, Some(_next_value)) => self.next_value(),
+			(None, None) => None,
+		}
+	}
+}
+	
 pub enum Next {
 	Ascend,
 	Descend,

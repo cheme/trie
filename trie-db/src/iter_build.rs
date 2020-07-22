@@ -348,7 +348,8 @@ fn trie_visit_with_indexes<T, I, A, B, F>(input: I, callback: &mut F)
 	if let Some(previous_value) = iter_input.next() {
 		let mut previous_value =  match previous_value.1 {
 			IndexOrValue::Value(v) => (previous_value.0, IndexOrValue::Value(v)),
-			IndexOrValue::Index(index) => {
+			IndexOrValue::StoredValue(v) => (previous_value.0, IndexOrValue::StoredValue(v)),
+			IndexOrValue::Index(index, _) => {
 				assert!(index.actual_depth == 0);
 				assert!(previous_value.0.as_ref().is_empty());
 				// we usually don't call back index node but for root we does.
@@ -372,29 +373,38 @@ fn trie_visit_with_indexes<T, I, A, B, F>(input: I, callback: &mut F)
 					IndexOrValue::Value(v) => {
 						depth_queue.set_cache_value(common_depth, Some(v));
 					},
-					IndexOrValue::Index(_i) => {
+					IndexOrValue::StoredValue(v) => {
+						unimplemented!()
+					},
+					IndexOrValue::Index(_i, _) => {
 						panic!("Input index must not overlap with values");
 					},
 				}
 			} else if depth_item >= last_depth {
 				// put previous with next (common branch previous value can be flush)
 				match previous_value.1 {
+					IndexOrValue::StoredValue(v) => {
+						unimplemented!()
+					},
 					IndexOrValue::Value(v) => {
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, depth_item, &previous_value);
 					},
-					IndexOrValue::Index(i) => {
+					IndexOrValue::Index(i, _) => {
 						depth_queue.flush_index(callback, depth_item, (&previous_value.0, i));
 					},
 				}
 			} else if depth_item < last_depth {
 				// do not put with next, previous is last of a branch
 				match previous_value.1 {
+					IndexOrValue::StoredValue(v) => {
+						unimplemented!()
+					},
 					IndexOrValue::Value(v) => {
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, last_depth, &previous_value);
 					},
-					IndexOrValue::Index(i) => {
+					IndexOrValue::Index(i, _) => {
 						depth_queue.flush_index(callback, last_depth, (&previous_value.0, i));
 					},
 				}
@@ -423,11 +433,14 @@ fn trie_visit_with_indexes<T, I, A, B, F>(input: I, callback: &mut F)
 			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * 8), true);
 		} else {
 			match previous_value.1 {
+				IndexOrValue::StoredValue(v) => {
+					unimplemented!()
+				},
 				IndexOrValue::Value(v) => {
 					let previous_value = (&previous_value.0, v);
 					depth_queue.flush_value(callback, last_depth, &previous_value);
 				},
-				IndexOrValue::Index(i) => {
+				IndexOrValue::Index(i, _) => {
 					depth_queue.flush_index(callback, last_depth, (&previous_value.0, i));
 				},
 			}
