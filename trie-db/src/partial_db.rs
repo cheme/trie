@@ -180,6 +180,8 @@ pub struct Index {
 	pub encoded_node: Vec<u8>,
 	pub actual_depth: usize,
 	pub is_leaf: bool, // TODO probably useless.
+	pub additional_key_overlap: Option<u8>,
+	pub additional_key: Vec<u8>,
 }
 
 impl Index {
@@ -254,7 +256,15 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		} else {
 			self.range(start.to_vec()..)
 		};
-		Box::new(range.into_iter().map(|(k, ix)| (k[crate::rstd::mem::size_of::<u32>()..].to_vec(), ix.clone())))
+		Box::new(range.into_iter().map(|(k, ix)| {
+			let mut k = k[crate::rstd::mem::size_of::<u32>()..].to_vec();
+			if let Some(overlap) = ix.additional_key_overlap {
+				let k_len = k.len();
+				k[k_len - 1] |= overlap;
+			}
+			k.extend_from_slice(ix.additional_key.as_slice());
+			(k, ix.clone())
+		}))
 	}
 }
 

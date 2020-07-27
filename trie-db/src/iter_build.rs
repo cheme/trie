@@ -197,17 +197,26 @@ impl<T, V> CacheAccum<T, V>
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize,
 		is_last: bool,
+		upward: bool, // TODO remove param EMCH??
 	) {
 		while self.last_depth() > new_depth || is_last && !self.is_empty() {
 			let lix = self.last_depth();
-			let llix = max(self.last_last_depth(), new_depth);
+/*
+			// after index, we can go upward
+			let (offset, lix, llix) = if upward {
+				let llix = new_depth;
+				(lix, llix, lix)
+			} else {*/
+				let llix = max(self.last_last_depth(), new_depth);
+				let offset = llix;
+		//		(llix, lix, llix)
+		//	};
 
-			let (offset, slice_size, is_root) =
-				if llix == 0 && is_last && self.is_one() {
+			let (offset, slice_size, is_root) = if llix == 0 && is_last && self.is_one() {
 				// branch root
-				(llix, lix - llix, true)
+				(offset, lix - llix, true)
 			} else {
-				(llix + 1, lix - llix - 1, false)
+				(offset + 1, lix - llix - 1, false)
 			};
 			let nkey = if slice_size > 0 {
 				Some((offset, slice_size))
@@ -359,7 +368,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 				// do not put with next, previous is last of a branch
 				depth_queue.flush_value(callback, last_depth, &previous_value);
 				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
+				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false, false);
 			}
 
 			previous_value = (k, v);
@@ -379,7 +388,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		} else {
 			depth_queue.flush_value(callback, last_depth, &previous_value);
 			let ref_branches = previous_value.0;
-			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
+			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true, false);
 		}
 	} else {
 		// nothing null root corner case
@@ -524,7 +533,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::Index(children, v, d) => {
 						debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == depth_item);
 						depth_queue.set_cache_index(depth_item, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, d / nibble_ops::BIT_PER_NIBBLE, false, true);
 					},
 				}
 			} else if depth_item < last_depth {
@@ -541,11 +550,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::Index(children, v, d) => {
 						debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == last_depth);
 						depth_queue.set_cache_index(last_depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, d / nibble_ops::BIT_PER_NIBBLE, false, true);
 					},
 				}
 				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
+				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false, false);
 			}
 
 			previous_value = (k, v);
@@ -564,9 +573,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					if v.is_none() && no_children {
 						callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
 					} else {
-						depth_queue.set_cache_index(last_depth, v, children);
-						// TODO cat k2 up to last_depth ++ index_partial then call at last_depth ++ index_partial
-						depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true);
+						let depth = d / nibble_ops::BIT_PER_NIBBLE;
+						depth_queue.set_cache_index(depth, v, children);
+						depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true, true);
 					}
 					return;
 				},
@@ -591,11 +600,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				IndexOrValueDecoded::Index(children, v, d) => {
 					debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == last_depth);
 					depth_queue.set_cache_index(last_depth, v, children);
-					depth_queue.flush_branch(no_extension, callback, &previous_value.0, d, false);
+					depth_queue.flush_branch(no_extension, callback, &previous_value.0, d, false, true);
 				},
 			}
 			let ref_branches = previous_value.0;
-			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
+			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true, false);
 		}
 	} else {
 		// nothing null root corner case
@@ -699,10 +708,19 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 		let index_position = IndexPosition::new(node_key.0);
 		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
 			if node_key.1 >= next_save_index {
+				let next_nibble_index = next_save_index / nibble_ops::BIT_PER_NIBBLE;
+				let (additional_key, additional_key_overlap) = if next_nibble_index % nibble_ops::NIBBLE_PER_BYTE > 0 {
+					let add = node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE] & (255 << nibble_ops::BIT_PER_NIBBLE);
+					(node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE + 1..].to_vec(), Some(add))
+				} else {
+					(node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE..].to_vec(), None)
+				};
 				let partial_index = PartialIndex {
 					encoded_node,
 					actual_depth: node_key.1,
 					is_leaf,
+					additional_key,
+					additional_key_overlap,
 				};
 				self.db.write(next_save_index, IndexPosition::new(node_key.0), partial_index);
 			}
@@ -1165,7 +1183,7 @@ mod test {
 
 	#[test]
 	fn compare_index_calculations() {
-//		let empty = vec![];
+		let empty = vec![];
 		let one_level_branch = vec![
 			(b"test".to_vec(), vec![2u8; 32]),
 			(b"tett".to_vec(), vec![3u8; 32]),
@@ -1175,16 +1193,16 @@ mod test {
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
 		let mut inputs = vec![
-/*			(empty.clone(), vec![], vec![], Some(0)),
+			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![0], Some(0)),
 			(empty.clone(), vec![], vec![8, 20], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), None)], vec![8, 20], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![0], Some(0)),
-			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),*/
+			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),
 
 			//(one_level_branch.clone(), vec![], vec![], Some(0)), // TODO No index case broken
 			(one_level_branch.clone(), vec![], vec![0], Some(0)),
-//			(one_level_branch.clone(), vec![], vec![8, 20], Some(0)),
+			(one_level_branch.clone(), vec![], vec![8, 20], Some(0)),
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
 			compare_index_calc(data, change, depth_indexes, nb_fetch);
