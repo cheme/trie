@@ -147,7 +147,7 @@ impl<T, V> CacheAccum<T, V>
 			&k2.as_ref()[..],
 			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 		);
-		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), true);
+		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * 8), true);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -1193,6 +1193,7 @@ mod test {
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
 		let mut inputs = vec![
+			(one_level_branch.clone(), vec![], vec![24], Some(0)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![0], Some(0)),
 			(empty.clone(), vec![], vec![8, 20], Some(0)),
@@ -1200,9 +1201,10 @@ mod test {
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![0], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),
 
-			//(one_level_branch.clone(), vec![], vec![], Some(0)), // TODO No index case broken
+			//(one_level_branch.clone(), vec![], vec![], Some(0)),
 			(one_level_branch.clone(), vec![], vec![0], Some(0)),
 			(one_level_branch.clone(), vec![], vec![8, 20], Some(0)),
+			(one_level_branch.clone(), vec![], vec![20], Some(0)),
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
 			compare_index_calc(data, change, depth_indexes, nb_fetch);
