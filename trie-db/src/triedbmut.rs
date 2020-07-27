@@ -312,7 +312,7 @@ pub enum ChildReference<HO> { // `HO` is e.g. `H256`, i.e. the output of a `Hash
 }
 
 impl<'a, HO> TryFrom<EncodedNodeHandle<'a>> for ChildReference<HO>
-	where HO: AsRef<[u8]> + AsMut<[u8]> + Default + Clone + Copy
+	where HO: AsRef<[u8]> + AsMut<[u8]> + Default + Clone + Copy // TODO EMCH why copy and Clone??
 {
 	type Error = Vec<u8>;
 

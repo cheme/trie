@@ -439,7 +439,7 @@ impl Range {
 /// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
 pub enum IndexOrValue<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
-	/// Optionally also attach some partial nibble size reduction.
+	/// Also an optional `Change of value is attached`.
 	/// TODO probably do not need the usize
 	Index(Index, Option<Option<B>>),
 	/// Value node value, from change set.
