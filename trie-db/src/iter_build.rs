@@ -723,18 +723,10 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
 			if node_key.1 >= next_save_index {
 				let next_nibble_index = next_save_index / nibble_ops::BIT_PER_NIBBLE;
-				let (additional_key, additional_key_overlap) = if next_nibble_index % nibble_ops::NIBBLE_PER_BYTE > 0 {
-					let add = node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE] & (255 << nibble_ops::BIT_PER_NIBBLE);
-					(node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE + 1..].to_vec(), Some(add))
-				} else {
-					(node_key.0[next_nibble_index / nibble_ops::NIBBLE_PER_BYTE..].to_vec(), None)
-				};
 				let partial_index = PartialIndex {
 					encoded_node,
 					actual_depth: node_key.1,
 					is_leaf,
-					additional_key,
-					additional_key_overlap,
 				};
 				self.db.write(next_save_index, IndexPosition::new(node_key.0), partial_index);
 			}

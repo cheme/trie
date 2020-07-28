@@ -180,8 +180,6 @@ pub struct Index {
 	pub encoded_node: Vec<u8>,
 	pub actual_depth: usize,
 	pub is_leaf: bool, // TODO probably useless.
-	pub additional_key_overlap: Option<u8>,
-	pub additional_key: Vec<u8>,
 }
 
 impl Index {
@@ -220,7 +218,6 @@ fn index_tree_key(depth: usize, index: &[u8]) -> IndexPosition {
 
 /// Key for an index with owned input.
 fn index_tree_key_owned(depth: usize, mut index: IndexPosition) -> IndexPosition {
-	index.truncate(depth);
 	index.insert_from_slice(0, &(depth as u32).to_be_bytes()[..]);
 	index
 }
@@ -231,8 +228,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.get(&index_tree_key(depth, index)[..]).cloned()
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
-		let odd = depth % 8;
-		position.truncate((depth / 8) + if odd > 0 { 1 } else { 0 });
+		let odd = index.actual_depth % 8;
 		if odd != 0 {
 			position.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
@@ -241,13 +237,12 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.insert(index_tree_key_owned(depth, position).to_vec(), index);
 	}
 	fn remove(&mut self, depth: usize, mut index: IndexPosition) {
-		let odd = depth % 8;
-		index.truncate((depth / 8) + if odd > 0 { 1 } else { 0 });
+/*		let odd = index.actual_depth % 8;
 		if odd != 0 {
 			index.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
 			);
-		}
+		}*/ // TODO the masking need an additional param
 		self.remove(&index_tree_key_owned(depth, index)[..]);
 	}
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
@@ -260,11 +255,6 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		};
 		Box::new(range.into_iter().map(|(k, ix)| {
 			let mut k = k[crate::rstd::mem::size_of::<u32>()..].to_vec();
-			if let Some(overlap) = ix.additional_key_overlap {
-				let k_len = k.len();
-				k[k_len - 1] |= overlap;
-			}
-			k.extend_from_slice(ix.additional_key.as_slice());
 			(k, ix.clone())
 		}))
 	}
