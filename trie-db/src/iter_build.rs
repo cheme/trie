@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use hash_db::{Hasher, HashDB, Prefix};
-use crate::rstd::{cmp::max, marker::PhantomData, vec::Vec};
+use crate::rstd::{cmp, marker::PhantomData, vec::Vec};
 use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
@@ -207,7 +207,7 @@ impl<T, V> CacheAccum<T, V>
 				let llix = new_depth;
 				(lix, llix, lix)
 			} else {*/
-				let llix = max(self.last_last_depth(), new_depth);
+				let llix = cmp::max(self.last_last_depth(), new_depth);
 				let offset = llix;
 		//		(llix, lix, llix)
 		//	};
@@ -399,7 +399,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 
 /// Decoded version of `IndexOrValue`.
 enum IndexOrValueDecoded<T: TrieLayout> {
-	Index(ArrayNode<T>, Option<Vec<u8>>, usize),
+	Index(ArrayNode<T>, Option<Vec<u8>>, usize, bool),
 	Value(Vec<u8>),
 	StoredValue(Vec<u8>),
 }
@@ -410,15 +410,15 @@ impl<T: TrieLayout> IndexOrValueDecoded<T> {
 		match T::Codec::decode(&mut index.encoded_node.as_slice()) {
 			Ok(Node::Empty) => {
 				debug_assert!(index.actual_depth == 0);
-				IndexOrValueDecoded::Index(children, None, 0)
+				IndexOrValueDecoded::Index(children, None, 0, false)
 			},
 			Ok(Node::Extension(..)) => unreachable!("No extension indexes"),
 			Ok(Node::Branch(..)) => unimplemented!("Extension support unimplemented for index"),
 			Ok(Node::Leaf(_partial_slice, encoded_value)) => {
 				if let Some(new_value) = new_value {
-					IndexOrValueDecoded::Index(children, new_value, index.actual_depth)
+					IndexOrValueDecoded::Index(children, new_value, index.actual_depth, false)
 				} else {
-					IndexOrValueDecoded::Index(children, Some(encoded_value.to_vec()), index.actual_depth)
+					IndexOrValueDecoded::Index(children, Some(encoded_value.to_vec()), index.actual_depth, false)
 				}
 			},
 			//Node::NibbledBranch(_partial_slice, [Option<NodeHandle<'a>>; nibble_ops::NIBBLE_LENGTH], Option<&'a [u8]>),
@@ -429,9 +429,9 @@ impl<T: TrieLayout> IndexOrValueDecoded<T> {
 					}
 				}
 				if let Some(new_value) = new_value {
-					IndexOrValueDecoded::Index(children, new_value, index.actual_depth)
+					IndexOrValueDecoded::Index(children, new_value, index.actual_depth, true)
 				} else {
-					IndexOrValueDecoded::Index(children, encoded_value.map(|v| v.to_vec()), index.actual_depth)
+					IndexOrValueDecoded::Index(children, encoded_value.map(|v| v.to_vec()), index.actual_depth, true)
 				}
 			},
 			Err(e) => panic!("Corrupted index node: {:?}", e),
@@ -483,25 +483,18 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let v: IndexOrValueDecoded<T> = v.into();
 	
 			single = false;
+			let common_depth = nibble_ops::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
 			let common_depth = match (&previous_value.1, &v) {
-				(IndexOrValueDecoded::Index(_, _, prev_d), IndexOrValueDecoded::Index(_, _, d)) => {
-					let slice_1 = NibbleSlice::new_offset(&previous_value.0.as_ref()[..], prev_d / nibble_ops::BIT_PER_NIBBLE);
-					let slice_2 = NibbleSlice::new_offset(&k.as_ref(), d / nibble_ops::BIT_PER_NIBBLE);
-					slice_1.common_prefix(&slice_2)
+				(IndexOrValueDecoded::Index(_, _, prev_d, _), IndexOrValueDecoded::Index(_, _, d, _)) => {
+					cmp::min(common_depth, *cmp::min(prev_d, d))
 				},
-				(IndexOrValueDecoded::Index(_, _, prev_d), _) => {
-					let slice_1 = NibbleSlice::new_offset(&previous_value.0.as_ref()[..], prev_d / nibble_ops::BIT_PER_NIBBLE);
-					let end = k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE;
-					let slice_2 = NibbleSlice::new_offset(&k.as_ref(), end);
-					slice_1.common_prefix(&slice_2)
+				(IndexOrValueDecoded::Index(_, _, prev_d, _), _) => {
+					cmp::min(common_depth, *prev_d)
 				},
-				(_, IndexOrValueDecoded::Index(_, _, d)) => {
-					let end = previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE;
-					let slice_1 = NibbleSlice::new_offset(&previous_value.0.as_ref()[..], end);
-					let slice_2 = NibbleSlice::new_offset(&k.as_ref(), d / nibble_ops::BIT_PER_NIBBLE);
-					slice_1.common_prefix(&slice_2)
+				(_, IndexOrValueDecoded::Index(_, _, d, _)) => {
+					cmp::min(common_depth, *d)
 				},
-				(_, _) => nibble_ops::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..])
+				(_, _) => common_depth,
 			};
 			// 0 is a reserved value : could use option
 			let depth_item = common_depth;
@@ -515,7 +508,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::StoredValue(v) => {
 						depth_queue.set_cache_value(common_depth, Some(v));
 					},
-					IndexOrValueDecoded::Index(children, v, _d) => {
+					IndexOrValueDecoded::Index(children, v, _d, _is_branch) => {
 						depth_queue.set_cache_index(common_depth, v, children);
 					},
 				}
@@ -530,10 +523,15 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, depth_item, &previous_value);
 					},
-					IndexOrValueDecoded::Index(children, v, d) => {
-						debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == depth_item);
-						depth_queue.set_cache_index(depth_item, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, d / nibble_ops::BIT_PER_NIBBLE, false, true);
+					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
+						if is_branch {
+							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							depth_queue.set_cache_index(depth, v, children);
+							depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false, true);
+						} else {
+							let previous_value = (&previous_value.0, v.expect("Value are defined"));
+							depth_queue.flush_value(callback, depth_item, &previous_value);
+						}
 					},
 				}
 			} else if depth_item < last_depth {
@@ -547,10 +545,16 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, last_depth, &previous_value);
 					},
-					IndexOrValueDecoded::Index(children, v, d) => {
-						debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == last_depth);
-						depth_queue.set_cache_index(last_depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, d / nibble_ops::BIT_PER_NIBBLE, false, true);
+					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
+						if is_branch {
+							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							depth_queue.set_cache_index(depth, v, children);
+							depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
+						} else {
+							let previous_value = (&previous_value.0, v.expect("Value are defined"));
+							depth_queue.flush_value(callback, last_depth, &previous_value);
+						}
+
 					},
 				}
 				let ref_branches = previous_value.0;
@@ -567,15 +571,20 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let v2 = match v2 {
 				IndexOrValueDecoded::Value(v) => v,
 				IndexOrValueDecoded::StoredValue(v) => v,
-				IndexOrValueDecoded::Index(children, v, d) => {
+				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 					let no_children = children.iter().position(|v| v.is_some()).is_none();
 					// check if empty
 					if v.is_none() && no_children {
 						callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
 					} else {
-						let depth = d / nibble_ops::BIT_PER_NIBBLE;
-						depth_queue.set_cache_index(depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true, true);
+						if is_branch {
+							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							depth_queue.set_cache_index(depth, v, children);
+							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true, true);
+						} else {
+							let previous_value = (&k2, v.expect("Value are defined"));
+							depth_queue.flush_value(callback, last_depth, &previous_value);
+						}
 					}
 					return;
 				},
@@ -597,10 +606,15 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					let previous_value = (&previous_value.0, v);
 					depth_queue.flush_value(callback, last_depth, &previous_value);
 				},
-				IndexOrValueDecoded::Index(children, v, d) => {
-					debug_assert!(d / nibble_ops::BIT_PER_NIBBLE == last_depth);
-					depth_queue.set_cache_index(last_depth, v, children);
-					depth_queue.flush_branch(no_extension, callback, &previous_value.0, d, false, true);
+				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
+					if is_branch {
+						let depth = d / nibble_ops::BIT_PER_NIBBLE;
+						depth_queue.set_cache_index(depth, v, children);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
+					} else {
+						let previous_value = (&previous_value.0, v.expect("Value are defined"));
+						depth_queue.flush_value(callback, last_depth, &previous_value);
+					}
 				},
 			}
 			let ref_branches = previous_value.0;
@@ -1193,7 +1207,6 @@ mod test {
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
 		let mut inputs = vec![
-			(one_level_branch.clone(), vec![], vec![24], Some(0)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![0], Some(0)),
 			(empty.clone(), vec![], vec![8, 20], Some(0)),
@@ -1205,6 +1218,7 @@ mod test {
 			(one_level_branch.clone(), vec![], vec![0], Some(0)),
 			(one_level_branch.clone(), vec![], vec![8, 20], Some(0)),
 			(one_level_branch.clone(), vec![], vec![20], Some(0)),
+			(one_level_branch.clone(), vec![], vec![24], Some(0)),
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
 			compare_index_calc(data, change, depth_indexes, nb_fetch);

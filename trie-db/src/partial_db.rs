@@ -232,6 +232,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
 		let odd = depth % 8;
+		position.truncate((depth / 8) + if odd > 0 { 1 } else { 0 });
 		if odd != 0 {
 			position.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
@@ -241,6 +242,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 	}
 	fn remove(&mut self, depth: usize, mut index: IndexPosition) {
 		let odd = depth % 8;
+		index.truncate((depth / 8) + if odd > 0 { 1 } else { 0 });
 		if odd != 0 {
 			index.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
