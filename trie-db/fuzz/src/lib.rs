@@ -74,22 +74,21 @@ fn fuzz_to_data(input: &[u8]) -> Vec<(Vec<u8>,Vec<u8>)> {
 
 fn fuzz_removal(data: Vec<(Vec<u8>,Vec<u8>)>) -> Vec<(bool, Vec<u8>,Vec<u8>)> {
 	let mut res = Vec::new();
-	let mut torem = None;
+	let mut existing = None;
 	for (a, d) in data.into_iter().enumerate() {
-		if a % 7 == 6	{
-			// a random removal some time
-			res.push((true, d.0, d.1));
-		} else {
-			if a % 5 == 0	{
-				torem = Some((true, d.0.clone(), d.1.clone()));
-			}
-			res.push((false, d.0, d.1));
-			if a % 5 == 4 {
-				if let Some(v) = torem.take() {
-					res.push(v);
-				}
+		if existing == None {
+			existing = Some(a%2);
+		}
+		if existing.unwrap() == 0 {
+			if a % 9 == 6
+			|| a % 9 == 7
+			|| a % 9 == 8 {
+				// a random removal some time
+				res.push((true, d.0, d.1));
+				continue;
 			}
 		}
+		res.push((false, d.0, d.1));
 	}
 	res
 }
