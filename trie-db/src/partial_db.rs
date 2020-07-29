@@ -22,6 +22,15 @@ use crate::rstd::cmp::Ordering;
 use crate::nibble::nibble_ops;
 use crate::nibble::LeftNibbleSlice;
 
+#[cfg(feature = "std")]
+use std::sync::atomic::Ordering as AtomOrd;
+
+#[cfg(feature = "std")]
+use std::sync::atomic::AtomicUsize;
+
+#[cfg(feature = "std")]
+use std::sync::Arc;
+
 /// Storage of key values.
 pub trait KVBackend {
 	/// Key query for a value.
@@ -59,6 +68,68 @@ impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 	}
 	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a> {
 		Box::new(self.range(start.to_vec()..).into_iter().map(|(k, v)| (k.to_vec(), v.to_vec())))
+	}
+}
+
+#[cfg(feature = "std")]
+#[derive(Debug)]
+/// Count number of key accesses, to check if indexes are used properly.
+pub struct CountCheck<DB: KVBackend>(DB, Option<Arc<AtomicUsize>>);
+
+#[cfg(feature = "std")]
+impl<DB: KVBackend> CountCheck<DB> {
+	/// Instantiate a new count overlay on `KVBackend`.
+	pub fn new(db: DB, active: bool) -> Self {
+		let counter = if active {
+			Some(Arc::new(AtomicUsize::new(0)))
+		} else {
+			None
+		};
+		CountCheck(db, counter)
+	}
+	/// Get current number of access to a value of the backend.
+	pub fn get_count(&self) -> Option<usize> {
+		self.1.as_ref().map(|counter| counter.load(AtomOrd::Acquire))
+	}
+}
+
+#[cfg(feature = "std")]
+impl<DB: KVBackend> KVBackend for CountCheck<DB> {
+	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
+		let r = self.0.read(key);
+		if r.is_some() {
+			self.1.as_ref().map(|counter| counter.fetch_add(1, AtomOrd::Relaxed));
+		}
+		r
+	}
+	fn write(&mut self, key: &[u8], value: &[u8]) {
+		self.0.write(key, value);
+	}
+	fn remove(&mut self, key: &[u8]) {
+		self.0.remove(key);
+	}
+	fn iter<'a>(&'a self) -> KVBackendIter<'a> {
+		Box::new(CountIter(self.0.iter(), self.1.clone()))
+	}
+	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a> {
+		Box::new(CountIter(self.0.iter_from(start), self.1.clone()))
+	}
+}
+
+#[cfg(feature = "std")]
+/// Count number of key accesses over a KVBackendIter
+pub struct CountIter<'a>(KVBackendIter<'a>, Option<Arc<AtomicUsize>>);
+
+#[cfg(feature = "std")]
+impl<'a> Iterator for CountIter<'a> {
+	type Item = (Vec<u8>, Vec<u8>);
+
+	fn next(&mut self) -> Option<Self::Item> {
+		let r = self.0.next();
+		if r.is_some() {
+			self.1.as_ref().map(|counter| counter.fetch_add(1, AtomOrd::Relaxed));
+		}
+		r
 	}
 }
 
@@ -157,7 +228,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.get(&index_tree_key(depth, index)[..]).cloned()
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
-		let odd = depth % 8;
+		let odd = index.actual_depth % 8;
 		if odd != 0 {
 			position.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
@@ -166,12 +237,12 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.insert(index_tree_key_owned(depth, position).to_vec(), index);
 	}
 	fn remove(&mut self, depth: usize, mut index: IndexPosition) {
-		let odd = depth % 8;
+/*		let odd = index.actual_depth % 8;
 		if odd != 0 {
 			index.last_mut().map(|l| 
 				*l = *l & !(255 >> odd)
 			);
-		}
+		}*/ // TODO the masking need an additional param
 		self.remove(&index_tree_key_owned(depth, index)[..]);
 	}
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
@@ -182,7 +253,10 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		} else {
 			self.range(start.to_vec()..)
 		};
-		Box::new(range.into_iter().map(|(k, ix)| (k.to_vec(), ix.clone())))
+		Box::new(range.into_iter().map(|(k, ix)| {
+			let mut k = k[crate::rstd::mem::size_of::<u32>()..].to_vec();
+			(k, ix.clone())
+		}))
 	}
 }
 
@@ -439,7 +513,7 @@ impl Range {
 /// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
 pub enum IndexOrValue<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
-	/// Optionally also attach some partial nibble size reduction.
+	/// Also an optional `Change of value is attached`.
 	/// TODO probably do not need the usize
 	Index(Index, Option<Option<B>>),
 	/// Value node value, from change set.
@@ -541,11 +615,21 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 							let range = value_prefix(d, next_change_index);
 							index_iter.push((indexes.iter(d, next_change_index), range))
 						}));
+				} else {
+					// no change and index at root, just iterate all first level indexes
+					let index_iter = &mut self.index_iter;
+					let indexes = &self.indexes;
+					self.indexes_conf.next_depth(0, &[])
+						.map(|d| (d, {
+							index_iter.push((indexes.iter(d, &[]), (Vec::new(), None)))
+						}));
 				}
 			}
 			self.next_index = self.index_iter.last_mut().and_then(|i| {
 				i.0.next()
-					.filter(|kv| (i.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true))
+					.filter(|kv| {
+						(i.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
+					})
 			});
 		}
 		// end of an indexing range

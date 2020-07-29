@@ -26,6 +26,7 @@ use trie_db::{
 	triedbmut::ChildReference,
 	DBValue,
 	trie_visit,
+	trie_visit_with_indexes,
 	TrieBuilder,
 	TrieRoot,
 	TrieRootIndexes,
@@ -38,7 +39,7 @@ pub use trie_db::{
 	decode_compact, encode_compact,
 	nibble_ops, NibbleSlice, NibbleVec, NodeCodec, proof, Record, Recorder,
 	Trie, TrieConfiguration, TrieDB, TrieDBIterator, TrieDBMut, TrieDBNodeIterator, TrieError,
-	TrieIterator, TrieLayout, TrieMut, partial_db::DepthIndexes,
+	TrieIterator, TrieLayout, TrieMut, partial_db::{DepthIndexes, RootIndexIterator, CountCheck},
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -997,6 +998,80 @@ pub fn compare_indexing<
 	//assert!(false);
 	assert_eq!(root, root_new);
 }
+
+pub fn compare_index_calc<
+	X: hash_db::HashDB<KeccakHasher, DBValue> + Eq + Clone,
+	IB: trie_db::partial_db::IndexBackend + fmt::Debug + Clone,
+> (
+	data: Vec<(Vec<u8>, Vec<u8>)>,
+	changes: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+	mut memdb: X,
+	indexes_backend: &mut IB,
+	indexes: &DepthIndexes,
+	nb_node_fetch: Option<usize>,
+) {
+	let root_new: <KeccakHasher as Hasher>::Out = {
+		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
+		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+	let mut root = {
+		let mut root = Default::default();
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for i in 0..data.len() {
+			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
+		}
+		t.commit();
+		*t.root()
+	};
+	if root_new != root {
+		println!("{:?}", indexes_backend);
+		{
+			let db : &dyn hash_db::HashDB<_, _> = &memdb;
+			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:x?}", a);
+			}
+		}
+	}
+
+	assert_eq!(root, root_new);
+	let reference_memdb: std::collections::btree_map::BTreeMap<Vec<u8>, Vec<u8>> = data.iter().cloned().collect();
+	let reference_memdb = CountCheck::new(reference_memdb, nb_node_fetch.is_some());
+	let reference_indexes = indexes_backend.clone();
+	let root =  {
+		let mut t = RefTrieDBMutNoExt::from_existing(&mut memdb, &mut root).unwrap();
+		for i in 0..changes.len() {
+			if let Some(v) = changes[i].1.as_ref() {
+				t.insert(&changes[i].0[..], &v[..]).unwrap();
+			} else {
+				t.remove(&changes[i].0[..]).unwrap();
+			}
+		}
+		t.commit();
+		*t.root()
+	};
+	let root_new: <KeccakHasher as Hasher>::Out = {
+		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
+		let iter = RootIndexIterator::new(
+			&reference_memdb,
+			&reference_indexes,
+			&indexes,
+			changes.into_iter(),
+			Vec::new(),
+		);
+		trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(iter, &mut cb);
+		cb.root.unwrap_or(Default::default())
+	};
+
+
+	//assert!(false);
+	assert_eq!(root, root_new);
+
+	assert_eq!(reference_memdb.get_count(), nb_node_fetch);
+}
+
 
 /// Compare trie builder and trie root implementations.
 pub fn compare_root(

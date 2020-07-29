@@ -72,7 +72,8 @@ pub use self::lookup::Lookup;
 pub use self::nibble::{NibbleSlice, NibbleVec, nibble_ops};
 pub use crate::node_codec::{NodeCodec, Partial};
 pub use crate::iter_build::{trie_visit, ProcessEncodedNode,
-	 TrieBuilder, TrieRoot, TrieRootUnhashed, TrieRootIndexes};
+	TrieBuilder, TrieRoot, TrieRootUnhashed, TrieRootIndexes,
+	trie_visit_with_indexes};
 pub use crate::iterator::TrieDBNodeIterator;
 pub use crate::trie_codec::{decode_compact, encode_compact};
 
