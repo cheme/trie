@@ -185,17 +185,64 @@ fn value_prefix(actual_index_depth: usize, change_key: &[u8]) -> (Vec<u8>, Optio
 	(index_start, index_end)
 }
 
+// TODO consider trying to use small vec (need to be usable in range) for result, we can even use
+// nibblevec internally
 fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
+	// TODO consider not returning start (especially since it can allocates).
 	let start = actual_index_depth;
 	let odd = start % nibble_ops::NIBBLE_PER_BYTE;
-	let start = start / nibble_ops::NIBBLE_PER_BYTE + if odd > 0 { 2 } else { 1 };
+	let start_byte = start / nibble_ops::NIBBLE_PER_BYTE + if odd > 0 { 1 } else { 0 };
 
-	change_key.resize(start, 0);
+	change_key.resize(start_byte + 1, 0);
 
 	// we can round index start since values are only on even position.
-	let index_start = change_key[..start].to_vec();
-	let index_end = end_prefix(index_start.as_slice());
+	let index_start = change_key[..start_byte].to_vec();
+	let index_end = end_prefix_index(index_start.as_slice(), start);
 	(index_start, index_end)
+}
+
+// TODO consider trying to use small vec (need to be usable in range) for result
+fn end_prefix(prefix: &[u8]) -> Option<Vec<u8>> {
+	let mut end_range = prefix.to_vec();
+	while let Some(0xff) = end_range.last() {
+		end_range.pop();
+	}
+	if let Some(byte) = end_range.last_mut() {
+		*byte += 1;
+		Some(end_range)
+	} else {
+		None
+	}
+}
+
+fn end_prefix_index(prefix: &[u8], index: usize) -> Option<Vec<u8>> {
+	if index == 0 {
+		return None;
+	}
+	let mut slice = LeftNibbleSlice::new(prefix);
+	let mut index_truncate = index;
+	while let Some(0x0f) = slice.at(index_truncate - 1) {
+		index_truncate -= 1;
+		if index_truncate == 0 {
+			return None;
+		}
+	}
+	if index_truncate > 0 {
+		let mut result = prefix.to_vec();
+		let odd = (index_truncate) % nibble_ops::NIBBLE_PER_BYTE;
+		let pos = (index_truncate - 1) / nibble_ops::NIBBLE_PER_BYTE;
+		result.resize(pos + 1, 0);
+		if odd > 0 {
+			result[pos] += 0x10;
+			result[pos] &= 0xf0;
+		} else {
+			result[pos] += 0x01; 
+		}
+		result.truncate(pos + 1);
+		Some(result)
+	} else {
+		None
+	}
 }
 
 
@@ -227,8 +274,9 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.insert(index_tree_key_owned(depth, position).to_vec(), index);
 	}
 	fn remove(&mut self, depth: usize, mut index: IndexPosition) {
+		let l_size = crate::rstd::mem::size_of::<u32>();
 		let start = index_tree_key_owned(depth, index);
-		let range = if let Some(end_range) = end_prefix(&start[..]) {
+		let range = if let Some(end_range) = end_prefix_index(&start[..], depth + l_size * nibble_ops::NIBBLE_PER_BYTE) {
 			self.range(start.to_vec()..end_range)
 		} else {
 			self.range(start.to_vec()..)
@@ -240,6 +288,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		first.map(|key| self.remove(&key));
 	}
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let start = &index_tree_key(depth, from_index);
 		let range = if let Some(end_range) = end_prefix(&depth_prefix[..]) {
@@ -247,24 +296,10 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		} else {
 			self.range(start.to_vec()..)
 		};
-		Box::new(range.into_iter().map(|(k, ix)| {
-			let mut k = k[crate::rstd::mem::size_of::<u32>()..].to_vec();
+		Box::new(range.into_iter().map(move |(k, ix)| {
+			let mut k = k[l_size..].to_vec();
 			(k, ix.clone())
 		}))
-	}
-}
-
-// TODO consider trying to use small vec (need to be usable in range) for result
-fn end_prefix(prefix: &[u8]) -> Option<Vec<u8>> {
-	let mut end_range = prefix.to_vec();
-	while let Some(0xff) = end_range.last() {
-		end_range.pop();
-	}
-	if let Some(byte) = end_range.last_mut() {
-		*byte += 1;
-		Some(end_range)
-	} else {
-		None
 	}
 }
 
