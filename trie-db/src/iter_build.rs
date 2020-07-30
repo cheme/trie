@@ -75,7 +75,7 @@ impl<T, V> CacheAccum<T, V>
 	}
 
 	#[inline(always)]
-	fn set_cache_index(&mut self, depth:usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
+	fn set_cache_index(&mut self, depth: usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
 			self.0.push((index, None, depth));
 		}
@@ -147,26 +147,10 @@ impl<T, V> CacheAccum<T, V>
 			&k2.as_ref()[..],
 			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 		);
-		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * 8), true);
+		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
-	}
-
-	fn flush_delete (
-		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-		target_depth: usize,
-		k2: &impl AsRef<[u8]>,
-	) {
-		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
-		// is it a branch value (two candidate same ix)
-		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
-
-		// TODO consider a call back??
-
-		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value as usize, None);
 	}
 
 	fn flush_index (
@@ -260,13 +244,13 @@ impl<T, V> CacheAccum<T, V>
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
 		// index value is incorect here, in fact we shall never index for extension (we shall use the
 		// following branch)
-		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, (branch_d + 1) * nibble_ops::BIT_PER_NIBBLE), false);
+		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, branch_d + 1), false);
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
-			let h = callback.process(pr.left(), encoded, is_root, (key_branch, (branch_d + 1) * nibble_ops::BIT_PER_NIBBLE), false);
+			let h = callback.process(pr.left(), encoded, is_root, (key_branch, branch_d + 1), false);
 			h
 		} else {
 			branch_hash
@@ -298,7 +282,7 @@ impl<T, V> CacheAccum<T, V>
 			&key_branch,
 			branch_d - ext_length,
 		);
-		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE), false)
+		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
 	}
 
 	#[inline(always)]
@@ -327,7 +311,7 @@ impl<T, V> CacheAccum<T, V>
 			&key_branch,
 			branch_d - ext_length,
 		);
-		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d * nibble_ops::BIT_PER_NIBBLE), false)
+		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
 	}
 }
 
@@ -384,7 +368,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 				&k2.as_ref()[..],
 				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 			);
-			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * 8), true);
+			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
 		} else {
 			depth_queue.flush_value(callback, last_depth, &previous_value);
 			let ref_branches = previous_value.0;
@@ -525,7 +509,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						if is_branch {
-							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
 							depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false, true);
 						} else {
@@ -547,7 +531,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						if is_branch {
-							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
 							depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
 						} else {
@@ -578,7 +562,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
 					} else {
 						if is_branch {
-							let depth = d / nibble_ops::BIT_PER_NIBBLE;
+							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
 							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true, true);
 						} else {
@@ -595,7 +579,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				&k2.as_ref()[..],
 				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 			);
-			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * 8), true);
+			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
 		} else {
 			match previous_value.1 {
 				IndexOrValueDecoded::Value(v) => {
@@ -608,7 +592,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				},
 				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 					if is_branch {
-						let depth = d / nibble_ops::BIT_PER_NIBBLE;
+						let depth = d;
 						depth_queue.set_cache_index(depth, v, children);
 						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
 					} else {
@@ -718,17 +702,18 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 			return ChildReference::Inline(h, len);
 		}
 		let hash = <H as Hasher>::hash(&encoded_node[..]);
-		let prefix_start = prefix.0.len() * 8 + if prefix.1.is_some() { nibble_ops::BIT_PER_NIBBLE } else { 0 };
-		let index_position = IndexPosition::new(node_key.0);
+		let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
+		let index_position: IndexPosition = node_key.0.into();
 		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
 			if node_key.1 >= next_save_index {
-				let next_nibble_index = next_save_index / nibble_ops::BIT_PER_NIBBLE;
+				let next_nibble_index = next_save_index;
 				let partial_index = PartialIndex {
 					encoded_node,
 					actual_depth: node_key.1,
 					is_leaf,
 				};
-				self.db.write(next_save_index, IndexPosition::new(node_key.0), partial_index);
+				// TODO consider changing write to reference input
+				self.db.write(next_save_index, node_key.0.into(), partial_index);
 			}
 		}
 		if is_root {
@@ -949,7 +934,7 @@ mod test {
 		let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 		let mut indexes = std::collections::BTreeMap::new();
 		let indexes_conf = reference_trie::DepthIndexes::new(&[
-			4, 8, 16, 32, 44,
+			1, 2, 4, 6, 9,
 		]);
 		reference_trie::compare_indexing(data, memdb, &mut indexes, &indexes_conf);
 	}
@@ -1199,26 +1184,26 @@ mod test {
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
 		let mut inputs = vec![
-//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![20], Some(0)),
+//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(0)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![0], Some(0)),
-			(empty.clone(), vec![], vec![8, 20], Some(0)),
-			(empty.clone(), vec![(b"te".to_vec(), None)], vec![8, 20], Some(0)),
+			(empty.clone(), vec![], vec![2, 5], Some(0)),
+			(empty.clone(), vec![(b"te".to_vec(), None)], vec![2, 5], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![0], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),
 
 			//(one_level_branch.clone(), vec![], vec![], Some(0)),
 			(one_level_branch.clone(), vec![], vec![0], Some(0)),
-			(one_level_branch.clone(), vec![], vec![8, 20], Some(0)),
-			(one_level_branch.clone(), vec![], vec![20], Some(0)),
-			(one_level_branch.clone(), vec![], vec![24], Some(0)),
-			(one_level_branch.clone(), vec![], vec![28], Some(0)),
-			(one_level_branch.clone(), vec![], vec![24, 28], Some(0)),
+			(one_level_branch.clone(), vec![], vec![2, 5], Some(0)),
+			(one_level_branch.clone(), vec![], vec![5], Some(0)),
+			(one_level_branch.clone(), vec![], vec![6], Some(0)),
+			(one_level_branch.clone(), vec![], vec![7], Some(0)),
+			(one_level_branch.clone(), vec![], vec![6, 7], Some(0)),
 			// insert before indexes
 			// index one child
-//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![20], Some(0)),
+//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(0)),
 			// index all child
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![28], Some(6)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
 
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
