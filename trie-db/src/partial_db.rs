@@ -514,9 +514,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				if !is_root_last && current_key.len() * nibble_ops::NIBBLE_PER_BYTE < d {
 					let iter = indexes.iter(d, current_key);
 					//let mut current_key = current_key.to_vec();
-					let mut current_key = current_key_vec;
 					
-					let range = value_prefix_index(d, current_key);
+					let range = value_prefix_index(d, current_key_vec);
 					// TODO need to store current value of next_index too?? as current_index_depth!!
 					index_iter.push(StackedIndex {
 						iter,
