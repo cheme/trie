@@ -185,10 +185,13 @@ fn value_prefix(actual_index_depth: usize, change_key: &[u8]) -> (Vec<u8>, Optio
 	(index_start, index_end)
 }
 
-fn value_prefix_index(actual_index_depth: usize, change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
+fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
 	let start = actual_index_depth;
 	let odd = start % nibble_ops::NIBBLE_PER_BYTE;
 	let start = start / nibble_ops::NIBBLE_PER_BYTE + if odd > 0 { 2 } else { 1 };
+
+	change_key.resize(start, 0);
+
 	// we can round index start since values are only on even position.
 	let index_start = change_key[..start].to_vec();
 	let index_end = end_prefix(index_start.as_slice());
@@ -513,8 +516,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					//let mut current_key = current_key.to_vec();
 					let mut current_key = current_key_vec;
 					
-					let size = d / nibble_ops::NIBBLE_PER_BYTE + 2; // allow excess length for odd
-					current_key.resize(size, 0);
 					let range = value_prefix_index(d, current_key);
 					// TODO need to store current value of next_index too?? as current_index_depth!!
 					index_iter.push(StackedIndex {
