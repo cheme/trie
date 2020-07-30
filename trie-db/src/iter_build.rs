@@ -1184,7 +1184,6 @@ mod test {
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
 		let mut inputs = vec![
-//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(0)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![0], Some(0)),
 			(empty.clone(), vec![], vec![2, 5], Some(0)),
@@ -1200,11 +1199,13 @@ mod test {
 			(one_level_branch.clone(), vec![], vec![7], Some(0)),
 			(one_level_branch.clone(), vec![], vec![6, 7], Some(0)),
 			// insert before indexes
-			// index one child
-//			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(0)),
-			// index all child
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
-
+			// index one child (one value is a peak)
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
+			// index on children
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(1)),
+			// index after children
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(4)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
 			compare_index_calc(data, change, depth_indexes, nb_fetch);

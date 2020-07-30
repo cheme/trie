@@ -188,8 +188,9 @@ fn value_prefix(actual_index_depth: usize, change_key: &[u8]) -> (Vec<u8>, Optio
 // TODO consider trying to use small vec (need to be usable in range) for result, we can even use
 // nibblevec internally
 fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
+	// TODO change key is always odd, some code here is useless.
 	// TODO consider not returning start (especially since it can allocates).
-	let start = actual_index_depth;
+	let start = change_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 	let odd = start % nibble_ops::NIBBLE_PER_BYTE;
 	let start_byte = start / nibble_ops::NIBBLE_PER_BYTE + if odd > 0 { 1 } else { 0 };
 
@@ -625,6 +626,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 	fn next_index(&mut self, change: Option<Option<V>>) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let current_index_depth = &mut self.current_index_depth;
+		// stop value iteration after index
+		self.next_value = None;
+		self.current_value_iter = None;
 		self.index_iter.last_mut().and_then(|i|
 			i.next_index.take().map(|index| {
 				*current_index_depth = (index.1).actual_depth;
@@ -639,8 +643,15 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 	fn next_value_or_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		match (self.buffed_next_index(), &self.next_value) {
-			(Some(_next_index), Some(_next_value)) => {
-				unreachable!("value iterator should not overlap an index");
+			(Some(next_index), Some(next_value)) => {
+				match next_index.1.compare(&next_index.0, &next_value.0) {
+					Ordering::Equal => {
+						// TODO could debug assert equality of values
+						self.next_index(None)
+					},
+					Ordering::Less => self.next_index(None),
+					Ordering::Greater => self.next_value(),
+				}
 			},
 			(Some(_next_index), None) => self.next_index(None),
 			(None, Some(_next_value)) => self.next_value(),
