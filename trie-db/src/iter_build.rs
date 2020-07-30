@@ -167,7 +167,7 @@ impl<T, V> CacheAccum<T, V>
 		// TODO could consider storing hash.
 		// TODO mechanism to avoid writing back indexes (need to know if index was change in iterator)
 		// TODO this is not right (actual depth is different)
-		let hash = callback.process(pr.left(), v2.encoded_node, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), v2.is_leaf);
+		let hash = callback.process(pr.left(), v2.encoded_node, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), false);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -702,18 +702,19 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 			return ChildReference::Inline(h, len);
 		}
 		let hash = <H as Hasher>::hash(&encoded_node[..]);
-		let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
-		let index_position: IndexPosition = node_key.0.into();
-		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
-			if node_key.1 >= next_save_index {
-				let next_nibble_index = next_save_index;
-				let partial_index = PartialIndex {
-					encoded_node,
-					actual_depth: node_key.1,
-					is_leaf,
-				};
-				// TODO consider changing write to reference input
-				self.db.write(next_save_index, node_key.0.into(), partial_index);
+		if !is_leaf {
+			let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
+			let index_position: IndexPosition = node_key.0.into();
+			if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
+				if node_key.1 >= next_save_index {
+					let next_nibble_index = next_save_index;
+					let partial_index = PartialIndex {
+						encoded_node,
+						actual_depth: node_key.1,
+					};
+					// TODO consider changing write to reference input
+					self.db.write(next_save_index, node_key.0.into(), partial_index);
+				}
 			}
 		}
 		if is_root {
@@ -1183,16 +1184,29 @@ mod test {
 			(b"tewtb".to_vec(), vec![6u8; 32]),
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
+		let two_level_branch = vec![
+			(b"test".to_vec(), vec![2u8; 32]),
+			(b"testi".to_vec(), vec![2u8; 32]),
+			(b"tett".to_vec(), vec![3u8; 32]),
+			(b"tetti".to_vec(), vec![3u8; 32]),
+			(b"teut".to_vec(), vec![4u8; 32]),
+			(b"teuti".to_vec(), vec![4u8; 32]),
+			(b"tevtc".to_vec(), vec![5u8; 32]),
+			(b"tevtci".to_vec(), vec![5u8; 32]),
+			(b"tewtb".to_vec(), vec![6u8; 32]),
+			(b"tewtbi".to_vec(), vec![6u8; 32]),
+			(b"tezta".to_vec(), vec![6u8; 32]),
+			(b"teztai".to_vec(), vec![6u8; 32]),
+		];
+
 		let mut inputs = vec![
 			(empty.clone(), vec![], vec![], Some(0)),
-			(empty.clone(), vec![], vec![0], Some(0)),
 			(empty.clone(), vec![], vec![2, 5], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), None)], vec![2, 5], Some(0)),
-			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![0], Some(0)),
+			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),
 
-			//(one_level_branch.clone(), vec![], vec![], Some(0)),
-			(one_level_branch.clone(), vec![], vec![0], Some(0)),
+			(one_level_branch.clone(), vec![], vec![], Some(0)),
 			(one_level_branch.clone(), vec![], vec![2, 5], Some(0)),
 			(one_level_branch.clone(), vec![], vec![5], Some(0)),
 			(one_level_branch.clone(), vec![], vec![6], Some(0)),
@@ -1203,9 +1217,11 @@ mod test {
 			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 			// index on children
 			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(1)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(1)),
 			// index after children
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(4)),
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
 		];
 		for (data, change, depth_indexes, nb_fetch) in inputs.into_iter() {
 			compare_index_calc(data, change, depth_indexes, nb_fetch);

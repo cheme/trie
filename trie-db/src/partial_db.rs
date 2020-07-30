@@ -151,10 +151,10 @@ pub trait IndexBackend {
 
 #[derive(Debug, Clone)]
 /// Content of an index.
+/// Index are only branches.
 pub struct Index {
 	pub encoded_node: Vec<u8>,
 	pub actual_depth: usize,
-	pub is_leaf: bool,
 }
 
 impl Index {
@@ -306,6 +306,8 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 
 /// Depths to use for indexing.
 /// We use u32 internally which means that deepest supported index is 32 byte deep.
+///
+/// The root (depth 0) is always indexed.
 /// TODO consider switching to u64??
 /// TODO put behind trait to use with more complex definition (substrate uses
 /// prefixes and some indexes depth should only be define for those).
@@ -332,6 +334,10 @@ impl DepthIndexes {
 	/// TODO this is not really efficient and use on every node
 	/// TODO put in IdenxesConf trait.
 	pub fn next_depth(&self, depth: usize, _index: &[u8]) -> Option<usize> {
+		if depth == 0 {
+			// 0 is always indexed to remove many corner case at very small cost.
+			return Some(0);
+		}
 		for i in self.0.iter() {
 			let i = *i as usize;
 			if i >= depth {
@@ -645,10 +651,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		match (self.buffed_next_index(), &self.next_value) {
 			(Some(next_index), Some(next_value)) => {
 				match next_index.1.compare(&next_index.0, &next_value.0) {
-					Ordering::Equal => {
-						// TODO could debug assert equality of values
+					Ordering::Equal => unreachable!("Value are not indexed"),
+/*						// TODO could debug assert equality of values
 						self.next_index(None)
-					},
+					},*/
 					Ordering::Less => self.next_index(None),
 					Ordering::Greater => self.next_value(),
 				}
