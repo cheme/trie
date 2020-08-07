@@ -398,6 +398,9 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	stack_index_next: bool,
 	// change in indexing occurs
 	indexing_changed: bool,
+	// key and depth of previous index touch, get reset each time we change
+	// prefix (return index or pop)
+	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
 	state: State,
 	state2: State2,
 }
@@ -439,6 +442,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			indexing_changed: false,
 			state: State::IndexToEnd,
 			state2: State2::Index,
+			previous_touched_index_depth: None,
 		};
 
 		// get first change
@@ -730,17 +734,34 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	// Return true if there is possibly something else to stack
 	fn stack_index(&mut self, current_key_vec: Vec<u8>) -> bool {
 		let change_depth = current_key_vec.len() * nibble_ops::NIBBLE_PER_BYTE;
+		let mut first_possible_next_index = 0;
+		// early exit when not over previous index
+		if let Some((prev_k, prev_d)) = self.previous_touched_index_depth.as_ref() {
+			let common_depth = nibble_ops::biggest_depth(
+				&prev_k[..],
+				&current_key_vec[..],
+			);
+			if &common_depth < prev_d {
+				// not common prefix so
+				first_possible_next_index = if let Some(i) = self.index_iter.last() {
+					i.conf_index_depth + 1
+				} else {
+					0
+				};
+			} else if common_depth == change_depth {
+				// the change is bellow the last index
+				return false;
+			} else {
+				// the index is contain in the change
+				first_possible_next_index = prev_d + 1;
+			}
+		}
 		self.stack_index_next = false;
 		let current_key = current_key_vec.as_slice();
-		let current_index_depth = if let Some(i) = self.index_iter.last() {
-			i.conf_index_depth + 1
-		} else {
-			0
-		};
 		let index_iter = &mut self.index_iter;
 		let indexing_changed = &mut self.indexing_changed;
 		let indexes = &self.indexes;
-		self.indexes_conf.next_depth(current_index_depth, current_key)
+		self.indexes_conf.next_depth(first_possible_next_index, current_key)
 			.map(move |d| {
 				let current_key = current_key_vec.as_slice();
 				let mut iter = indexes.iter(d, current_key);
@@ -914,13 +935,16 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 
 	fn next_index(&mut self, change: Option<Option<V>>) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		self.previous_touched_index_depth = None;
 		let current_index_depth = &mut self.current_index_depth;
+		let previous_touched_index_depth = &mut self.previous_touched_index_depth;
 		// stop value iteration after index
 		self.next_value = None;
 		self.current_value_iter = None;
 		let r = self.index_iter.last_mut().and_then(|i|
 			i.next_index.take().map(|index| {
 				*current_index_depth = (index.1).actual_depth;
+				*previous_touched_index_depth = Some((index.0.clone(), (index.1).actual_depth));
 				(index.0, IndexOrValue::Index(index.1, change))
 			})
 		);
