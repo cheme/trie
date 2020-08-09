@@ -432,29 +432,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		// get first change
 		iter.advance_change();
 		// fetch first indexes
-		iter.stack_index(Vec::new());
-
-		match (iter.buffed_next_index(), &iter.next_change) {
-			(Some(next_index), Some(next_change)) => {
-				// TODO move init value iter to its function
-				match next_index.1.compare(&next_index.0, &next_change.0) {
-					Ordering::Equal
-					| Ordering::Less => (),
-					Ordering::Greater => {
-						let values = iter.values.iter_from(&[]);
-						let range = (Vec::new(), Some(next_index.0.to_vec()));
-						iter.current_value_iter = Some((values, range));
-					},
-				}
-			},
-			(Some(_next_index), None) => (),
-			(None, Some(_next_change)) => {
-				let values = iter.values.iter_from(&[]);
-				let range = (Vec::new(), None);
-				iter.current_value_iter = Some((values, range));
-			},
-			(None, None) => (),
-		}
+		iter.try_stack_index(Vec::new());
+		// value iter
+		iter.try_new_value_iter();
 	
 		iter
 	}
@@ -503,7 +483,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			Element::Change => {
 				let r = self.next_change();
 				if let Some(kv) = r.as_ref() {
-					while self.stack_index(kv.0.clone()) { }
+					while self.try_stack_index(kv.0.clone()) { }
 				}
 				r
 			},
@@ -511,7 +491,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				self.advance_value();
 				let r = self.next_change();
 				if let Some(kv) = r.as_ref() {
-					while self.stack_index(kv.0.clone()) { }
+					while self.try_stack_index(kv.0.clone()) { }
 				}
 				r
 			},
@@ -563,7 +543,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
 	// Return true if there is possibly something else to stack
-	fn stack_index(&mut self, current_key_vec: Vec<u8>) -> bool {
+	fn try_stack_index(&mut self, current_key_vec: Vec<u8>) -> bool {
 		let change_depth = current_key_vec.len() * nibble_ops::NIBBLE_PER_BYTE;
 		let mut first_possible_next_index = 0;
 		// early exit when not over previous index
@@ -619,13 +599,19 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}
 
 	fn advance_index(&mut self) -> bool {
-		self.index_iter.last_mut().map(|i| {
+		if self.index_iter.last_mut().map(|i| {
 			i.next_index = i.iter.next()
 				.filter(|kv| {
-					i.range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
+					i.range.1.as_ref().map(|end| &kv.0 < end)
+						.unwrap_or(true)
 				});
 			i.next_index.is_some()
-		}).unwrap_or(false)
+		}).unwrap_or(false) {
+			self.try_new_value_iter();
+			true
+		} else {
+			false
+		}
 	}
 
 	fn advance_change(&mut self) {
@@ -732,8 +718,33 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		r
 	}
 
+	// attempt to init a new value iter (at start, on new index against next change).
+	fn try_new_value_iter(&mut self) {
+		match (self.buffed_next_index(), &self.next_change) {
+			(Some(next_index), Some(next_change)) => {
+				match next_index.1.compare(&next_index.0, &next_change.0) {
+					Ordering::Equal
+					| Ordering::Less => (),
+					Ordering::Greater => {
+						let values = self.values.iter_from(&[]);
+						let range = (Vec::new(), Some(next_index.0.to_vec()));
+						self.current_value_iter = Some((values, range));
+					},
+				}
+			},
+			(None, Some(_next_change)) => {
+				let values = self.values.iter_from(&[]);
+				let range = (Vec::new(), None);
+				self.current_value_iter = Some((values, range));
+			},
+			(Some(_), None)
+			| (None, None) => (),
+		}
+	}
+
 	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		let r = self.next_value.take().map(|value| (value.0, IndexOrValue::StoredValue(value.1)));
+		let r = self.next_value.take()
+			.map(|value| (value.0, IndexOrValue::StoredValue(value.1)));
 		self.advance_value();
 		r
 	}
@@ -742,7 +753,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		let next_value = &mut self.next_value;
 		self.current_value_iter.as_mut().map(|iter| {
 			*next_value = iter.0.next()
-				.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end).unwrap_or(true));
+				.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end)
+					.unwrap_or(true));
 		});
 	}
 }
