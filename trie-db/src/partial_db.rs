@@ -382,8 +382,6 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	index_iter: Vec<StackedIndex<'a>>,
 	next_change: Option<(Vec<u8>, Option<V>)>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	// instead of an iteration we try to stack an index over
-	stack_index_next: bool,
 	// change in indexing occurs
 	indexing_changed: bool,
 	// key and depth of previous index touch, get reset each time we change
@@ -424,7 +422,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			index_iter: Vec::new(),
 			next_change: None,
 			next_value: None,
-			stack_index_next: true,
 			indexing_changed: false,
 			previous_touched_index_depth: None,
 		};
@@ -432,7 +429,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		// get first change
 		iter.advance_change();
 		// fetch first indexes
-		iter.try_stack_index(Vec::new());
+		iter.try_stack_index(&Vec::new());
 		// value iter
 		iter.try_new_value_iter();
 	
@@ -483,7 +480,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			Element::Change => {
 				let r = self.next_change();
 				if let Some(kv) = r.as_ref() {
-					while self.try_stack_index(kv.0.clone()) { }
+					self.try_stack_index(&kv.0);
 				}
 				r
 			},
@@ -491,7 +488,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				self.advance_value();
 				let r = self.next_change();
 				if let Some(kv) = r.as_ref() {
-					while self.try_stack_index(kv.0.clone()) { }
+					self.try_stack_index(&kv.0);
 				}
 				r
 			},
@@ -542,12 +539,20 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		V: AsRef<[u8]>,
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
-	// Return true if there is possibly something else to stack
-	fn try_stack_index(&mut self, current_key_vec: Vec<u8>) -> bool {
+	fn try_stack_index(&mut self, current_key_vec: &Vec<u8>) {
+		while self.try_stack_index_inner(current_key_vec) { }
+	}
+	// Return when there is possibly another index to stack.
+	fn try_stack_index_inner(&mut self, current_key_vec: &Vec<u8>) -> bool {
 		let change_depth = current_key_vec.len() * nibble_ops::NIBBLE_PER_BYTE;
 		let mut first_possible_next_index = 0;
 		// early exit when not over previous index
 		if let Some((prev_k, prev_d)) = self.previous_touched_index_depth.as_ref() {
+			// TODO when code stable, this should be mostly the case except when
+			// index stack got poped (empty val in middle), so except in this case
+			// this in depth comparison is not necessary. Even when poped we simply 
+			// can compare agaist i.conf_index_depth.
+			// TODO debug this and optimize (remove prev_k storage)..
 			let common_depth = nibble_ops::biggest_depth(
 				&prev_k[..],
 				&current_key_vec[..],
@@ -567,7 +572,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				first_possible_next_index = prev_d + 1;
 			}
 		}
-		self.stack_index_next = false;
 		let current_key = current_key_vec.as_slice();
 		let index_iter = &mut self.index_iter;
 		let indexing_changed = &mut self.indexing_changed;
@@ -576,7 +580,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			.map(move |d| {
 				let current_key = current_key_vec.as_slice();
 				let mut iter = indexes.iter(d, current_key);
-				let range = value_prefix_index(d, current_key_vec);
+				// TODO try avoid this alloc
+				let range = value_prefix_index(d, current_key_vec.to_vec());
 				let mut value_over_index = false;
 				let first = iter.next().filter(|kv| {
 					value_over_index = change_depth > kv.1.actual_depth;
@@ -675,13 +680,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}
 
 	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-/*		if self.stack_index_next {
-			let next_change_index = self.next_change.as_ref().map(|n| n.0.clone())
-				.expect("stack_index_next is set through an initialized next change");
-			self.stack_index(next_change_index);
-			// compare again.
-			return self.next();
-		}*/
 		let next_change = self.next_change.take();
 		self.advance_change();
 		if let Some((key, Some(change))) = next_change {
