@@ -23,7 +23,7 @@ use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
 use crate::node_codec::NodeCodec;
-use crate::node::{Node, NodeHandle};
+use crate::node::Node;
 use crate::{TrieLayout, TrieHash};
 use crate::partial_db::{IndexBackend, IndexPosition, IndexOrValue, Index as PartialIndex};
 use crate::rstd::convert::TryInto;
@@ -153,27 +153,6 @@ impl<T, V> CacheAccum<T, V>
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
 	}
 
-	fn flush_index (
-		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-		target_depth: usize,
-		(k2, v2): (impl AsRef<[u8]>, PartialIndex),
-	) {
-		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
-		let pr = NibbleSlice::new_offset(
-			&k2.as_ref()[..],
-			v2.actual_depth / nibble_ops::BIT_PER_NIBBLE,
-		);
-		// TODO could consider storing hash.
-		// TODO mechanism to avoid writing back indexes (need to know if index was change in iterator)
-		// TODO this is not right (actual depth is different)
-		let hash = callback.process(pr.left(), v2.encoded_node, false, (k2.as_ref(), target_depth * nibble_ops::BIT_PER_NIBBLE), false);
-
-		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value as usize, Some(hash));
-	}
-
-
 	fn flush_branch(
 		&mut self,
 		no_extension: bool,
@@ -181,7 +160,6 @@ impl<T, V> CacheAccum<T, V>
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize,
 		is_last: bool,
-		upward: bool, // TODO remove param EMCH??
 	) {
 		while self.last_depth() > new_depth || is_last && !self.is_empty() {
 			let lix = self.last_depth();
@@ -284,35 +262,6 @@ impl<T, V> CacheAccum<T, V>
 		);
 		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
 	}
-
-	#[inline(always)]
-	fn no_extension_index(
-		&mut self,
-		key_branch: &[u8],
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-		branch_d: usize,
-		is_root: bool,
-		nkey: Option<(usize, usize)>,
-		children: ArrayNode<T>,
-		value: Option<V>,
-	) -> ChildReference<TrieHash<T>> {
-		let last = self.0.len() - 1;
-		let nkeyix = nkey.unwrap_or((0, 0));
-		let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
-		let encoded = T::Codec::branch_node_nibbled(
-			pr.right_range_iter(nkeyix.1),
-			nkeyix.1,
-			children.as_ref().iter(),
-			value.as_ref().map(|v| v.as_ref()),
-		);
-		self.reset_depth(branch_d);
-		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.1).unwrap_or(0);
-		let pr = NibbleSlice::new_offset(
-			&key_branch,
-			branch_d - ext_length,
-		);
-		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
-	}
 }
 
 /// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.
@@ -352,7 +301,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 				// do not put with next, previous is last of a branch
 				depth_queue.flush_value(callback, last_depth, &previous_value);
 				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false, false);
+				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
 			previous_value = (k, v);
@@ -372,7 +321,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		} else {
 			depth_queue.flush_value(callback, last_depth, &previous_value);
 			let ref_branches = previous_value.0;
-			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true, false);
+			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
 		}
 	} else {
 		// nothing null root corner case
@@ -407,7 +356,7 @@ impl<T: TrieLayout> IndexOrValueDecoded<T> {
 			},
 			//Node::NibbledBranch(_partial_slice, [Option<NodeHandle<'a>>; nibble_ops::NIBBLE_LENGTH], Option<&'a [u8]>),
 			Ok(Node::NibbledBranch(_partial_slice, encoded_children, encoded_value)) => {
-				for (i, child) in encoded_children.into_iter().enumerate() {
+				for (i, child) in encoded_children.iter().enumerate() {
 					if let Some(child) = child {
 						children[i] = Some(child.clone().try_into().expect("Corrupted index node"));
 					}
@@ -511,7 +460,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						if is_branch {
 							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false, true);
+							depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
 						} else {
 							let previous_value = (&previous_value.0, v.expect("Value are defined"));
 							depth_queue.flush_value(callback, depth_item, &previous_value);
@@ -533,7 +482,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						if is_branch {
 							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
+							depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
 						} else {
 							let previous_value = (&previous_value.0, v.expect("Value are defined"));
 							depth_queue.flush_value(callback, last_depth, &previous_value);
@@ -542,7 +491,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 				}
 				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false, false);
+				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
 			previous_value = (k, v);
@@ -564,7 +513,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						if is_branch {
 							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true, true);
+							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true);
 						} else {
 							let previous_value = (&k2, v.expect("Value are defined"));
 							depth_queue.flush_value(callback, last_depth, &previous_value);
@@ -594,7 +543,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					if is_branch {
 						let depth = d;
 						depth_queue.set_cache_index(depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false, true);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
 					} else {
 						let previous_value = (&previous_value.0, v.expect("Value are defined"));
 						depth_queue.flush_value(callback, last_depth, &previous_value);
@@ -602,7 +551,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				},
 			}
 			let ref_branches = previous_value.0;
-			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true, false);
+			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
 		}
 	} else {
 		// nothing null root corner case
@@ -707,7 +656,6 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 			let index_position: IndexPosition = node_key.0.into();
 			if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
 				if node_key.1 >= next_save_index {
-					let next_nibble_index = next_save_index;
 					let partial_index = PartialIndex {
 						encoded_node,
 						actual_depth: node_key.1,
@@ -1184,7 +1132,7 @@ mod test {
 			(b"tewtb".to_vec(), vec![6u8; 32]),
 			(b"tezta".to_vec(), vec![6u8; 32]),
 		];
-		let two_level_branch = vec![
+		/*let two_level_branch = vec![
 			(b"test".to_vec(), vec![2u8; 32]),
 			(b"testi".to_vec(), vec![2u8; 32]),
 			(b"tett".to_vec(), vec![3u8; 32]),
@@ -1197,9 +1145,9 @@ mod test {
 			(b"tewtbi".to_vec(), vec![6u8; 32]),
 			(b"tezta".to_vec(), vec![6u8; 32]),
 			(b"teztai".to_vec(), vec![6u8; 32]),
-		];
+		];*/
 
-		let mut inputs = vec![
+		let inputs = vec![
 
 //			(one_level_branch.clone(), vec![(b"testi".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 			(empty.clone(), vec![], vec![], Some(0)),
