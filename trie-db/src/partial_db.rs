@@ -710,6 +710,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		);
 		while !self.advance_index() {
 			if !self.pop_index() {
+				self.try_new_value_iter();
 				break;
 			}
 		}

@@ -1037,6 +1037,8 @@ pub fn compare_index_calc<
 	}
 
 	assert_eq!(root, root_new);
+	let root_old = root.clone();
+	let memdb_old = memdb.clone();
 	let reference_memdb: std::collections::btree_map::BTreeMap<Vec<u8>, Vec<u8>> = data.iter().cloned().collect();
 	let reference_memdb = CountCheck::new(reference_memdb, nb_node_fetch.is_some());
 	let reference_indexes = indexes_backend.clone();
@@ -1065,6 +1067,27 @@ pub fn compare_index_calc<
 		cb.root.unwrap_or(Default::default())
 	};
 
+	if root_new != root {
+		println!("{:?}", indexes_backend);
+		println!("bef");
+		{
+			let db : &dyn hash_db::HashDB<_, _> = &memdb_old;
+			let t = RefTrieDBNoExt::new(&db, &root_old).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:x?}", a);
+			}
+		}
+		println!("aft");
+		{
+			let db : &dyn hash_db::HashDB<_, _> = &memdb;
+			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:x?}", a);
+			}
+		}
+	}
 
 	//assert!(false);
 	assert_eq!(root, root_new);
