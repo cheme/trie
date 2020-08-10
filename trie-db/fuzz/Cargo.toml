@@ -16,6 +16,7 @@ keccak-hasher = { path = "../../test-support/keccak-hasher", version = "0.15.2" 
 
 [dependencies.trie-db]
 path = ".."
+feature = ["fuzz"]
 
 [dependencies.libfuzzer-sys]
 git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
@@ -64,3 +65,7 @@ path = "fuzz_targets/trie_proof_valid.rs"
 [[bin]]
 name = "trie_proof_invalid"
 path = "fuzz_targets/trie_proof_invalid.rs"
+
+[[bin]]
+name = "indexing"
+path = "fuzz_targets/indexing.rs"

@@ -132,7 +132,7 @@ fn fuzz_to_data_fix_length(input: &[u8]) -> Vec<(Vec<u8>,Vec<u8>)> {
 	result
 }
 
-fn data_sorted_unique(input: Vec<(Vec<u8>,Vec<u8>)>) -> Vec<(Vec<u8>,Vec<u8>)> {
+fn data_sorted_unique<V>(input: Vec<(Vec<u8>, V)>) -> Vec<(Vec<u8>, V)> {
 	let mut m = std::collections::BTreeMap::new();
 	for (k,v) in input.into_iter() {
 		let _ = m.insert(k,v); // latest value for uniqueness
@@ -332,6 +332,59 @@ pub fn fuzz_that_verify_rejects_invalid_proofs(input: &[u8]) {
 	assert!(verify_proof::<ExtensionLayout, _, _, _>(&root, &proof, items.iter()).is_err());
 }
 
+pub fn fuzz_indexing_root_calc(input: &[u8], indexes: Option<reference_trie::DepthIndexes>, with_rem: bool) {
+	if input.len() < 7 {
+		return;
+	}
+	let indexes_conf = indexes.unwrap_or_else(|| {
+		let mut depth_indexes = Vec::new();
+		let nb = input[0] % 3 + 1;
+		for i in 0..nb {
+			 // runing on small depth, no 0 as implicit
+			depth_indexes.push((input[(i + 1) as usize] % 32) as u32 + 1);
+		}
+		depth_indexes.sort();
+		reference_trie::DepthIndexes::new(&depth_indexes[..])
+	});
+	let split = input[5] as usize;
+	let rem = input[6] as usize;
+	let mut data = fuzz_to_data(&input[5..]);
+	if data.len() == 0 {
+		return;
+	}
+	let split = split % data.len();
+	let splitted = data.len() - split;
+	let rem = if with_rem && splitted > 0 {
+		rem % splitted
+	} else {
+		0
+	};
+	let mut change: Vec<(Vec<u8>, Option<Vec<u8>>)> = data[split..].iter().enumerate().map(|(i, (k, v))| {
+		if i <= data.len() - rem {
+			(k.clone(), Some(v.clone()))
+		} else {
+			(k.clone(), None) // this is dropping bits in a way that is probably bad for fuzzer 
+		}
+	}).collect();
+	data.truncate(split);
+
+	if with_rem {
+		// also remove existing node
+		let to_rem_existing = rem / 2;
+		if data.len() > to_rem_existing {
+			for i in 0..to_rem_existing {
+				change.push((data[i].0.clone(), None));
+			}
+		}
+	}
+
+	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
+	let mut indexes = std::collections::BTreeMap::new();
+	data = data_sorted_unique(data);
+	change = data_sorted_unique(change);
+	reference_trie::compare_index_calc(data, change, memdb, &mut indexes, &indexes_conf, None);
+}
+
 fn test_generate_proof<L: TrieLayout>(
 	entries: Vec<(Vec<u8>, Vec<u8>)>,
 	keys: Vec<Vec<u8>>,
@@ -361,4 +414,14 @@ fn test_generate_proof<L: TrieLayout>(
 		.collect();
 
 	(root, proof, items)
+}
+
+#[test]
+fn test_failure() {
+	let data = [
+		vec![0xa6,0xff,0x27,0xf7,0x3,0x1,0x0,0xff,0x27,0xf7,0xff,0xc5,0xc5,0xee,],
+	];
+	for data in data.iter() {
+		fuzz_indexing_root_calc(data.as_slice(), None, true);
+	}
 }

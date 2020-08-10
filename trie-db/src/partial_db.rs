@@ -727,6 +727,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						let values = self.values.iter_from(&[]);
 						let range = (Vec::new(), Some(next_index.0.to_vec()));
 						self.current_value_iter = Some((values, range));
+						self.advance_value();
 					},
 				}
 			},
@@ -734,6 +735,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				let values = self.values.iter_from(&[]);
 				let range = (Vec::new(), None);
 				self.current_value_iter = Some((values, range));
+				self.advance_value();
 			},
 			(Some(_), None)
 			| (None, None) => (),
