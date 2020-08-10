@@ -127,18 +127,28 @@ fn fuzz_to_data_fix_length(input: &[u8]) -> Vec<(Vec<u8>,Vec<u8>)> {
 		let val = if input.len() > ix + 2 {
 			input[ix..ix+2].to_vec()
 		} else { break };
-		result.push((key,val));
+		result.push((key, val));
 	}
 	result
 }
 
 fn data_sorted_unique<V>(input: Vec<(Vec<u8>, V)>) -> Vec<(Vec<u8>, V)> {
 	let mut m = std::collections::BTreeMap::new();
-	for (k,v) in input.into_iter() {
-		let _ = m.insert(k,v); // latest value for uniqueness
+	for (k, v) in input.into_iter() {
+		let _ = m.insert(k, v); // latest value for uniqueness
 	}
 	m.into_iter().collect()
 }
+
+fn data_sorted_unique_extend(input: Vec<(Vec<u8>, Vec<u8>)>) -> Vec<(Vec<u8>, Vec<u8>)> {
+	let mut m = std::collections::BTreeMap::new();
+	for (k, mut v) in input.into_iter() {
+		v.resize(32, v[0]);
+		let _ = m.insert(k, v); // latest value for uniqueness
+	}
+	m.into_iter().collect()
+}
+
 
 pub fn fuzz_that_compare_implementations(input: &[u8]) {
 	let data = data_sorted_unique(fuzz_to_data(input));
@@ -332,7 +342,7 @@ pub fn fuzz_that_verify_rejects_invalid_proofs(input: &[u8]) {
 	assert!(verify_proof::<ExtensionLayout, _, _, _>(&root, &proof, items.iter()).is_err());
 }
 
-pub fn fuzz_indexing_root_calc(input: &[u8], indexes: Option<reference_trie::DepthIndexes>, with_rem: bool) {
+pub fn fuzz_indexing_root_calc(input: &[u8], indexes: Option<reference_trie::DepthIndexes>, with_rem: bool, big_values: bool) {
 	if input.len() < 7 {
 		return;
 	}
@@ -380,7 +390,11 @@ pub fn fuzz_indexing_root_calc(input: &[u8], indexes: Option<reference_trie::Dep
 
 	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	let mut indexes = std::collections::BTreeMap::new();
-	data = data_sorted_unique(data);
+	data = if big_values {
+		data_sorted_unique_extend(data)
+	} else {
+		data_sorted_unique(data)
+	};
 	change = data_sorted_unique(change);
 	reference_trie::compare_index_calc(data, change, memdb, &mut indexes, &indexes_conf, None);
 }
@@ -419,10 +433,11 @@ fn test_generate_proof<L: TrieLayout>(
 #[test]
 fn test_failure() {
 	let data = [
-//		vec![0xa6,0xff,0x27,0xf7,0x3,0x1,0x0,0xff,0x27,0xf7,0xff,0xc5,0xc5,0xee,],
+		vec![0xa6,0xff,0x27,0xf7,0x3,0x1,0x0,0xff,0x27,0xf7,0xff,0xc5,0xc5,0xee,],
 		vec![0x1,0xfb,0x0,0xff,0x32,0x20,0x0,0x0,0x20,0xe,0x3d,0xec,0x0,],
 	];
 	for data in data.iter() {
-		fuzz_indexing_root_calc(data.as_slice(), None, true);
+		fuzz_indexing_root_calc(data.as_slice(), None, true, false);
+		fuzz_indexing_root_calc(data.as_slice(), None, true, true);
 	}
 }
