@@ -255,6 +255,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
 		let odd = index.actual_depth % nibble_ops::NIBBLE_PER_BYTE;
+		// TODO EMCH can trim the position to actual size of index (just gain size storage).
 		if odd != 0 {
 			position.last_mut().map(|l| 
 				*l = *l & !(255 >> (odd * nibble_ops::BIT_PER_NIBBLE))

@@ -332,6 +332,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 
 /// Decoded version of `IndexOrValue`.
 enum IndexOrValueDecoded<T: TrieLayout> {
+	// TODO EMCH delete last bool: we only got branch index
 	Index(ArrayNode<T>, Option<Vec<u8>>, usize, bool),
 	Value(Vec<u8>),
 	StoredValue(Vec<u8>),

@@ -1010,6 +1010,8 @@ pub fn compare_index_calc<
 	indexes: &DepthIndexes,
 	nb_node_fetch: Option<usize>,
 ) {
+	let mut debug_display = memdb.clone();
+	let debug_changes = changes.clone(); // TODO make those debug conditional (don't slow fuzzer with that)
 	let root_new: <KeccakHasher as Hasher>::Out = {
 		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
 		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
@@ -1082,6 +1084,28 @@ pub fn compare_index_calc<
 		{
 			let db : &dyn hash_db::HashDB<_, _> = &memdb;
 			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
+			println!("{:?}", t);
+			for a in t.iter().unwrap() {
+				println!("a:{:x?}", a);
+			}
+		}
+		println!("build from indexes");
+		{
+			let root_new: <KeccakHasher as Hasher>::Out = {
+				let mut cb = TrieBuilder::new(&mut debug_display);
+	
+				let iter = RootIndexIterator::new(
+					&reference_memdb,
+					&reference_indexes,
+					&indexes,
+					debug_changes.into_iter(),
+					Vec::new(),
+				);
+				trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(iter, &mut cb);
+				cb.root.unwrap_or(Default::default())
+			};
+			let db : &dyn hash_db::HashDB<_, _> = &debug_display;
+			let t = RefTrieDBNoExt::new(&db, &root_new).unwrap();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:x?}", a);

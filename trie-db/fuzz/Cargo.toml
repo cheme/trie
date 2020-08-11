@@ -16,7 +16,6 @@ keccak-hasher = { path = "../../test-support/keccak-hasher", version = "0.15.2" 
 
 [dependencies.trie-db]
 path = ".."
-feature = ["fuzz"]
 
 [dependencies.libfuzzer-sys]
 git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
