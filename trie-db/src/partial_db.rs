@@ -383,8 +383,6 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	index_iter: Vec<StackedIndex<'a>>,
 	next_change: Option<(Vec<u8>, Option<V>)>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	// change in indexing occurs
-	indexing_changed: bool,
 	// key and depth of previous index touch, get reset each time we change
 	// prefix (return index or pop)
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
@@ -423,14 +421,22 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			index_iter: Vec::new(),
 			next_change: None,
 			next_value: None,
-			indexing_changed: false,
 			previous_touched_index_depth: None,
 		};
 
 		// get first change
 		iter.advance_change();
-		// fetch first indexes
-		iter.try_stack_index(&Vec::new());
+		// 0 depth index is always defined.
+		let mut root_iter = iter.indexes.iter(0, &[]);
+		let first = root_iter.next();
+		if first.is_some() {
+			iter.index_iter.push(StackedIndex {
+				iter: root_iter,
+				range: (Vec::new(), None),
+				next_index: first,
+				conf_index_depth: 0,
+			});
+		}
 		// value iter
 		iter.try_new_value_iter();
 	
@@ -465,7 +471,35 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			State::IndexToEnd => self.next_index(None),
 			State::Ended => None,
 		}*/
-		match self.next_element() {
+		let next_element = self.next_element();
+		let stacked = match next_element {
+			Element::Value => false,
+			Element::None => false,
+			Element::IndexChange
+			| Element::Change
+			| Element::ChangeValue => if let Some(kv) = self.next_change.as_ref().map(|kv| &kv.0) {
+				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) {
+					self.do_stack_index(i)
+				} else {
+					false
+				}
+			} else {
+				false
+			},
+			Element::Index  => if let Some(kv) = self.buffed_next_index().map(|kv| kv.0.clone()) {
+				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) {
+					self.do_stack_index(i)
+				} else {
+					false
+				}
+			} else {
+				false
+			},
+		};
+		if stacked {
+			return self.next();
+		}
+		match next_element {
 			Element::Value => self.next_value(),
 			Element::Index => self.next_index(None),
 			Element::IndexChange => {
@@ -478,20 +512,10 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 					self.next()
 				}
 			},
-			Element::Change => {
-				let r = self.next_change();
-				if let Some(kv) = r.as_ref() {
-					self.try_stack_index(&kv.0);
-				}
-				r
-			},
+			Element::Change => self.next_change(),
 			Element::ChangeValue => {
 				self.advance_value();
-				let r = self.next_change();
-				if let Some(kv) = r.as_ref() {
-					self.try_stack_index(&kv.0);
-				}
-				r
+				self.next_change()
 			},
 			Element::None => None,
 		}
@@ -540,72 +564,55 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		V: AsRef<[u8]>,
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
-	fn try_stack_index(&mut self, current_key_vec: &Vec<u8>) {
-		// TODO this is wrong, we need to stack one at a time and switch
-		// to returning the stacked index: meaning stacking on index returned
-		// by checking if next change can stack new and OnlyAfter that push a
-		// value iterator!!!
-		while self.try_stack_index_inner(current_key_vec) { }
-	}
-	// Return when there is possibly another index to stack.
-	fn try_stack_index_inner(&mut self, current_key_vec: &Vec<u8>) -> bool {
-		let change_depth = current_key_vec.len() * nibble_ops::NIBBLE_PER_BYTE;
-		let mut first_possible_next_index = 0;
-		// early exit when not over previous index
-		if let Some((prev_k, prev_d)) = self.previous_touched_index_depth.as_ref() {
-			// TODO when code stable, this should be mostly the case except when
-			// index stack got poped (empty val in middle), so except in this case
-			// this in depth comparison is not necessary. Even when poped we simply 
-			// can compare agaist i.conf_index_depth.
-			// TODO debug this and optimize (remove prev_k storage)..
+	// Return true if we stacked something and the stack item is not over current item.
+	fn try_stack_index(&self, current_key_vec: &Vec<u8>, current_depth: usize) -> Option<usize> {
+		// see if next change is bellow
+		if let Some((next_k, _)) = self.next_change.as_ref() {
 			let common_depth = nibble_ops::biggest_depth(
-				&prev_k[..],
 				&current_key_vec[..],
+				&next_k[..],
 			);
-			if &common_depth < prev_d {
-				// not common prefix so
-				first_possible_next_index = if let Some(i) = self.index_iter.last() {
-					i.conf_index_depth + 1
-				} else {
-					0
-				};
-			} else if common_depth == change_depth {
-				// the change is bellow the last index
-				return false;
-			} else {
-				// the index is contain in the change
-				first_possible_next_index = prev_d + 1;
+			if common_depth <= current_depth {
+				return None;
 			}
+			// the index is contain in the change
+			Some(current_depth + 1)
+		} else {
+			None
 		}
-		let current_key = current_key_vec.as_slice();
-		let index_iter = &mut self.index_iter;
-		let indexing_changed = &mut self.indexing_changed;
-		let indexes = &self.indexes;
-		self.indexes_conf.next_depth(first_possible_next_index, current_key)
-			.map(move |d| {
-				let current_key = current_key_vec.as_slice();
-				let mut iter = indexes.iter(d, current_key);
-				// TODO try avoid this alloc
-				let range = value_prefix_index(d, current_key_vec.to_vec());
-				let mut value_over_index = false;
-				let first = iter.next().filter(|kv| {
-					value_over_index = change_depth > kv.1.actual_depth;
-					range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
-				});
-	
-				if first.is_some() {
-					index_iter.push(StackedIndex {
-						iter,
-						range,
-						next_index: first,
-						conf_index_depth: d,
+	}
+
+	fn do_stack_index(&mut self, first_possible_next_index: usize) -> bool {
+		if let Some((next_change_key, _)) = self.next_change.as_ref() {
+			let index_iter = &mut self.index_iter;
+			let indexes = &self.indexes;
+			let change_depth = next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE;
+			self.indexes_conf.next_depth(first_possible_next_index, next_change_key)
+				.map(move |d| {
+					let mut iter = indexes.iter(d, next_change_key);
+					// TODO try avoid this alloc
+					let range = value_prefix_index(d, next_change_key.to_vec());
+					let mut value_over_index = false;
+					let first = iter.next().filter(|kv| {
+						value_over_index = change_depth > kv.1.actual_depth;
+						range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
 					});
-					*indexing_changed = true;
-					value_over_index
-				} else {
-					false
-				}
-			}).unwrap_or(false)
+		
+					if first.is_some() {
+						index_iter.push(StackedIndex {
+							iter,
+							range,
+							next_index: first,
+							conf_index_depth: d,
+						});
+						value_over_index
+					} else {
+						false
+					}
+				}).unwrap_or(false)
+		} else {
+			false
+		}
 	}
 
 	fn advance_index(&mut self) -> bool {
