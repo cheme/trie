@@ -255,6 +255,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
 		let odd = index.actual_depth % nibble_ops::NIBBLE_PER_BYTE;
+		// TODO EMCH can trim the position to actual size of index (just gain size storage).
 		if odd != 0 {
 			position.last_mut().map(|l| 
 				*l = *l & !(255 >> (odd * nibble_ops::BIT_PER_NIBBLE))
@@ -540,6 +541,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
 	fn try_stack_index(&mut self, current_key_vec: &Vec<u8>) {
+		// TODO this is wrong, we need to stack one at a time and switch
+		// to returning the stacked index: meaning stacking on index returned
+		// by checking if next change can stack new and OnlyAfter that push a
+		// value iterator!!!
 		while self.try_stack_index_inner(current_key_vec) { }
 	}
 	// Return when there is possibly another index to stack.
