@@ -426,7 +426,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		// depth of last item
 		let mut last_depth = 0;
 
-		let mut stack_taint = Vec::new();// TODO replace by 16 small vec.
+		let mut pending_taint = Vec::new();// TODO replace by 16 small vec.
+		// can taint if consecutive in depth with an index
+//		let mut can_taint = false;
 		let mut single = true;
 		for (k, v) in iter_input {
 			let v: IndexOrValueDecoded<T> = v.into();
@@ -459,10 +461,16 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					depth_queue.taint_child(k.as_ref());
 				}
 */
-				stack_taint.push(k);
+//				if can_taint {
+				pending_taint.push(k);
+//				}
 				continue;
 			}
 
+			// can taint is true when we got backed up delete and enter for the first time, other moves
+			// (upward or descend) indicates that there is another element in child so taint
+			// is not needed.
+			let mut can_taint = false;
 			single = false;
 			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
 				// the new key include the previous one : branch value case
@@ -482,6 +490,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 				}
 			} else if depth_item >= last_depth {
+				//can_taint = true;
 				// put previous with next (common branch previous value can be flush)
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
@@ -507,6 +516,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 				}
 			} else if depth_item < last_depth {
+				can_taint = true;
 				// do not put with next, previous is last of a branch
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
@@ -536,8 +546,12 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
-			for tain in crate::rstd::mem::replace(&mut stack_taint, Vec::new()) {
-				depth_queue.taint_child(tain.as_ref());
+			if can_taint {
+				for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
+					depth_queue.taint_child(tain.as_ref());
+				}
+			} else {
+				pending_taint.clear()
 			}
 			previous_value = (k, v);
 			last_depth = depth_item;

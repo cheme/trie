@@ -1070,7 +1070,7 @@ pub fn compare_index_calc<
 	};
 
 	if root_new != root {
-		println!("{:?}", indexes_backend);
+		println!("{:?}", reference_indexes);
 		println!("bef");
 		{
 			let db : &dyn hash_db::HashDB<_, _> = &memdb_old;

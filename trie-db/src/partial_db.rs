@@ -420,6 +420,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		deleted_indexes: Vec<(usize, IndexPosition)>,
 	) -> Self {
 
+/*		for a in changes_iter {
+			println!("{:?}", (a.0, a.1.as_ref().map(|v| v.as_ref())));
+		}
+		panic!("dd");*/
 		let mut iter = RootIndexIterator {
 			values,
 			indexes,
@@ -487,7 +491,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			Element::IndexChange
 			| Element::Change
 			| Element::ChangeValue => if let Some(kv) = self.next_change.as_ref().map(|kv| &kv.0) {
-				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) {
+				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) { // TODO some internal do not make sense for change eg common path is always change length
 					self.do_stack_index(i)
 				} else {
 					false
