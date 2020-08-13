@@ -362,6 +362,8 @@ pub enum IndexOrValue<B> {
 	Index(Index, Option<Option<B>>),
 	/// Value node value, from change set.
 	Value(B),
+	/// Dropped value node, from change set.
+	DroppedValue,
 	/// Value node value, from existing values.
 	StoredValue(Vec<u8>),
 }
@@ -386,7 +388,7 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	/// value or change, a delete child is returned.
 	/// TODO the end range is currently unnecessary as the next index would
 	/// also end it.
-	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>), bool)>,
+	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
 	index_iter: Vec<StackedIndex<'a>>,
 	next_change: Option<(Vec<u8>, Option<V>)>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
@@ -493,8 +495,8 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			} else {
 				false
 			},
-			Element::Index  => if let Some(kv) = self.buffed_next_index().map(|kv| kv.0.clone()) {
-				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) {
+			Element::Index  => if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
+				if let Some(i) = self.try_stack_index(&kv, depth) {
 					self.do_stack_index(i)
 				} else {
 					false
@@ -597,7 +599,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				&current_key_vec[..],
 				&next_k[..],
 			);
-			if common_depth <= current_depth {
+			if common_depth < current_depth {
 				return None;
 			}
 			// the index is contain in the change
@@ -668,7 +670,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				let values = self.values.iter_from(&start[..]);
 				let range = (start, end);
 				assert!(self.current_value_iter.is_none());
-				self.current_value_iter = Some((values, range, false));
+				self.current_value_iter = Some((values, range));
 				self.advance_value();
 				// TODO here we will totally consume value before next pop
 				// -> could use a specific state.
@@ -740,11 +742,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let next_change = self.next_change.take();
 		self.advance_change();
-		if let Some((key, Some(change))) = next_change {
-			Some((key, IndexOrValue::Value(change)))
-		} else {
-			// skip delete
-			self.next()
+		match next_change {
+			Some((key, Some(change))) => Some((key, IndexOrValue::Value(change))),
+			Some((key, None)) => Some((key, IndexOrValue::DroppedValue)),
+			None => None
 		}
 	}
 
@@ -788,14 +789,14 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				let end = end_prefix(&start[..]);
 				// TODO we shall remove start
 				let range = (start, end);
-				self.current_value_iter = Some((values, range, false));
+				self.current_value_iter = Some((values, range));
 				self.advance_value();
 				true
 			},
 			(None, Some(_next_change)) => {
 				let values = self.values.iter_from(&[]);
 				let range = (Vec::new(), None);
-				self.current_value_iter = Some((values, range, false));
+				self.current_value_iter = Some((values, range));
 				self.advance_value();
 				true
 			},
@@ -807,7 +808,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let r = self.next_value.take()
 			.map(|value| (value.0, IndexOrValue::StoredValue(value.1)));
-		self.advance_value();
+		if r.is_some() {
+			self.advance_value();
+		}
 		r
 	}
 

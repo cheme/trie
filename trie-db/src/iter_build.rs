@@ -262,6 +262,13 @@ impl<T, V> CacheAccum<T, V>
 		);
 		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
 	}
+
+	fn taint_child(&mut self, key_branch: &[u8]) {
+		if let Some((children, _, depth)) = self.0.last_mut() {
+			let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth);
+			children[ix as usize] = None;
+		}
+	}
 }
 
 /// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.
@@ -335,6 +342,7 @@ enum IndexOrValueDecoded<T: TrieLayout> {
 	// TODO EMCH delete last bool: we only got branch index
 	Index(ArrayNode<T>, Option<Vec<u8>>, usize, bool),
 	Value(Vec<u8>),
+	DroppedValue,
 	StoredValue(Vec<u8>),
 }
 
@@ -377,6 +385,7 @@ impl<T: TrieLayout> From<IndexOrValue<Vec<u8>>> for IndexOrValueDecoded<T> {
 	fn from(v: IndexOrValue<Vec<u8>>) -> Self {
 			match v {
 				IndexOrValue::Value(v) => IndexOrValueDecoded::Value(v),
+				IndexOrValue::DroppedValue => IndexOrValueDecoded::DroppedValue,
 				IndexOrValue::StoredValue(v) => IndexOrValueDecoded::StoredValue(v),
 				IndexOrValue::Index(index, new_value) => IndexOrValueDecoded::new_index(index, new_value),
 			}
@@ -396,7 +405,12 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 	let mut depth_queue = CacheAccum::<T, Vec<u8>>::new();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
-	if let Some((k, v)) = iter_input.next() {
+	let mut first = iter_input.next();
+	while let Some((_k, IndexOrValue::DroppedValue)) = &first {
+		// drop value without a first stacked item do nothing
+		first = iter_input.next();
+	};
+	if let Some((k, v)) = first {
 		/*let (k, v) = match previous_value.1 {
 			IndexOrValue::Value(v) => (previous_value.0, IndexOrValue::Value(v)),
 			IndexOrValue::StoredValue(v) => (previous_value.0, IndexOrValue::StoredValue(v)),
@@ -412,11 +426,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		// depth of last item
 		let mut last_depth = 0;
 
+		let mut stack_taint = Vec::new();// TODO replace by 16 small vec.
 		let mut single = true;
 		for (k, v) in iter_input {
 			let v: IndexOrValueDecoded<T> = v.into();
-	
-			single = false;
+
 			let common_depth = nibble_ops::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
 			let common_depth = match (&previous_value.1, &v) {
 				(IndexOrValueDecoded::Index(_, _, prev_d, _), IndexOrValueDecoded::Index(_, _, d, _)) => {
@@ -432,6 +446,24 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			};
 			// 0 is a reserved value : could use option
 			let depth_item = common_depth;
+
+			if let IndexOrValueDecoded::DroppedValue = &v {
+/*				// if immediately after index
+				if let IndexOrValueDecoded::Index(children, _, depth, _) = &mut previous_value.1 {
+					if common_depth > *depth {
+						let ix = NibbleSlice::new(k.as_ref()).at(*depth + 1);
+						children[ix as usize] = None;
+					}
+				} else {
+					// try taint latest on stack
+					depth_queue.taint_child(k.as_ref());
+				}
+*/
+				stack_taint.push(k);
+				continue;
+			}
+
+			single = false;
 			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
 				// the new key include the previous one : branch value case
 				// just stored value at branch depth
@@ -441,6 +473,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 					IndexOrValueDecoded::StoredValue(v) => {
 						depth_queue.set_cache_value(common_depth, Some(v));
+					},
+					IndexOrValueDecoded::DroppedValue => {
+						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, _d, _is_branch) => {
 						depth_queue.set_cache_index(common_depth, v, children);
@@ -456,6 +491,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::StoredValue(v) => {
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, depth_item, &previous_value);
+					},
+					IndexOrValueDecoded::DroppedValue => {
+						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						if is_branch {
@@ -479,6 +517,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						let previous_value = (&previous_value.0, v);
 						depth_queue.flush_value(callback, last_depth, &previous_value);
 					},
+					IndexOrValueDecoded::DroppedValue => {
+						unreachable!();
+					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						if is_branch {
 							let depth = d;
@@ -495,6 +536,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
+			for tain in crate::rstd::mem::replace(&mut stack_taint, Vec::new()) {
+				depth_queue.taint_child(tain.as_ref());
+			}
 			previous_value = (k, v);
 			last_depth = depth_item;
 		}
@@ -505,6 +549,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let v2 = match v2 {
 				IndexOrValueDecoded::Value(v) => v,
 				IndexOrValueDecoded::StoredValue(v) => v,
+				IndexOrValueDecoded::DroppedValue => {
+					unreachable!();
+				},
 				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 					let no_children = children.iter().position(|v| v.is_some()).is_none();
 					// check if empty
@@ -535,6 +582,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				IndexOrValueDecoded::Value(v) => {
 					let previous_value = (&previous_value.0, v);
 					depth_queue.flush_value(callback, last_depth, &previous_value);
+				},
+				IndexOrValueDecoded::DroppedValue => {
+					unreachable!()
 				},
 				IndexOrValueDecoded::StoredValue(v) => {
 					let previous_value = (&previous_value.0, v);
