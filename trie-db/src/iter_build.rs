@@ -505,6 +505,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
+						can_taint = true;
 						if is_branch {
 							let depth = d;
 							depth_queue.set_cache_index(depth, v, children);
