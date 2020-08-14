@@ -450,17 +450,6 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let depth_item = common_depth;
 
 			if let IndexOrValueDecoded::DroppedValue = &v {
-/*				// if immediately after index
-				if let IndexOrValueDecoded::Index(children, _, depth, _) = &mut previous_value.1 {
-					if common_depth > *depth {
-						let ix = NibbleSlice::new(k.as_ref()).at(*depth + 1);
-						children[ix as usize] = None;
-					}
-				} else {
-					// try taint latest on stack
-					depth_queue.taint_child(k.as_ref());
-				}
-*/
 //				if can_taint {
 				pending_taint.push(k);
 //				}
@@ -470,7 +459,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			// can taint is true when we got backed up delete and enter for the first time, other moves
 			// (upward or descend) indicates that there is another element in child so taint
 			// is not needed.
-			let mut can_taint = false;
+			let mut can_taint = true;
 			single = false;
 			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
 				// the new key include the previous one : branch value case
@@ -490,7 +479,15 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 				}
 			} else if depth_item >= last_depth {
-				//can_taint = true;
+				if can_taint {
+					for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
+						depth_queue.taint_child(tain.as_ref());
+					}
+				} else {
+					pending_taint.clear()
+				}
+				can_taint = false;
+	
 				// put previous with next (common branch previous value can be flush)
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
@@ -505,19 +502,13 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-						can_taint = true;
-						if is_branch {
-							let depth = d;
-							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
-						} else {
-							let previous_value = (&previous_value.0, v.expect("Value are defined"));
-							depth_queue.flush_value(callback, depth_item, &previous_value);
-						}
+						assert!(is_branch);
+						let depth = d;
+						depth_queue.set_cache_index(depth, v, children);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
 					},
 				}
 			} else if depth_item < last_depth {
-				can_taint = true;
 				// do not put with next, previous is last of a branch
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
@@ -532,15 +523,10 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-						if is_branch {
-							let depth = d;
-							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
-						} else {
-							let previous_value = (&previous_value.0, v.expect("Value are defined"));
-							depth_queue.flush_value(callback, last_depth, &previous_value);
-						}
-
+						assert!(is_branch);
+						let depth = d;
+						depth_queue.set_cache_index(depth, v, children);
+						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
 					},
 				}
 				let ref_branches = previous_value.0;
