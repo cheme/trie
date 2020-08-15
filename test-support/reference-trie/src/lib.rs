@@ -1178,7 +1178,7 @@ pub fn calc_root<I, A, B>(
 	where
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord + fmt::Debug,
-		B: AsRef<[u8]> + fmt::Debug,
+		B: AsRef<[u8]> + Clone + fmt::Debug,
 {
 	let mut cb = TrieRoot::<KeccakHasher, _>::default();
 	trie_visit::<ExtensionLayout, _, _, _, _>(data.into_iter(), &mut cb);
@@ -1193,7 +1193,7 @@ pub fn calc_root_no_extension<I, A, B>(
 	where
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord + fmt::Debug,
-		B: AsRef<[u8]> + fmt::Debug,
+		B: AsRef<[u8]> + Clone + fmt::Debug,
 {
 	let mut cb = TrieRoot::<KeccakHasher, _>::default();
 	trie_db::trie_visit::<NoExtensionLayout, _, _, _, _>(data.into_iter(), &mut cb);
@@ -1208,7 +1208,7 @@ pub fn calc_root_build<I, A, B, DB>(
 	where
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord + fmt::Debug,
-		B: AsRef<[u8]> + fmt::Debug,
+		B: AsRef<[u8]> + Clone + fmt::Debug,
 		DB: hash_db::HashDB<KeccakHasher, DBValue>
 {
 	let mut cb = TrieBuilder::new(hashdb);
@@ -1225,7 +1225,7 @@ pub fn calc_root_build_no_extension<I, A, B, DB>(
 	where
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord + fmt::Debug,
-		B: AsRef<[u8]> + fmt::Debug,
+		B: AsRef<[u8]> + Clone + fmt::Debug,
 		DB: hash_db::HashDB<KeccakHasher, DBValue>
 {
 	let mut cb = TrieBuilder::new(hashdb);

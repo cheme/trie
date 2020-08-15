@@ -403,7 +403,7 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 	DB: HashDB<Self::Hash, usize>,
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	B: AsRef<[u8]> + Clone,
 	{
 		let mut cb = TrieBuilder::new(db);
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
@@ -413,7 +413,7 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 	fn trie_root<I, A, B>(input: I) -> <Self::Hash as Hasher>::Out where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	B: AsRef<[u8]> + Clone,
 	{
 		let mut cb = TrieRoot::<Self::Hash, _>::default();
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
@@ -423,7 +423,7 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 	fn trie_root_unhashed<I, A, B>(input: I) -> Vec<u8> where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	B: AsRef<[u8]> + Clone,
 	{
 		let mut cb = TrieRootUnhashed::<Self::Hash>::default();
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
@@ -440,7 +440,7 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 	fn ordered_trie_root<I, A>(input: I) -> <Self::Hash as Hasher>::Out
 	where
 		I: IntoIterator<Item = A>,
-		A: AsRef<[u8]>,
+		A: AsRef<[u8]> + Clone,
 	{
 		Self::trie_root(input
 			.into_iter()

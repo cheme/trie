@@ -45,17 +45,28 @@ fn new_vec_slice_buffer<HO>() -> [CacheNode<HO>; 16] {
 type ArrayNode<T> = [CacheNode<TrieHash<T>>; 16];
 
 /// Struct containing iteration cache, can be at most the length of the lowest nibble.
-///
-/// Note that it is not memory optimal (all depth are allocated even if some are empty due
-/// to node partial).
-/// Three field are used, a cache over the children, an optional associated value and the depth.
-struct CacheAccum<T: TrieLayout, V, I: IndexManagement<T, V> = ()> (
-	Vec<(CacheElt<T, V>, I::Local)>,
-	I,
-	PhantomData<T>,
+struct CacheAccum<T: TrieLayout, V> (
+	Vec<CacheElt<T, V>>,
 );
 
-enum BuffedElt<T: TrieLayout, V> {
+/// Struct containing iteration cache, can be at most the length of the lowest nibble.
+/// This is to use with indexing, and can store inconsistent data, therefore we got
+/// we store a first element in these nodes.
+struct CacheAccumIndex<T: TrieLayout, V> (
+	Vec<CacheEltIndex<T, V>>,
+	Option<(Vec<u8>, CacheElt<T, V>, usize)>,
+);
+
+impl<T: TrieLayout, V> Default for CacheAccumIndex<T, V> {
+	fn default() -> Self {
+		let v = Vec::with_capacity(INITIAL_DEPTH);
+		CacheAccumIndex(v, None)
+	}
+}
+
+/// State for incomming indexes in stack
+#[derive(Debug, Clone, Copy)]
+enum BuffedElt {
 	// no need to bufff.
 	Nothing,
 	// Buff could happen, if return, buff should happen.
@@ -63,45 +74,16 @@ enum BuffedElt<T: TrieLayout, V> {
 	// branch buffed TODO here nibble as vec with full key, maybe find
 	// something faster later (like small vec...).
 	// Last usize is the stack depth of the buffed element.
-	Branch(Vec<u8>, CacheElt<T, V>, usize),
+	Branch,
 	// value buffed
 	// (we use same repr as branch as same size but children are empty here).
 	// Last usize is the stack depth of the buffed element.
-	Value(Vec<u8>, CacheElt<T, V>, usize),
+	Value,
 }
 
-trait IndexManagement<T: TrieLayout, V>: Default {
-	// Info stored locally for each CacheElt.
-	type Local: Default;
-	fn is_index(local: &Self::Local) -> bool;
-	fn local_index() -> Self::Local;
-	// return true when buffed child, possibly retrun a buffed element.
-	// Only buff when necessary (ordered change
-	// so no value (this will not change), and
-	// no prior cached child, and no already
-	// buffed.
-	// If already buffed, then unbuffed.
-	fn buff_or_process(
-		&mut self,
-		current: &CacheElt<T, V>,
-		index: usize,
-	) -> BuffedElt<T, V>;
-}
-
-impl<T: TrieLayout, V> IndexManagement<T, V> for () {
-	type Local = ();
-	fn is_index(_local: &Self::Local) -> bool {
-		unreachable!("No support for index by default");
-	}
-	fn local_index() -> Self::Local {
-		()
-	}
-	fn buff_or_process(
-		&mut self,
-		_current: &CacheElt<T, V>,
-		_index: usize,
-	) -> BuffedElt<T, V> {
-		BuffedElt::Nothing
+impl Default for BuffedElt {
+	fn default() -> Self {
+		BuffedElt::Buff
 	}
 }
 
@@ -112,54 +94,61 @@ struct CacheElt<T: TrieLayout, V> {
 	depth: usize,
 }
 
-struct IndexCache<T: TrieLayout, V> {
-	buffed: BuffedElt<T, V>
+#[derive(Default, Debug)]
+struct CacheEltIndex<T: TrieLayout, V> {
+	children: ArrayNode<T>,
+	nb_children: usize,
+	value: Option<V>,
+	depth: usize,
+	buffed: BuffedElt,
+	is_index: bool,
 }
 
-impl<T: TrieLayout, V> Default for IndexCache<T, V> {
-	fn default() -> Self {
-		IndexCache {
-			buffed: BuffedElt::Buff,
-		}
-	}
-}
-
-impl<T: TrieLayout, V> IndexManagement<T, V> for IndexCache<T, V> {
-	type Local = bool;
-	fn is_index(local: &Self::Local) -> bool {
-		*local
-	}
-	fn local_index() -> Self::Local {
-		true
-	}
-	fn buff_or_process(
+impl<T: TrieLayout, V> CacheEltIndex<T, V> { 
+	// Return true we need to buff.
+	// Update status to post buff status.
+	// Only when necessary (ordered change
+	// so no value (this will not change), and
+	// no prior cached child, and no already
+	// buffed.
+	fn buff_transition(
 		&mut self,
-		current: &CacheElt<T, V>,
-		index: usize
-	) -> BuffedElt<T, V> {
-		match &mut self.buffed {
-			b@BuffedElt::Branch(..) => {
-				crate::rstd::mem::replace(b, BuffedElt::Nothing)
+		insert_index: usize,
+		is_branch: bool,
+	) -> bool {
+		// TODO consider removing index specific
+		if !self.is_index {
+			return false;
+		}
+		match self.buffed {
+			BuffedElt::Branch => {
+				false
 			},
-			b@BuffedElt::Value(..) => {
-				crate::rstd::mem::replace(b, BuffedElt::Nothing)
+			BuffedElt::Value => {
+				false
 			},
-			BuffedElt::Nothing => BuffedElt::Nothing,
-			b@BuffedElt::Buff => {
-				if current.value.is_some() {
-					*b = BuffedElt::Nothing;
-					return BuffedElt::Nothing;
+			BuffedElt::Nothing => false,
+			BuffedElt::Buff => {
+				if self.value.is_some() {
+					return false;
 				}
-				for (child_index, child) in current.children.iter().enumerate() {
-					if child_index >= index {
+/*				for (child_index, child) in current.children.iter().enumerate() {
+					if child_index >= insert_index {
 						break;
-					}
+						}
 					if child.is_some() {
-						*b = BuffedElt::Nothing;
-						return BuffedElt::Nothing;
+						return false;
 					}
+				}*/
+				if self.nb_children > 0 {
+					return false;
 				}
-				BuffedElt::Buff
+				if is_branch {
+					self.buffed = BuffedElt::Branch;
+				} else {
+					self.buffed = BuffedElt::Value;
+				}
+				true
 			},
 		}
 	}
@@ -168,59 +157,44 @@ impl<T: TrieLayout, V> IndexManagement<T, V> for IndexCache<T, V> {
 /// Initially allocated cache depth.
 const INITIAL_DEPTH: usize = 10;
 
-impl<T, V, I> CacheAccum<T, V, I>
+impl<T, V> CacheAccum<T, V>
 	where
 		T: TrieLayout,
-		V: AsRef<[u8]>,
-		I: IndexManagement<T, V>,
+		V: AsRef<[u8]> + Clone,
 {
 	fn new() -> Self {
 		let v = Vec::with_capacity(INITIAL_DEPTH);
-		CacheAccum(v, I::default(), PhantomData)
+		CacheAccum(v)
 	}
 
 	#[inline(always)]
 	fn set_cache_value(&mut self, depth:usize, value: Option<V>) {
-		if self.0.is_empty() || self.0[self.0.len() - 1].0.depth < depth {
-			self.0.push((CacheElt {
+		if self.0.is_empty() || self.0[self.0.len() - 1].depth < depth {
+			self.0.push(CacheElt {
 				children: new_vec_slice_buffer(),
 				value: None,
 				depth
-			}, Default::default()));
+			});
 		}
 		let last = self.0.len() - 1;
-		debug_assert!(self.0[last].0.depth <= depth);
-		self.0[last].0.value = value;
-	}
-
-	#[inline(always)]
-	fn set_cache_index(&mut self, depth: usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
-		if self.0.is_empty() || self.0[self.0.len() - 1].0.depth < depth {
-			self.0.push((CacheElt {
-				children: index,
-				value: None,
-				depth,
-			}, I::local_index()));
-		}
-		let last = self.0.len() - 1;
-		debug_assert!(self.0[last].0.depth <= depth);
-		self.0[last].0.value = value;
+		debug_assert!(self.0[last].depth <= depth);
+		self.0[last].value = value;
 	}
 
 	#[inline(always)]
 	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T>>) {
-		if self.0.is_empty() || self.0[self.0.len() - 1].0.depth < depth {
-			self.0.push((CacheElt {
+		if self.0.is_empty() || self.0[self.0.len() - 1].depth < depth {
+			self.0.push(CacheElt {
 				children: new_vec_slice_buffer(),
 				value: None, 
 				depth
-			}, Default::default()));
+			});
 		}
 
 		let last = self.0.len() - 1;
-		debug_assert!(self.0[last].0.depth == depth);
+		debug_assert!(self.0[last].depth == depth);
 
-		self.0[last].0.children.as_mut()[nibble_index] = node;
+		self.0[last].children.as_mut()[nibble_index] = node;
 	}
 
 	#[inline(always)]
@@ -228,7 +202,7 @@ impl<T, V, I> CacheAccum<T, V, I>
 		let ix = self.0.len();
 		if ix > 0 {
 			let last = ix - 1;
-			self.0[last].0.depth
+			self.0[last].depth
 		} else {
 			0
 		}
@@ -239,7 +213,7 @@ impl<T, V, I> CacheAccum<T, V, I>
 		let ix = self.0.len();
 		if ix > 1 {
 			let last = ix - 2;
-			self.0[last].0.depth
+			self.0[last].depth
 		} else {
 			0
 		}
@@ -249,6 +223,7 @@ impl<T, V, I> CacheAccum<T, V, I>
 	fn is_empty(&self) -> bool {
 		self.0.is_empty()
 	}
+
 	#[inline(always)]
 	fn is_one(&self) -> bool {
 		self.0.len() == 1
@@ -256,18 +231,18 @@ impl<T, V, I> CacheAccum<T, V, I>
 
 	#[inline(always)]
 	fn reset_depth(&mut self, depth: usize) {
-		debug_assert!(self.0[self.0.len() - 1].0.depth == depth);
+		debug_assert!(self.0[self.0.len() - 1].depth == depth);
 		self.0.pop();
 	}
 
-	fn flush_value (
+	fn flush_value(
 		&mut self,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
-		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
-		// is it a branch value (two candidate same ix)
+		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth) as usize;
+
 		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
 		let encoded = T::Codec::leaf_node(nkey.right(), &v2.as_ref()[..]);
 		let pr = NibbleSlice::new_offset(
@@ -277,7 +252,7 @@ impl<T, V, I> CacheAccum<T, V, I>
 		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
 
 		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value as usize, Some(hash));
+		self.set_node(target_depth, nibble_value, Some(hash));
 	}
 
 	fn flush_branch(
@@ -337,12 +312,12 @@ impl<T, V, I> CacheAccum<T, V, I>
 		nkey: Option<(usize, usize)>,
 	) -> ChildReference<TrieHash<T>> {
 		let last = self.0.len() - 1;
-		assert_eq!(self.0[last].0.depth, branch_d);
+		assert_eq!(self.0[last].depth, branch_d);
 
 		// encode branch
-		let v = self.0[last].0.value.take();
+		let v = self.0[last].value.take();
 		let encoded = T::Codec::branch_node(
-			self.0[last].0.children.as_ref().iter(),
+			self.0[last].children.as_ref().iter(),
 			v.as_ref().map(|v| v.as_ref()),
 		);
 		self.reset_depth(branch_d);
@@ -372,15 +347,15 @@ impl<T, V, I> CacheAccum<T, V, I>
 		nkey: Option<(usize, usize)>,
 	) -> ChildReference<TrieHash<T>> {
 		let last = self.0.len() - 1;
-		debug_assert!(self.0[last].0.depth == branch_d);
+		debug_assert!(self.0[last].depth == branch_d);
 		// encode branch
-		let v = self.0[last].0.value.take();
+		let v = self.0[last].value.take();
 		let nkeyix = nkey.unwrap_or((0, 0));
 		let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 		let encoded = T::Codec::branch_node_nibbled(
 			pr.right_range_iter(nkeyix.1),
 			nkeyix.1,
-			self.0[last].0.children.as_ref().iter(), v.as_ref().map(|v| v.as_ref()));
+			self.0[last].children.as_ref().iter(), v.as_ref().map(|v| v.as_ref()));
 		self.reset_depth(branch_d);
 		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.1).unwrap_or(0);
 		let pr = NibbleSlice::new_offset(
@@ -389,21 +364,111 @@ impl<T, V, I> CacheAccum<T, V, I>
 		);
 		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
 	}
+}
 
+impl<T: TrieLayout, V> CacheAccumIndex<T, V>
+	where
+		T: TrieLayout,
+		V: AsRef<[u8]> + Clone,
+{
 	fn taint_child(&mut self, key_branch: &[u8]) {
-		if let Some((CacheElt { children, depth, .. }, index)) = self.0.last_mut() {
-			if I::is_index(index) {
-				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
-				// Note that we only maintain this taint index on taint function
-				// because the changes are sorted so tainted an unrequired cache
-				// eg insert value followed by delete, is not an issue since the
-				// tainted child will be recalculated later.
-				children[ix] = None;
+		if let Some(CacheEltIndex { children, depth, .. }) = self.0.last_mut() {
+			let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
+			// Note that we only maintain this taint index on taint function
+			// because the changes are sorted so tainted an unrequired cache
+			// eg insert value followed by delete, is not an issue since the
+			// tainted child will be recalculated later.
+			children[ix] = None;
+		}
+	}
+
+	fn flush_buffed(
+		&mut self,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+	) {
+		if let Some((key, CacheElt { children, value, depth }, stack_index)) = self.1.take() {
+			debug_assert!(self.0.len() > stack_index);
+			if let Some(parent) = self.0.get_mut(stack_index) {
+				match parent.buffed {
+					BuffedElt::Branch => {
+						debug_assert!(value.is_none());
+						unimplemented!("TODO buffed branch");
+					},
+					BuffedElt::Value => {
+						debug_assert!(value.is_none());
+						unimplemented!("TODO buffed branch");
+						/*let value = value.expect("Value are always define for value");
+						let nibble_index = nibble_ops::left_nibble_at(&key[..], depth) as usize;
+						let hash = Self::flush_value_inner(callback, depth, &(key, value));
+						parent.0.children.as_mut()[nibble_index] = Some(hash);*/
+					},
+					BuffedElt::Nothing
+					| BuffedElt::Buff => unreachable!("inconsistent state"),
+				}
 			}
 		}
 	}
-}
+	
+	fn need_buff_update_state(
+		&mut self,
+		at: usize,
+		is_branch: bool,
+	) -> bool {
+		self.0.last_mut()
+			.map(|parent| parent.buff_transition(at, is_branch))
+			.unwrap_or(false)
+	}
 
+	fn push_value(
+		&mut self,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		target_depth: usize,
+		kv: &(impl AsRef<[u8]>, V),
+	) {
+		let nibble_value = nibble_ops::left_nibble_at(&kv.0.as_ref()[..], target_depth) as usize;
+
+		self.flush_buffed(callback);
+		// new value can flush a buffer
+		if self.need_buff_update_state(nibble_value, false) {
+			// do buff
+			debug_assert!(self.1.is_none());
+			let buffed = CacheElt {
+				children: Default::default(),
+				value: Some(kv.1.clone()),
+				depth: target_depth,
+			};
+			self.1 = Some((kv.0.as_ref().to_vec(), buffed, self.0.len() - 1));
+			return;
+		}
+
+		unimplemented!()
+	}
+
+	#[inline(always)]
+	fn push_cache_index(&mut self, depth: usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
+		if self.0.is_empty() || self.0[self.0.len() - 1].depth < depth {
+			let mut nb_children = 0;
+			for child in index.iter() {
+				if child.is_some() {
+					nb_children += 1;
+				}
+			}
+			self.0.push(CacheEltIndex {
+				children: index,
+				value,
+				depth,
+				nb_children,
+				buffed: BuffedElt::Buff,
+				is_index: true,
+			});
+		} else {
+			let last = self.0.len() - 1;
+			debug_assert!(self.0[last].depth <= depth);
+			self.0[last].value = value;
+		}
+	}
+}
+	
 /// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.
 /// This is the main entry point of this module.
 /// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
@@ -413,7 +478,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		T: TrieLayout,
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord,
-		B: AsRef<[u8]>,
+		B: AsRef<[u8]> + Clone,
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
 	let no_extension = !T::USE_EXTENSION;
@@ -535,7 +600,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
 	let no_extension = !T::USE_EXTENSION;
-	let mut depth_queue = CacheAccum::<T, Vec<u8>, IndexCache<T, Vec<u8>>>::new();
+	let mut depth_queue = CacheAccumIndex::<T, Vec<u8>>::default();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
 	let mut first = iter_input.next();
@@ -595,16 +660,16 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				// just stored value at branch depth
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
-						depth_queue.set_cache_value(common_depth, Some(v));
+//						depth_queue.set_cache_value(common_depth, Some(v));
 					},
 					IndexOrValueDecoded::StoredValue(v) => {
-						depth_queue.set_cache_value(common_depth, Some(v));
+//						depth_queue.set_cache_value(common_depth, Some(v));
 					},
 					IndexOrValueDecoded::DroppedValue => {
 						unreachable!();
 					},
 					IndexOrValueDecoded::Index(children, v, _d, _is_branch) => {
-						depth_queue.set_cache_index(common_depth, v, children);
+//						depth_queue.set_cache_index(common_depth, v, children);
 					},
 				}
 			} else if depth_item >= last_depth {
@@ -616,11 +681,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
 						let previous_value = (&previous_value.0, v);
-						depth_queue.flush_value(callback, depth_item, &previous_value);
+//						depth_queue.flush_value(callback, depth_item, &previous_value);
 					},
 					IndexOrValueDecoded::StoredValue(v) => {
 						let previous_value = (&previous_value.0, v);
-						depth_queue.flush_value(callback, depth_item, &previous_value);
+//						depth_queue.flush_value(callback, depth_item, &previous_value);
 					},
 					IndexOrValueDecoded::DroppedValue => {
 						unreachable!();
@@ -628,8 +693,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						assert!(is_branch);
 						let depth = d;
-						depth_queue.set_cache_index(depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
+//						depth_queue.set_cache_index(depth, v, children);
+//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
 					},
 				}
 			} else if depth_item < last_depth {
@@ -637,11 +702,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				match previous_value.1 {
 					IndexOrValueDecoded::Value(v) => {
 						let previous_value = (&previous_value.0, v);
-						depth_queue.flush_value(callback, last_depth, &previous_value);
+//						depth_queue.flush_value(callback, last_depth, &previous_value);
 					},
 					IndexOrValueDecoded::StoredValue(v) => {
 						let previous_value = (&previous_value.0, v);
-						depth_queue.flush_value(callback, last_depth, &previous_value);
+//						depth_queue.flush_value(callback, last_depth, &previous_value);
 					},
 					IndexOrValueDecoded::DroppedValue => {
 						unreachable!();
@@ -649,12 +714,12 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 						assert!(is_branch);
 						let depth = d;
-						depth_queue.set_cache_index(depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
+//						depth_queue.set_cache_index(depth, v, children);
+//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
 					},
 				}
 				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
+//				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
 			for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
@@ -681,11 +746,11 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					} else {
 						if is_branch {
 							let depth = d;
-							depth_queue.set_cache_index(depth, v, children);
-							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true);
+//							depth_queue.set_cache_index(depth, v, children);
+//							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true);
 						} else {
 							let previous_value = (&k2, v.expect("Value are defined"));
-							depth_queue.flush_value(callback, last_depth, &previous_value);
+//							depth_queue.flush_value(callback, last_depth, &previous_value);
 						}
 					}
 					return;
@@ -702,28 +767,28 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			match previous_value.1 {
 				IndexOrValueDecoded::Value(v) => {
 					let previous_value = (&previous_value.0, v);
-					depth_queue.flush_value(callback, last_depth, &previous_value);
+//					depth_queue.flush_value(callback, last_depth, &previous_value);
 				},
 				IndexOrValueDecoded::DroppedValue => {
 					unreachable!()
 				},
 				IndexOrValueDecoded::StoredValue(v) => {
 					let previous_value = (&previous_value.0, v);
-					depth_queue.flush_value(callback, last_depth, &previous_value);
+//					depth_queue.flush_value(callback, last_depth, &previous_value);
 				},
 				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
 					if is_branch {
 						let depth = d;
-						depth_queue.set_cache_index(depth, v, children);
-						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
+//						depth_queue.set_cache_index(depth, v, children);
+//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
 					} else {
 						let previous_value = (&previous_value.0, v.expect("Value are defined"));
-						depth_queue.flush_value(callback, last_depth, &previous_value);
+//						depth_queue.flush_value(callback, last_depth, &previous_value);
 					}
 				},
 			}
 			let ref_branches = previous_value.0;
-			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
+//			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
 		}
 	} else {
 		// nothing null root corner case
