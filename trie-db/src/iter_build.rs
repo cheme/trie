@@ -49,15 +49,46 @@ type ArrayNode<T> = [CacheNode<TrieHash<T>>; 16];
 /// Note that it is not memory optimal (all depth are allocated even if some are empty due
 /// to node partial).
 /// Three field are used, a cache over the children, an optional associated value and the depth.
-struct CacheAccum<T: TrieLayout, V> (Vec<(ArrayNode<T>, Option<V>, usize)>, PhantomData<T>);
+struct CacheAccum<T: TrieLayout, V, I: IndexManagement = ()> (Vec<(ArrayNode<T>, Option<V>, usize, I)>, PhantomData<T>);
+
+trait IndexManagement: Default {
+	fn is_index(&self) -> bool;
+	fn default_index() -> Self;
+}
+
+impl IndexManagement for () {
+	fn is_index(&self) -> bool {
+		false
+	}
+	fn default_index() -> Self {
+		unreachable!("No support for index by default");
+	}
+}
+
+#[derive(Default, Debug)]
+struct IndexCache {
+	is_index: bool,
+}
+
+impl IndexManagement for IndexCache {
+	fn is_index(&self) -> bool {
+		self.is_index
+	}
+	fn default_index() -> Self {
+		let mut result = Self::default();
+		result.is_index = true;
+		result
+	}
+}
 
 /// Initially allocated cache depth.
 const INITIAL_DEPTH: usize = 10;
 
-impl<T, V> CacheAccum<T, V>
+impl<T, V, I> CacheAccum<T, V, I>
 	where
 		T: TrieLayout,
 		V: AsRef<[u8]>,
+		I: IndexManagement,
 {
 	fn new() -> Self {
 		let v = Vec::with_capacity(INITIAL_DEPTH);
@@ -67,7 +98,7 @@ impl<T, V> CacheAccum<T, V>
 	#[inline(always)]
 	fn set_cache_value(&mut self, depth:usize, value: Option<V>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), None, depth, Default::default()));
 		}
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
@@ -77,7 +108,7 @@ impl<T, V> CacheAccum<T, V>
 	#[inline(always)]
 	fn set_cache_index(&mut self, depth: usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((index, None, depth));
+			self.0.push((index, None, depth, I::default_index()));
 		}
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
@@ -87,7 +118,7 @@ impl<T, V> CacheAccum<T, V>
 	#[inline(always)]
 	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), None, depth, Default::default()));
 		}
 
 		let last = self.0.len() - 1;
@@ -264,9 +295,15 @@ impl<T, V> CacheAccum<T, V>
 	}
 
 	fn taint_child(&mut self, key_branch: &[u8]) {
-		if let Some((children, _, depth)) = self.0.last_mut() {
-			let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth);
-			children[ix as usize] = None;
+		if let Some((children, _, depth, index)) = self.0.last_mut() {
+			if index.is_index() {
+				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
+				// Note that we only maintain this taint index on taint function
+				// because the changes are sorted so tainted an unrequired cache
+				// eg insert value followed by delete, is not an issue since the
+				// tainted child will be recalculated later.
+				children[ix] = None;
+			}
 		}
 	}
 }
@@ -402,7 +439,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
 	let no_extension = !T::USE_EXTENSION;
-	let mut depth_queue = CacheAccum::<T, Vec<u8>>::new();
+	let mut depth_queue = CacheAccum::<T, Vec<u8>, IndexCache>::new();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
 	let mut first = iter_input.next();
@@ -428,7 +465,6 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 		let mut pending_taint = Vec::new();// TODO replace by 16 small vec.
 		// can taint if consecutive in depth with an index
-//		let mut can_taint = false;
 		let mut single = true;
 		for (k, v) in iter_input {
 			let v: IndexOrValueDecoded<T> = v.into();
@@ -450,16 +486,13 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let depth_item = common_depth;
 
 			if let IndexOrValueDecoded::DroppedValue = &v {
-//				if can_taint {
 				pending_taint.push(k);
-//				}
 				continue;
 			}
 
 			// can taint is true when we got backed up delete and enter for the first time, other moves
 			// (upward or descend) indicates that there is another element in child so taint
 			// is not needed.
-			let mut can_taint = true;
 			single = false;
 			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
 				// the new key include the previous one : branch value case
@@ -479,14 +512,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					},
 				}
 			} else if depth_item >= last_depth {
-				if can_taint {
-					for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
-						depth_queue.taint_child(tain.as_ref());
-					}
-				} else {
-					pending_taint.clear()
-				}
-				can_taint = false;
+/*				for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
+					depth_queue.taint_child(tain.as_ref());
+				}*/
 	
 				// put previous with next (common branch previous value can be flush)
 				match previous_value.1 {
@@ -533,12 +561,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
 			}
 
-			if can_taint {
-				for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
-					depth_queue.taint_child(tain.as_ref());
-				}
-			} else {
-				pending_taint.clear()
+			for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
+				depth_queue.taint_child(tain.as_ref());
 			}
 			previous_value = (k, v);
 			last_depth = depth_item;
