@@ -368,6 +368,16 @@ pub enum IndexOrValue<B> {
 	StoredValue(Vec<u8>),
 }
 
+impl<B> IndexOrValue<B> {
+	/// Access the index branch depth (including the partial key).
+	pub fn index_depth(&self) -> Option<usize> {
+		match self {
+			IndexOrValue::Index(index, _change_value) => Some(index.actual_depth),
+			_ => None,
+		}
+	}
+}
+
 /// Iterator over index and value for root calculation
 /// and index update.
 pub struct RootIndexIterator<'a, KB, IB, V, ID>

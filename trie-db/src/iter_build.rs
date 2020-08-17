@@ -105,7 +105,7 @@ struct CacheEltIndex<T: TrieLayout, V> {
 }
 
 impl<T: TrieLayout, V> CacheEltIndex<T, V> { 
-	// Return true we need to buff.
+	// Return true when we need to buff.
 	// Update status to post buff status.
 	// Only when necessary (ordered change
 	// so no value (this will not change), and
@@ -113,13 +113,8 @@ impl<T: TrieLayout, V> CacheEltIndex<T, V> {
 	// buffed.
 	fn buff_transition(
 		&mut self,
-		insert_index: usize,
 		is_branch: bool,
 	) -> bool {
-		// TODO consider removing index specific
-		if !self.is_index {
-			return false;
-		}
 		match self.buffed {
 			BuffedElt::Branch => {
 				false
@@ -132,14 +127,6 @@ impl<T: TrieLayout, V> CacheEltIndex<T, V> {
 				if self.value.is_some() {
 					return false;
 				}
-/*				for (child_index, child) in current.children.iter().enumerate() {
-					if child_index >= insert_index {
-						break;
-						}
-					if child.is_some() {
-						return false;
-					}
-				}*/
 				if self.nb_children > 0 {
 					return false;
 				}
@@ -366,109 +353,6 @@ impl<T, V> CacheAccum<T, V>
 	}
 }
 
-impl<T: TrieLayout, V> CacheAccumIndex<T, V>
-	where
-		T: TrieLayout,
-		V: AsRef<[u8]> + Clone,
-{
-	fn taint_child(&mut self, key_branch: &[u8]) {
-		if let Some(CacheEltIndex { children, depth, .. }) = self.0.last_mut() {
-			let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
-			// Note that we only maintain this taint index on taint function
-			// because the changes are sorted so tainted an unrequired cache
-			// eg insert value followed by delete, is not an issue since the
-			// tainted child will be recalculated later.
-			children[ix] = None;
-		}
-	}
-
-	fn flush_buffed(
-		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-	) {
-		if let Some((key, CacheElt { children, value, depth }, stack_index)) = self.1.take() {
-			debug_assert!(self.0.len() > stack_index);
-			if let Some(parent) = self.0.get_mut(stack_index) {
-				match parent.buffed {
-					BuffedElt::Branch => {
-						debug_assert!(value.is_none());
-						unimplemented!("TODO buffed branch");
-					},
-					BuffedElt::Value => {
-						debug_assert!(value.is_none());
-						unimplemented!("TODO buffed branch");
-						/*let value = value.expect("Value are always define for value");
-						let nibble_index = nibble_ops::left_nibble_at(&key[..], depth) as usize;
-						let hash = Self::flush_value_inner(callback, depth, &(key, value));
-						parent.0.children.as_mut()[nibble_index] = Some(hash);*/
-					},
-					BuffedElt::Nothing
-					| BuffedElt::Buff => unreachable!("inconsistent state"),
-				}
-			}
-		}
-	}
-	
-	fn need_buff_update_state(
-		&mut self,
-		at: usize,
-		is_branch: bool,
-	) -> bool {
-		self.0.last_mut()
-			.map(|parent| parent.buff_transition(at, is_branch))
-			.unwrap_or(false)
-	}
-
-	fn push_value(
-		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-		target_depth: usize,
-		kv: &(impl AsRef<[u8]>, V),
-	) {
-		let nibble_value = nibble_ops::left_nibble_at(&kv.0.as_ref()[..], target_depth) as usize;
-
-		self.flush_buffed(callback);
-		// new value can flush a buffer
-		if self.need_buff_update_state(nibble_value, false) {
-			// do buff
-			debug_assert!(self.1.is_none());
-			let buffed = CacheElt {
-				children: Default::default(),
-				value: Some(kv.1.clone()),
-				depth: target_depth,
-			};
-			self.1 = Some((kv.0.as_ref().to_vec(), buffed, self.0.len() - 1));
-			return;
-		}
-
-		unimplemented!()
-	}
-
-	#[inline(always)]
-	fn push_cache_index(&mut self, depth: usize, value: Option<V>, index: [CacheNode<TrieHash<T>>; 16]) {
-		if self.0.is_empty() || self.0[self.0.len() - 1].depth < depth {
-			let mut nb_children = 0;
-			for child in index.iter() {
-				if child.is_some() {
-					nb_children += 1;
-				}
-			}
-			self.0.push(CacheEltIndex {
-				children: index,
-				value,
-				depth,
-				nb_children,
-				buffed: BuffedElt::Buff,
-				is_index: true,
-			});
-		} else {
-			let last = self.0.len() - 1;
-			debug_assert!(self.0[last].depth <= depth);
-			self.0[last].value = value;
-		}
-	}
-}
-	
 /// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.
 /// This is the main entry point of this module.
 /// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
@@ -538,6 +422,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 /// Decoded version of `IndexOrValue`.
 enum IndexOrValueDecoded<T: TrieLayout> {
 	// TODO EMCH delete last bool: we only got branch index
+	// TODO put nb_children in it
 	Index(ArrayNode<T>, Option<Vec<u8>>, usize, bool),
 	Value(Vec<u8>),
 	DroppedValue,
@@ -599,201 +484,208 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		A: AsRef<[u8]> + Ord,
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
-	let no_extension = !T::USE_EXTENSION;
+	assert!(!T::USE_EXTENSION, "No extension not implemented");
 	let mut depth_queue = CacheAccumIndex::<T, Vec<u8>>::default();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
 	let mut first = iter_input.next();
 	while let Some((_k, IndexOrValue::DroppedValue)) = &first {
-		// drop value without a first stacked item do nothing
+		// drop value without a first stacked item do nothing (they are guarantied to be
+		// above an index).
 		first = iter_input.next();
 	};
 	if let Some((k, v)) = first {
-		/*let (k, v) = match previous_value.1 {
-			IndexOrValue::Value(v) => (previous_value.0, IndexOrValue::Value(v)),
-			IndexOrValue::StoredValue(v) => (previous_value.0, IndexOrValue::StoredValue(v)),
-			IndexOrValue::Index(index, _) => {
-				assert!(index.actual_depth == 0);
-				assert!(previous_value.0.as_ref().is_empty());
-				// we usually don't call back index node but for root we does.
-				callback.process(hash_db::EMPTY_PREFIX, index.encoded_node, true, (previous_value.0.as_ref(), index.actual_depth), index.is_leaf);
-				return;
-			},
-		};*/
-		let mut previous_value: (_, IndexOrValueDecoded<T>) = (k, v.into());
-		// depth of last item
-		let mut last_depth = 0;
+		let mut last_parent_depth = 0;
 
-		let mut pending_taint = Vec::new();// TODO replace by 16 small vec.
 		// can taint if consecutive in depth with an index
-		let mut single = true;
+		let index_depth = v.index_depth().unwrap_or(k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE);
+		depth_queue.stack_item(k.as_ref(), v.into(), callback);
+
+		let mut previous_key = (k, index_depth);
+
 		for (k, v) in iter_input {
 			let v: IndexOrValueDecoded<T> = v.into();
 
-			let common_depth = nibble_ops::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
-			let common_depth = match (&previous_value.1, &v) {
-				(IndexOrValueDecoded::Index(_, _, prev_d, _), IndexOrValueDecoded::Index(_, _, d, _)) => {
-					cmp::min(common_depth, *cmp::min(prev_d, d))
-				},
-				(IndexOrValueDecoded::Index(_, _, prev_d, _), _) => {
-					cmp::min(common_depth, *prev_d)
-				},
-				(_, IndexOrValueDecoded::Index(_, _, d, _)) => {
-					cmp::min(common_depth, *d)
-				},
-				(_, _) => common_depth,
+			let common_depth = nibble_ops::biggest_depth(&previous_key.0.as_ref()[..], &k.as_ref()[..]);
+			let common_depth = cmp::min(previous_key.1, common_depth);
+			let (common_depth, depth) = if let IndexOrValueDecoded::Index(_, _, d, _) = &v {
+				(cmp::min(common_depth, *d), *d)
+			} else {
+				(common_depth, k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE)
 			};
-			// 0 is a reserved value : could use option
-			let depth_item = common_depth;
+			// TODO this depth could be return by the iterator since internally we already compare keys.
+			let parent_depth = common_depth;
+			while parent_depth < last_parent_depth {
+				last_parent_depth = depth_queue.unstack_item(previous_key.0.as_ref())
+					.unwrap_or(0);
+			}
 
 			if let IndexOrValueDecoded::DroppedValue = &v {
-				pending_taint.push(k);
+				if parent_depth == previous_key.1 {
+					depth_queue.taint_child(k.as_ref());
+				}
 				continue;
 			}
 
-			// can taint is true when we got backed up delete and enter for the first time, other moves
-			// (upward or descend) indicates that there is another element in child so taint
-			// is not needed.
-			single = false;
-			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
-				// the new key include the previous one : branch value case
-				// just stored value at branch depth
-				match previous_value.1 {
-					IndexOrValueDecoded::Value(v) => {
-//						depth_queue.set_cache_value(common_depth, Some(v));
-					},
-					IndexOrValueDecoded::StoredValue(v) => {
-//						depth_queue.set_cache_value(common_depth, Some(v));
-					},
-					IndexOrValueDecoded::DroppedValue => {
-						unreachable!();
-					},
-					IndexOrValueDecoded::Index(children, v, _d, _is_branch) => {
-//						depth_queue.set_cache_index(common_depth, v, children);
-					},
-				}
-			} else if depth_item >= last_depth {
-/*				for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
-					depth_queue.taint_child(tain.as_ref());
-				}*/
-	
-				// put previous with next (common branch previous value can be flush)
-				match previous_value.1 {
-					IndexOrValueDecoded::Value(v) => {
-						let previous_value = (&previous_value.0, v);
-//						depth_queue.flush_value(callback, depth_item, &previous_value);
-					},
-					IndexOrValueDecoded::StoredValue(v) => {
-						let previous_value = (&previous_value.0, v);
-//						depth_queue.flush_value(callback, depth_item, &previous_value);
-					},
-					IndexOrValueDecoded::DroppedValue => {
-						unreachable!();
-					},
-					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-						assert!(is_branch);
-						let depth = d;
-//						depth_queue.set_cache_index(depth, v, children);
-//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, depth_item, false);
-					},
-				}
-			} else if depth_item < last_depth {
-				// do not put with next, previous is last of a branch
-				match previous_value.1 {
-					IndexOrValueDecoded::Value(v) => {
-						let previous_value = (&previous_value.0, v);
-//						depth_queue.flush_value(callback, last_depth, &previous_value);
-					},
-					IndexOrValueDecoded::StoredValue(v) => {
-						let previous_value = (&previous_value.0, v);
-//						depth_queue.flush_value(callback, last_depth, &previous_value);
-					},
-					IndexOrValueDecoded::DroppedValue => {
-						unreachable!();
-					},
-					IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-						assert!(is_branch);
-						let depth = d;
-//						depth_queue.set_cache_index(depth, v, children);
-//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
-					},
-				}
-				let ref_branches = previous_value.0;
-//				depth_queue.flush_branch(no_extension, callback, ref_branches, depth_item, false);
+			if parent_depth > last_parent_depth {
+				// Need to add an intermediatory branch as sibling and then simply stack.
+				depth_queue.stack_empty_branch(parent_depth);
 			}
+			
+			depth_queue.stack_item(k.as_ref(), v.into(), callback);
 
-			for tain in crate::rstd::mem::replace(&mut pending_taint, Vec::new()) {
-				depth_queue.taint_child(tain.as_ref());
-			}
-			previous_value = (k, v);
-			last_depth = depth_item;
+			last_parent_depth = parent_depth; 
+			previous_key = (k, depth);
 		}
-		// last pendings
-		if single {
-			// one single element corner case
-			let (k2, v2) = previous_value;
-			let v2 = match v2 {
-				IndexOrValueDecoded::Value(v) => v,
-				IndexOrValueDecoded::StoredValue(v) => v,
-				IndexOrValueDecoded::DroppedValue => {
-					unreachable!();
-				},
-				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-					let no_children = children.iter().position(|v| v.is_some()).is_none();
-					// check if empty
-					if v.is_none() && no_children {
-						callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
-					} else {
-						if is_branch {
-							let depth = d;
-//							depth_queue.set_cache_index(depth, v, children);
-//							depth_queue.flush_branch(no_extension, callback, &k2, last_depth, true);
-						} else {
-							let previous_value = (&k2, v.expect("Value are defined"));
-//							depth_queue.flush_value(callback, last_depth, &previous_value);
-						}
-					}
-					return;
-				},
-			};
-			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
-			let encoded = T::Codec::leaf_node(nkey.right(), &v2.as_slice()[..]);
-			let pr = NibbleSlice::new_offset(
-				&k2.as_ref()[..],
-				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
-			);
-			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
-		} else {
-			match previous_value.1 {
-				IndexOrValueDecoded::Value(v) => {
-					let previous_value = (&previous_value.0, v);
-//					depth_queue.flush_value(callback, last_depth, &previous_value);
-				},
-				IndexOrValueDecoded::DroppedValue => {
-					unreachable!()
-				},
-				IndexOrValueDecoded::StoredValue(v) => {
-					let previous_value = (&previous_value.0, v);
-//					depth_queue.flush_value(callback, last_depth, &previous_value);
-				},
-				IndexOrValueDecoded::Index(children, v, d, is_branch) => {
-					if is_branch {
-						let depth = d;
-//						depth_queue.set_cache_index(depth, v, children);
-//						depth_queue.flush_branch(no_extension, callback, &previous_value.0, last_depth, false);
-					} else {
-						let previous_value = (&previous_value.0, v.expect("Value are defined"));
-//						depth_queue.flush_value(callback, last_depth, &previous_value);
-					}
-				},
-			}
-			let ref_branches = previous_value.0;
-//			depth_queue.flush_branch(no_extension, callback, ref_branches, 0, true);
-		}
+		while depth_queue.unstack_item(previous_key.0.as_ref()) != None { }
 	} else {
 		// nothing null root corner case
 		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
 	}
+}
+
+impl<T> CacheAccumIndex<T, Vec<u8>>
+	where
+		T: TrieLayout,
+		//K: AsRef<[u8]> + Ord,
+		//F: ProcessEncodedNode<TrieHash<T>>,
+{
+	#[inline(always)]
+	fn last_depth(&self) -> Option<usize> {
+		let ix = self.0.len();
+		if ix > 0 {
+			let last = ix - 1;
+			Some(self.0[last].depth)
+		} else {
+			None
+		}
+	}
+
+	fn stack_item(
+		&mut self,
+		key: &[u8],
+		item: IndexOrValueDecoded<T>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>
+	) {
+		match item {
+			IndexOrValueDecoded::StoredValue(v)
+			| IndexOrValueDecoded::Value(v) => {
+				// having a value we can unbuff first child (key ordering ensure that).
+				self.unbuff_first_child(callback);
+
+				let depth = key.len() * nibble_ops::NIBBLE_PER_BYTE;
+				debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
+				self.0.push(CacheEltIndex {
+					children: Default::default(),
+					nb_children: 0,
+					value: Some(v),
+					depth,
+					buffed: BuffedElt::Buff,
+					is_index: false,
+				})
+			},
+			IndexOrValueDecoded::Index(children, value, depth, _is_branch) => {
+				let nb_children = children.iter().filter(|child| child.is_some()).count();
+				debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
+				self.0.push(CacheEltIndex {
+					children,
+					nb_children,
+					value,
+					depth,
+					buffed: BuffedElt::Buff,
+					is_index: true,
+				})
+			},
+			IndexOrValueDecoded::DroppedValue => {
+				unreachable!();
+			},
+		}
+	}
+
+	fn taint_child(&mut self, key_branch: &[u8]) {
+		if let Some(CacheEltIndex { children, depth, is_index, .. }) = self.0.last_mut() {
+			if *is_index {
+				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
+				children[ix] = None;
+			}
+		}
+	}
+
+	fn unstack_item(&mut self, current_key: &[u8]) -> Option<usize> {
+		let mut parent_depth = self.last_depth();
+		unimplemented!("unstack loop");
+		parent_depth
+	}
+
+	fn unbuff_first_child(&mut self, callback: &mut impl ProcessEncodedNode<TrieHash<T>>) {
+		if let Some((key, CacheElt { children, value, depth }, stack_depth)) = self.1.take() {
+			debug_assert!(self.0.len() > stack_depth);
+			let parent_depth = self.0[stack_depth].depth;
+			if let Some(parent) = self.0.get_mut(stack_depth) {
+				let hash = match parent.buffed {
+					BuffedElt::Branch => {
+						debug_assert!(value.is_none());
+						let pr = NibbleSlice::new_offset(
+							key.as_ref(),
+							parent_depth,
+						);
+						let partial_length = depth - parent_depth - 1;
+
+						let encoded = T::Codec::branch_node_nibbled(
+							pr.right_range_iter(partial_length),
+							partial_length,
+							children.as_ref().iter(),
+							value.as_ref().map(|v| v.as_ref()),
+						);
+						callback.process(
+							pr.left(),
+							encoded,
+							false,
+							(key.as_ref(), depth),
+							false,
+						)
+					},
+					BuffedElt::Value => {
+						debug_assert!(value.is_some());
+						debug_assert!(depth == key.len() * nibble_ops::NIBBLE_PER_BYTE);
+						let nkey = NibbleSlice::new_offset(key.as_ref(), parent_depth + 1);
+						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
+						assert_eq!(parent_depth, depth - nkey.len());
+						let pr = NibbleSlice::new_offset(
+							key.as_ref(),
+							parent_depth,
+						);
+						callback.process(
+							pr.left(),
+							encoded,
+							false,
+							(key.as_ref(), depth),
+							true,
+						)
+					},
+					BuffedElt::Nothing
+					| BuffedElt::Buff => return,
+				};
+				let nibble_index = nibble_ops::left_nibble_at(key.as_ref(), parent_depth);
+
+				// No nb_children increase, this was already done when buffing the first child.
+				parent.children.as_mut()[nibble_index as usize] = Some(hash);
+			}
+		}
+	}
+
+	fn stack_empty_branch(&mut self, depth: usize) {
+		debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
+		self.0.push(CacheEltIndex {
+			children: Default::default(),
+			nb_children: 0,
+			value: None,
+			depth,
+			buffed: BuffedElt::Buff,
+			is_index: false,
+		});
+	}
+	
 }
 
 /// Visitor trait to implement when using `trie_visit`.
