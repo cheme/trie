@@ -677,7 +677,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							(key.as_ref(), depth),
 							true,
 						);
-						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
 						if parent_children[parent_ix].is_none() {
 							*parent_nb_children = *parent_nb_children + 1;
 						}
@@ -720,7 +720,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							(key.as_ref(), depth),
 							false,
 						);
-						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
 						if parent_children[parent_ix].is_none() {
 							*parent_nb_children = *parent_nb_children + 1;
 						}
@@ -754,7 +754,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 /*						if let Some(child) = children.iter().find(|c| c.is_some()) {
 							debug_assert!(buffed != BuffedElt::Branch);
 							debug_assert!(buffed != BuffedElt::Value);
-							let parent_ix = nibble_ops::left_nibble_at(current_key.as_ref(), *parent_depth + 1) as usize;
+							let parent_ix = nibble_ops::left_nibble_at(current_key.as_ref(), *parent_depth) as usize;
 							if parent_children[parent_ix].is_none() {
 								*parent_nb_children = *parent_nb_children + 1;
 							}
@@ -766,7 +766,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							debug_assert!(stack_depth == stack_len + 1);
 							debug_assert!(buffed != BuffedElt::Buff);
 							debug_assert!(buffed != BuffedElt::Nothing);
-							let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+							let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
 							if parent_children[parent_ix].is_none() {
 								*parent_nb_children = *parent_nb_children + 1;
 							}
@@ -1512,8 +1512,6 @@ mod test {
 		];
 
 		let inputs = vec![
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
-
 //			(one_level_branch.clone(), vec![(b"testi".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![2, 5], Some(0)),
