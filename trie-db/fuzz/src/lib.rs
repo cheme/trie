@@ -18,6 +18,7 @@ use keccak_hasher::KeccakHasher;
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
 	calc_root_no_extension,
+	calc_root_no_extension2,
 	compare_no_extension_insert_remove,
 	ExtensionLayout,
 	NoExtensionLayout,
@@ -177,6 +178,22 @@ pub fn fuzz_that_no_extension_insert(input: &[u8]) {
 	let data = data_sorted_unique(fuzz_to_data(input));
 	//println!("data{:?}", data);
 	assert_eq!(*t.root(), calc_root_no_extension(data));
+}
+
+pub fn fuzz_that_no_extension_insert2(input: &[u8]) {
+	let data = fuzz_to_data(input);
+	//println!("data{:?}", data);
+	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
+	let mut root = Default::default();
+	let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+	for a in 0..data.len() {
+		t.insert(&data[a].0[..], &data[a].1[..]).unwrap();
+	}
+	// we are testing the RefTrie code here so we do not sort or check uniqueness
+	// before.
+	let data = data_sorted_unique(fuzz_to_data(input));
+	//println!("data{:?}", data);
+	assert_eq!(*t.root(), calc_root_no_extension2(data));
 }
 
 pub fn fuzz_that_no_extension_insert_remove(input: &[u8]) {
@@ -431,7 +448,7 @@ fn test_generate_proof<L: TrieLayout>(
 }
 
 #[test]
-fn test_failure() {
+fn test_failure1() {
 	let data = [
 		//vec![0x18,0x0,0x0,0x0,0x0,0x20,0x80,0x41,0xff,0xff,0xff,0xff,0x1,0x0,0xa,0xa,0xa,],
 //		vec![0xa6,0xff,0x27,0xf7,0x3,0x1,0x0,0xff,0x27,0xf7,0xff,0xc5,0xc5,0xee,],
@@ -442,5 +459,15 @@ fn test_failure() {
 	for data in data.iter() {
 		fuzz_indexing_root_calc(data.as_slice(), None, true, false);
 		fuzz_indexing_root_calc(data.as_slice(), None, true, true);
+	}
+}
+
+#[test]
+fn test_failure2() {
+	let data = [
+		vec![0x0,0x0,0x4,0x0,0x40,0x4,0x0],
+	];
+	for data in data.iter() {
+		fuzz_that_no_extension_insert2(data.as_slice());
 	}
 }

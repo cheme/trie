@@ -31,6 +31,7 @@ use trie_db::{
 	TrieRoot,
 	TrieRootIndexes,
 	Partial,
+	partial_db::IndexOrValue,
 };
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
@@ -1199,6 +1200,24 @@ pub fn calc_root_no_extension<I, A, B>(
 	trie_db::trie_visit::<NoExtensionLayout, _, _, _, _>(data.into_iter(), &mut cb);
 	cb.root.unwrap_or(Default::default())
 }
+
+/// Trie builder root calculation utility.
+/// This uses the variant without extension nodes.
+pub fn calc_root_no_extension2<I, A>(
+	data: I,
+) -> <KeccakHasher as Hasher>::Out
+	where
+		I: IntoIterator<Item = (A, Vec<u8>)>,
+		A: AsRef<[u8]> + Ord + fmt::Debug,
+{
+	let mut cb = TrieRoot::<KeccakHasher, _>::default();
+	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
+		data.into_iter().map(|(k, v)| (k, IndexOrValue::StoredValue(v))),
+		&mut cb,
+	);
+	cb.root.unwrap_or(Default::default())
+}
+
 
 /// Trie builder trie building utility.
 pub fn calc_root_build<I, A, B, DB>(
