@@ -65,7 +65,7 @@ impl<T: TrieLayout, V> Default for CacheAccumIndex<T, V> {
 }
 
 /// State for incomming indexes in stack
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum BuffedElt {
 	// no need to bufff.
 	Nothing,
@@ -105,6 +105,14 @@ struct CacheEltIndex<T: TrieLayout, V> {
 }
 
 impl<T: TrieLayout, V> CacheEltIndex<T, V> { 
+	fn is_empty(&self) -> bool {
+		self.value.is_none() && self.nb_children == 0
+	}
+
+	fn is_value(&self) -> bool {
+		self.value.is_some() && self.nb_children == 0
+	}
+
 	// Return true when we need to buff.
 	// Update status to post buff status.
 	// Only when necessary (ordered change
@@ -495,7 +503,6 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		first = iter_input.next();
 	};
 	if let Some((k, v)) = first {
-		let mut last_parent_depth = 0;
 
 		// can taint if consecutive in depth with an index
 		let index_depth = v.index_depth().unwrap_or(k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE);
@@ -514,9 +521,10 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				(common_depth, k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE)
 			};
 			// TODO this depth could be return by the iterator since internally we already compare keys.
+			let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
 			let parent_depth = common_depth;
-			while parent_depth < last_parent_depth {
-				last_parent_depth = depth_queue.unstack_item(previous_key.0.as_ref())
+			while parent_depth < last_stack_depth {
+				last_stack_depth = depth_queue.unstack_item(previous_key.0.as_ref(), callback)
 					.unwrap_or(0);
 			}
 
@@ -527,17 +535,16 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				continue;
 			}
 
-			if parent_depth > last_parent_depth {
+			if parent_depth > last_stack_depth {
 				// Need to add an intermediatory branch as sibling and then simply stack.
 				depth_queue.stack_empty_branch(parent_depth);
 			}
 			
 			depth_queue.stack_item(k.as_ref(), v.into(), callback);
 
-			last_parent_depth = parent_depth; 
 			previous_key = (k, depth);
 		}
-		while depth_queue.unstack_item(previous_key.0.as_ref()) != None { }
+		while depth_queue.unstack_item(previous_key.0.as_ref(), callback) != None { }
 	} else {
 		// nothing null root corner case
 		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
@@ -603,18 +610,247 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 	}
 
 	fn taint_child(&mut self, key_branch: &[u8]) {
-		if let Some(CacheEltIndex { children, depth, is_index, .. }) = self.0.last_mut() {
+		if let Some(CacheEltIndex { children, depth, is_index, nb_children, .. }) = self.0.last_mut() {
 			if *is_index {
 				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
+				if children[ix].is_some() {
+					*nb_children = *nb_children - 1;
+				}
 				children[ix] = None;
 			}
 		}
 	}
 
-	fn unstack_item(&mut self, current_key: &[u8]) -> Option<usize> {
-		let mut parent_depth = self.last_depth();
-		unimplemented!("unstack loop");
-		parent_depth
+	fn unstack_item(
+		&mut self,
+		current_key: &[u8],
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+	) -> Option<usize> {
+		enum Action {
+			UnstackValue,
+			UnstackBranch,
+			FuseParent,
+			Ignore,
+		};
+		let (action, do_unbuff) = if let Some(
+			CacheEltIndex { value, nb_children, .. }
+		) = self.0.last() {
+			if value.is_some() && nb_children == &0 {
+				(Action::UnstackValue, true)
+			} else if value.is_some() {
+				(Action::UnstackBranch, true)
+			} else if nb_children > &1 {
+				(Action::UnstackBranch, true)
+			} else if nb_children == &1 {
+				(Action::FuseParent, false)
+			} else {
+				(Action::Ignore, false)
+			}
+		} else {
+			(Action::Ignore, false)
+		};
+		if do_unbuff {
+			self.unbuff_first_child(callback);
+		}
+		if let Some(
+			CacheEltIndex { children, depth, is_index, value, buffed, nb_children }
+		) = self.0.pop() {
+			match action {
+				Action::UnstackValue => {
+					let key = current_key;
+					// TODO put this condition before match
+					if let Some(
+						CacheEltIndex { children: parent_children, depth: parent_depth, nb_children: parent_nb_children, .. }
+					) = self.0.last_mut() {
+						debug_assert!(value.is_some());
+						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], *parent_depth + 1);
+						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
+						assert_eq!(*parent_depth, depth - nkey.len());
+						let pr = NibbleSlice::new_offset(
+							key.as_ref(),
+							*parent_depth,
+						);
+						let hash = callback.process(
+							pr.left(),
+							encoded,
+							false,
+							(key.as_ref(), depth),
+							true,
+						);
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+						if parent_children[parent_ix].is_none() {
+							*parent_nb_children = *parent_nb_children + 1;
+						}
+						parent_children[parent_ix] = Some(hash);
+						return Some(*parent_depth);
+					} else {
+						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
+						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
+						callback.process(
+							hash_db::EMPTY_PREFIX,
+							encoded,
+							true,
+							(key.as_ref(), depth),
+							false,
+						);
+						return None;
+					}
+				},
+				Action::UnstackBranch => {
+					let key = current_key;
+					// TODO put this condition before match
+					if let Some(
+						CacheEltIndex { children: parent_children, depth: parent_depth, nb_children: parent_nb_children, .. }
+					) = self.0.last_mut() {
+						let pr = NibbleSlice::new_offset(
+							key.as_ref(),
+							*parent_depth + 1,
+						);
+						let partial_length = depth - *parent_depth - 1;
+						let encoded = T::Codec::branch_node_nibbled(
+							pr.right_range_iter(partial_length),
+							partial_length,
+							children.as_ref().iter(),
+							value.as_ref().map(|v| v.as_ref()),
+						);
+						let hash = callback.process(
+							pr.left(),
+							encoded,
+							false,
+							(key.as_ref(), depth),
+							false,
+						);
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+						if parent_children[parent_ix].is_none() {
+							*parent_nb_children = *parent_nb_children + 1;
+						}
+						parent_children[parent_ix] = Some(hash);
+						return Some(*parent_depth);
+					} else {
+						let pr = NibbleSlice::new_offset(key.as_ref(), 0);
+						let partial_length = depth;
+						let encoded = T::Codec::branch_node_nibbled(
+							pr.right_range_iter(partial_length),
+							partial_length,
+							children.as_ref().iter(),
+							value.as_ref().map(|v| v.as_ref()),
+						);
+						callback.process(
+							pr.left(),
+							encoded,
+							true,
+							(key.as_ref(), depth),
+							false,
+						);
+						return None;
+					}
+				},
+				Action::FuseParent => {
+					let stack_len = self.0.len();
+					if let Some(
+						CacheEltIndex { children: parent_children, depth: parent_depth, nb_children: parent_nb_children, buffed: parent_buffed, .. }
+					) = self.0.last_mut() {
+						debug_assert!(children.iter().find(|c| c.is_some()).is_none());
+/*						if let Some(child) = children.iter().find(|c| c.is_some()) {
+							debug_assert!(buffed != BuffedElt::Branch);
+							debug_assert!(buffed != BuffedElt::Value);
+							let parent_ix = nibble_ops::left_nibble_at(current_key.as_ref(), *parent_depth + 1) as usize;
+							if parent_children[parent_ix].is_none() {
+								*parent_nb_children = *parent_nb_children + 1;
+							}
+							parent_children[parent_ix] = child.clone();
+							return Some(*parent_depth);
+						} else {*/
+						// first buff goes upward
+						if let Some((key, _cache, stack_depth)) = self.1.take() {
+							debug_assert!(stack_depth == stack_len + 1);
+							debug_assert!(buffed != BuffedElt::Buff);
+							debug_assert!(buffed != BuffedElt::Nothing);
+							let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth + 1) as usize;
+							if parent_children[parent_ix].is_none() {
+								*parent_nb_children = *parent_nb_children + 1;
+							}
+							*parent_buffed = buffed;
+							return Some(*parent_depth);
+						} else {
+							unreachable!("fuse only with buffed child");
+						}
+					} else {
+						// buffed is root
+						if let Some((key, CacheElt { children, value, depth }, stack_depth)) = self.1.take() {
+							debug_assert!(stack_depth == stack_len + 1);
+							match buffed {
+								BuffedElt::Value => {
+									let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
+									let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
+									callback.process(
+										hash_db::EMPTY_PREFIX,
+										encoded,
+										true,
+										(key.as_ref(), depth),
+										false,
+									);
+								},
+								BuffedElt::Branch => {
+									let pr = NibbleSlice::new_offset(key.as_ref(), 0);
+									let encoded = T::Codec::branch_node_nibbled(
+										pr.right_range_iter(depth),
+										depth,
+										children.as_ref().iter(),
+										value.as_ref().map(|v| v.as_ref()),
+									);
+									callback.process(
+										hash_db::EMPTY_PREFIX,
+										encoded,
+										true,
+										(key.as_ref(), depth),
+										false,
+									);
+								},
+								_ => unreachable!(),
+							}
+						}
+						return None;
+						/*// callback root
+						if nb_children == 0 {
+							if value.is_some() {
+								// single value trie
+								let nkey = NibbleSlice::new_offset(&current_key.as_ref()[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
+								let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
+								callback.process(
+									hash_db::EMPTY_PREFIX,
+									encoded,
+									true,
+									(current_key.as_ref(), depth),
+									false,
+								);
+							} else {
+								// empty trie
+								callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
+							}
+						} else {
+							// branch root
+							let pr = NibbleSlice::new_offset(current_key.as_ref(), 0);
+							let encoded = T::Codec::branch_node_nibbled(
+								pr.right_range_iter(depth),
+								depth,
+								children.as_ref().iter(),
+								value.as_ref().map(|v| v.as_ref()),
+							);
+							callback.process(
+								hash_db::EMPTY_PREFIX,
+								encoded,
+								true,
+								(current_key.as_ref(), depth),
+								false,
+							);
+						}*/
+					}
+				},
+				Action::Ignore => return self.last_depth(),
+			};
+		}
+		self.last_depth()
 	}
 
 	fn unbuff_first_child(&mut self, callback: &mut impl ProcessEncodedNode<TrieHash<T>>) {
@@ -624,7 +860,6 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			if let Some(parent) = self.0.get_mut(stack_depth) {
 				let hash = match parent.buffed {
 					BuffedElt::Branch => {
-						debug_assert!(value.is_none());
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
 							parent_depth,
@@ -1277,6 +1512,7 @@ mod test {
 		];
 
 		let inputs = vec![
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 
 //			(one_level_branch.clone(), vec![(b"testi".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 			(empty.clone(), vec![], vec![], Some(0)),
