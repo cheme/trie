@@ -102,7 +102,6 @@ struct CacheEltIndex<T: TrieLayout, V> {
 	depth: usize,
 	buffed: BuffedElt,
 	is_index: bool,
-	parent_index: usize,
 }
 
 impl<T: TrieLayout, V> CacheEltIndex<T, V> { 
@@ -507,10 +506,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 		// can taint if consecutive in depth with an index
 		let index_depth = v.index_depth().unwrap_or(k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE);
+		depth_queue.stack_item(k.as_ref(), v.into(), callback);
 
-		let mut previous_common_depth = 0;
 		let mut previous_key = (k, index_depth);
-		let mut previous_value: IndexOrValueDecoded<T> = v.into();
 
 		for (k, v) in iter_input {
 			let v: IndexOrValueDecoded<T> = v.into();
@@ -522,12 +520,6 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			} else {
 				(common_depth, k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE)
 			};
-
-			if common_depth > previous_common_depth {
-				// Need to add an intermediatory branch as sibling and then simply stack.
-				depth_queue.stack_empty_branch(previous_key.0.as_ref(), common_depth);
-			}
-	
 			// TODO this depth could be return by the iterator since internally we already compare keys.
 			let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
 			let parent_depth = common_depth;
@@ -536,29 +528,22 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 					.unwrap_or(0);
 			}
 
-			if let IndexOrValueDecoded::DroppedValue = &previous_value {
-				depth_queue.taint_child(previous_key.0.as_ref());
-			} else {
-				depth_queue.stack_item(previous_key.0.as_ref(), previous_value, callback);
+			if let IndexOrValueDecoded::DroppedValue = &v {
+				if parent_depth == previous_key.1 {
+					depth_queue.taint_child(k.as_ref());
+				}
+				continue;
 			}
 
+			if parent_depth > last_stack_depth {
+				// Need to add an intermediatory branch as sibling and then simply stack.
+				depth_queue.stack_empty_branch(parent_depth);
+			}
+			
+			depth_queue.stack_item(k.as_ref(), v.into(), callback);
+
 			previous_key = (k, depth);
-			previous_value = v;
-			previous_common_depth = parent_depth;
 		}
-		let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
-		let parent_depth = previous_common_depth;
-		while parent_depth < last_stack_depth {
-			last_stack_depth = depth_queue.unstack_item(previous_key.0.as_ref(), callback)
-				.unwrap_or(0);
-		}
-
-		if let IndexOrValueDecoded::DroppedValue = &previous_value {
-			depth_queue.taint_child(previous_key.0.as_ref());
-		} else {
-			depth_queue.stack_item(previous_key.0.as_ref(), previous_value, callback);
-		}
-
 		while depth_queue.unstack_item(previous_key.0.as_ref(), callback) != None { }
 	} else {
 		// nothing null root corner case
@@ -587,7 +572,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		&mut self,
 		key: &[u8],
 		item: IndexOrValueDecoded<T>,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>
 	) {
 		match item {
 			IndexOrValueDecoded::StoredValue(v)
@@ -597,8 +582,6 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 
 				let depth = key.len() * nibble_ops::NIBBLE_PER_BYTE;
 				debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
-				let parent_depth = self.last_depth().unwrap_or(0);
-				let parent_index = nibble_ops::left_nibble_at(key.as_ref(), parent_depth) as usize;
 				self.0.push(CacheEltIndex {
 					children: Default::default(),
 					nb_children: 0,
@@ -606,14 +589,11 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					depth,
 					buffed: BuffedElt::Buff,
 					is_index: false,
-					parent_index,
 				})
 			},
 			IndexOrValueDecoded::Index(children, value, depth, _is_branch) => {
 				let nb_children = children.iter().filter(|child| child.is_some()).count();
 				debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
-				let parent_depth = self.last_depth().unwrap_or(0);
-				let parent_index = nibble_ops::left_nibble_at(key.as_ref(), parent_depth) as usize;
 				self.0.push(CacheEltIndex {
 					children,
 					nb_children,
@@ -621,7 +601,6 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					depth,
 					buffed: BuffedElt::Buff,
 					is_index: true,
-					parent_index,
 				})
 			},
 			IndexOrValueDecoded::DroppedValue => {
@@ -674,7 +653,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			self.unbuff_first_child(callback);
 		}
 		if let Some(
-			CacheEltIndex { children, depth, is_index, value, buffed, nb_children, parent_index }
+			CacheEltIndex { children, depth, is_index, value, buffed, nb_children }
 		) = self.0.pop() {
 			match action {
 				Action::UnstackValue => {
@@ -686,7 +665,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						debug_assert!(value.is_some());
 						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], *parent_depth + 1);
 						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
-						assert_eq!(*parent_depth, depth - nkey.len() - 1);
+						assert_eq!(*parent_depth, depth - nkey.len());
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
 							*parent_depth,
@@ -698,10 +677,11 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							(key.as_ref(), depth),
 							true,
 						);
-						if parent_children[parent_index].is_none() {
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
+						if parent_children[parent_ix].is_none() {
 							*parent_nb_children = *parent_nb_children + 1;
 						}
-						parent_children[parent_index] = Some(hash);
+						parent_children[parent_ix] = Some(hash);
 						return Some(*parent_depth);
 					} else {
 						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
@@ -740,10 +720,11 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							(key.as_ref(), depth),
 							false,
 						);
-						if parent_children[parent_index].is_none() {
+						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
+						if parent_children[parent_ix].is_none() {
 							*parent_nb_children = *parent_nb_children + 1;
 						}
-						parent_children[parent_index] = Some(hash);
+						parent_children[parent_ix] = Some(hash);
 						return Some(*parent_depth);
 					} else {
 						let pr = NibbleSlice::new_offset(key.as_ref(), 0);
@@ -767,7 +748,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 				Action::FuseParent => {
 					let stack_len = self.0.len();
 					if let Some(
-						CacheEltIndex { children: parent_children, depth: parent_depth, nb_children: parent_nb_children, buffed: parent_buffed,.. }
+						CacheEltIndex { children: parent_children, depth: parent_depth, nb_children: parent_nb_children, buffed: parent_buffed, .. }
 					) = self.0.last_mut() {
 						debug_assert!(children.iter().find(|c| c.is_some()).is_none());
 /*						if let Some(child) = children.iter().find(|c| c.is_some()) {
@@ -928,10 +909,8 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		}
 	}
 
-	fn stack_empty_branch(&mut self, key: &[u8], depth: usize) {
+	fn stack_empty_branch(&mut self, depth: usize) {
 		debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
-		let parent_depth = self.last_depth().unwrap_or(0);
-		let parent_index = nibble_ops::left_nibble_at(key.as_ref(), parent_depth) as usize;
 		self.0.push(CacheEltIndex {
 			children: Default::default(),
 			nb_children: 0,
@@ -939,7 +918,6 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			depth,
 			buffed: BuffedElt::Buff,
 			is_index: false,
-			parent_index,
 		});
 	}
 	
