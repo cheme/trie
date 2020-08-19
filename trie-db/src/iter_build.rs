@@ -122,6 +122,7 @@ impl<T: TrieLayout, V> CacheEltIndex<T, V> {
 	fn buff_transition(
 		&mut self,
 		is_branch: bool,
+		is_overwrite: bool,
 	) -> bool {
 		match self.buffed {
 			BuffedElt::Branch => {
@@ -135,8 +136,14 @@ impl<T: TrieLayout, V> CacheEltIndex<T, V> {
 				if self.value.is_some() {
 					return false;
 				}
-				if self.nb_children > 0 {
+				if !is_overwrite && self.nb_children > 0 {
 					return false;
+				}
+				if is_overwrite && self.nb_children > 1 {
+					return false;
+				}
+				if !is_overwrite {
+					self.nb_children += 1;
 				}
 				if is_branch {
 					self.buffed = BuffedElt::Branch;
@@ -615,7 +622,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 	}
 
 	fn taint_child(&mut self, key_branch: &[u8]) {
-		if let Some(CacheEltIndex { children, depth, is_index, nb_children, .. }) = self.0.last_mut() {
+		if let Some(CacheEltIndex { children, depth, is_index, nb_children, buffed, value, .. }) = self.0.last_mut() {
 			if *is_index {
 				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
 				if children[ix].is_some() {
@@ -674,9 +681,11 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			let stack_len = self.0.len();
 			// first child buffering
 			if let Some(par) = self.0.last_mut() {
+				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), par.depth) as usize;
+				let is_overwrite = par.children[parent_ix].is_some();
 				if let Some(do_stack) = match action {
-					Action::UnstackBranch => Some(par.buff_transition(true)),
-					Action::UnstackValue => Some(par.buff_transition(false)),
+					Action::UnstackBranch => Some(par.buff_transition(true, is_overwrite)),
+					Action::UnstackValue => Some(par.buff_transition(false, is_overwrite)),
 					_ => None,
 				} {
 					if do_stack {
@@ -685,10 +694,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							value,
 							depth,
 						}, stack_len - 1));
-						let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), par.depth) as usize;
-						if par.children[parent_ix].is_none() {
-							par.nb_children = par.nb_children + 1;
-						}
+
 						return Some(par.depth);
 					}
 				}
@@ -793,7 +799,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						let stack_len = self.0.len();
 						// buffed is root
 						if let Some((key, CacheElt { children, value, depth }, stack_depth)) = self.1.take() {
-							debug_assert!(stack_depth == stack_len + 1);
+							//debug_assert!(stack_depth == stack_len - 1);
 							match buffed {
 								BuffedElt::Value => {
 									let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
