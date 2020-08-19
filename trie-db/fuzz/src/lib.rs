@@ -19,6 +19,7 @@ use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
 	calc_root_no_extension,
 	calc_root_no_extension2,
+	calc_root_build_no_extension2,
 	compare_no_extension_insert_remove,
 	ExtensionLayout,
 	NoExtensionLayout,
@@ -195,6 +196,51 @@ pub fn fuzz_that_no_extension_insert2(input: &[u8]) {
 	//println!("data{:?}", data);
 	assert_eq!(*t.root(), calc_root_no_extension2(data));
 }
+
+pub fn fuzz_that_no_extension_insert3(input: &[u8]) {
+	let data = fuzz_to_data(input);
+	//println!("data{:?}", data);
+	let mut memdb = MemoryDB::<_, HashKey<_>, _>::default();
+	let mut root = Default::default();
+	let ref_root = {
+		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		for a in 0..data.len() {
+			let mut v = data[a].1.clone();
+			v.resize(32, v[0]);
+			t.insert(&data[a].0[..], &v[..]).unwrap();
+		}
+		t.root().clone()
+	};
+	// we are testing the RefTrie code here so we do not sort or check uniqueness
+	// before.
+	let data = data_sorted_unique(fuzz_to_data(input));
+	//println!("data{:?}", data);
+	let mut memdb2 = MemoryDB::<_, PrefixedKey<_>, _>::default();
+	assert_eq!(ref_root, calc_root_build_no_extension2(data, &mut memdb2));
+	let mut error = 0;
+	{
+		let trie = RefTrieDBNoExt::new(&memdb2, &ref_root).unwrap();
+		for x in trie.iter().unwrap() {
+			if x.is_err() {
+				error +=1;
+			}
+		}
+	}
+	if error != 0 {
+		{
+			let trie = RefTrieDBNoExt::new(&memdb, &ref_root).unwrap();
+			println!("ok: {:?}", trie);
+		}
+
+		{
+			let trie = RefTrieDBNoExt::new(&memdb2, &ref_root).unwrap();
+			println!("ko: {:?}", trie);
+		}
+	}
+	assert_eq!(error, 0);
+
+}
+
 
 pub fn fuzz_that_no_extension_insert_remove(input: &[u8]) {
 	let data = fuzz_to_data(input);
@@ -469,5 +515,16 @@ fn test_failure2() {
 	];
 	for data in data.iter() {
 		fuzz_that_no_extension_insert2(data.as_slice());
+	}
+}
+
+#[test]
+fn test_failure3() {
+	let data = [
+		vec![0x0,0x0,0xba,0x9,0x0,0x19,0x28,],
+		vec![0x0,0x0,0xba,0x9,0x0,0x28,],
+	];
+	for data in data.iter() {
+		fuzz_that_no_extension_insert3(data.as_slice());
 	}
 }

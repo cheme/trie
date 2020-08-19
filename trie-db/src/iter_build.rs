@@ -680,7 +680,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						assert_eq!(*parent_depth, depth - nkey.len() - 1);
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
-							*parent_depth,
+							*parent_depth + 1,
 						);
 						let hash = callback.process(
 							pr.left(),
@@ -874,7 +874,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					BuffedElt::Branch => {
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
-							parent_depth,
+							parent_depth + 1,
 						);
 						let partial_length = depth - parent_depth - 1;
 
@@ -900,7 +900,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						assert_eq!(parent_depth, depth - nkey.len());
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
-							parent_depth,
+							parent_depth + 1,
 						);
 						callback.process(
 							pr.left(),

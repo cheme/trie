@@ -50,6 +50,10 @@ name = "no_ext_insert2"
 path = "fuzz_targets/no_ext_insert2.rs"
 
 [[bin]]
+name = "no_ext_insert3"
+path = "fuzz_targets/no_ext_insert3.rs"
+
+[[bin]]
 name = "no_ext_insert_rem"
 path = "fuzz_targets/no_ext_insert_rem.rs"
 

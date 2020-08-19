@@ -1252,6 +1252,28 @@ pub fn calc_root_build_no_extension<I, A, B, DB>(
 	cb.root.unwrap_or(Default::default())
 }
 
+/// Trie builder trie building utility.
+/// This uses the variant without extension nodes.
+pub fn calc_root_build_no_extension2<I, A, DB>(
+	data: I,
+	hashdb: &mut DB,
+) -> <KeccakHasher as Hasher>::Out
+	where
+		I: IntoIterator<Item = (A, Vec<u8>)>,
+		A: AsRef<[u8]> + Ord + fmt::Debug,
+		DB: hash_db::HashDB<KeccakHasher, DBValue>
+{
+	let mut cb = TrieBuilder::new(hashdb);
+	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
+		data.into_iter().map(|(k, mut v)| {
+			v.resize(32, v[0]);
+			(k, IndexOrValue::StoredValue(v))
+		}),
+		&mut cb,
+	);
+	cb.root.unwrap_or(Default::default())
+}
+
 /// Compare trie builder and in memory trie.
 /// This uses the variant without extension nodes.
 pub fn compare_implementations_no_extension(
