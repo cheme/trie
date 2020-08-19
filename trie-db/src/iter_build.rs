@@ -524,7 +524,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
 			let parent_depth = common_depth;
 			while parent_depth < last_stack_depth {
-				last_stack_depth = depth_queue.unstack_item(previous_key.0.as_ref(), callback)
+				last_stack_depth = depth_queue.unstack_item(previous_key.0.as_ref(), callback, Some(parent_depth))
 					.unwrap_or(0);
 			}
 
@@ -536,6 +536,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			}
 
 			if parent_depth > last_stack_depth {
+				// TODO seems unreachable since parent/common is from the last stacked item
+				// which in turn is used to calculate common thuse best parent == last
 				// Need to add an intermediatory branch as sibling and then simply stack.
 				depth_queue.stack_empty_branch(parent_depth);
 			}
@@ -544,7 +546,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 			previous_key = (k, depth);
 		}
-		while depth_queue.unstack_item(previous_key.0.as_ref(), callback) != None { }
+		while depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) != None { }
 	} else {
 		// nothing null root corner case
 		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
@@ -625,6 +627,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		&mut self,
 		current_key: &[u8],
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		target_parent_depth: Option<usize>,
 	) -> Option<usize> {
 		enum Action {
 			UnstackValue,
@@ -655,6 +658,15 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		if let Some(
 			CacheEltIndex { children, depth, is_index, value, buffed, nb_children }
 		) = self.0.pop() {
+			if let Some(target) = target_parent_depth {
+				let parent_depth = self.last_depth();
+				if parent_depth.map(|parent| parent < target)
+					.unwrap_or(true) {
+					// push empty at parent
+					self.stack_empty_branch(target);
+				}
+			}
+
 			match action {
 				Action::UnstackValue => {
 					let key = current_key;
@@ -665,7 +677,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						debug_assert!(value.is_some());
 						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], *parent_depth + 1);
 						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
-						assert_eq!(*parent_depth, depth - nkey.len());
+						assert_eq!(*parent_depth, depth - nkey.len() - 1);
 						let pr = NibbleSlice::new_offset(
 							key.as_ref(),
 							*parent_depth,
