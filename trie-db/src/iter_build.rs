@@ -529,9 +529,12 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			}
 
 			if let IndexOrValueDecoded::DroppedValue = &v {
-				if parent_depth == previous_key.1 {
+				if parent_depth == last_stack_depth {
 					depth_queue.taint_child(k.as_ref());
+				} else {
+					unreachable!("we insert empty in unstack");
 				}
+				previous_key = (k, depth);
 				continue;
 			}
 
@@ -723,14 +726,15 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					Action::FuseParent => {
 						debug_assert!(children.iter().find(|c| c.is_some()).is_none());
 						// first buff goes upward
-						if let Some((key, _cache, stack_depth)) = self.1.take() {
-							debug_assert!(stack_depth == stack_len + 1);
+						if let Some((key, _cache, buffed_stack_depth)) = self.1.as_mut() {
+							//debug_assert!(*buffed_stack_depth == stack_len + 1); not true due to insert of empty br
 							debug_assert!(buffed != BuffedElt::Buff);
 							debug_assert!(buffed != BuffedElt::Nothing);
 							let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
 							if parent_children[parent_ix].is_none() {
 								*parent_nb_children = *parent_nb_children + 1;
 							}
+							*buffed_stack_depth = stack_len - 1;
 							*parent_buffed = buffed;
 							return Some(*parent_depth);
 						} else {
