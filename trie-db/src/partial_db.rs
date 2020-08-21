@@ -417,6 +417,7 @@ struct SubIterator<'a, V> {
 	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
 	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
+	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
 }
 
 struct StackedIndex<'a> {
@@ -662,6 +663,7 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 			current_value_iter,
 			buffed_next_value: buffed,
 			next_value: None,
+			previous_touched_index_depth: None,
 		});
 		self.sub_advance_index();
 		self.sub_advance_value();
@@ -677,12 +679,45 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 {
 	fn sub_next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let mut result = None;
+		let mut common_depth = None;
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
-				result = index_iter.next_index.take();
+				if let Some(index) = index_iter.next_index.take() {
+					common_depth = self.previous_touched_index_depth.as_ref().map(|last_index| {
+						let common_depth =  nibble_ops::biggest_depth(
+							&last_index.0[..],
+							&index.0[..],
+						);
+						let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth);
+						let common_depth = crate::rstd::cmp::min(common_depth, last_index.1);
+						common_depth
+					});
+					sub_iter.previous_touched_index_depth = Some((index.0.clone(), (index.1).actual_depth));
+					result = Some(index);
+				} else {
+					sub_iter.previous_touched_index_depth = None;
+				}
 			}
 		}
 
+		if result.is_none() {
+			// last interval
+			if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.take() {
+				if let Some(sub_iter) = self.sub_iterator.as_mut() {
+					// TODO can factor with next result.map
+					let end_value = if let Some(value_iter) = self.current_value_iter.as_mut() {
+						(value_iter.1).1.take()
+					} else {
+						end_prefix(sub_iter.base.inner())
+					};
+
+					let base_depth = (previous_touched_index_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+					let values = self.values.iter_from(&previous_touched_index_depth.0[..base_depth]);
+					sub_iter.current_value_iter = Some((values, (previous_touched_index_depth.0[..base_depth].to_vec(), end_value)));
+				}
+				self.sub_advance_value();
+			}
+		}
 		result.map(|(k, i)| {
 			if let Some(sub_iter) = self.sub_iterator.as_mut() {
 				let end_value = if let Some(value_iter) = self.current_value_iter.as_mut() {
@@ -690,19 +725,14 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				} else {
 					end_prefix(sub_iter.base.inner())
 				};
-				let last_index: Vec<u8> = unimplemented!();
-				let common_depth = nibble_ops::biggest_depth(
-					&last_index[..],
-					&k[..],
-				);
-				let common_depth = crate::rstd::cmp::min(common_depth, i.actual_depth);
+				let base_depth = if let Some(common_depth) = common_depth {
+					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
+				} else {
+					unreachable!();
+				};
+				let values = self.values.iter_from(&k[..base_depth]);
 
-				let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
-				// TODO this next value iter is incorrect (probably also in the base algo, determining the
-				// start iter value is not as simple.
-				let values = self.values.iter_from(&k[base_depth..]);
-
-				sub_iter.current_value_iter = Some((values, (k[base_depth..].to_vec(), end_value)));
+				sub_iter.current_value_iter = Some((values, (k[..base_depth].to_vec(), end_value)));
 			}
 
 			self.sub_advance_value();
