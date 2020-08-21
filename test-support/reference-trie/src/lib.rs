@@ -1212,12 +1212,33 @@ pub fn calc_root_no_extension2<I, A>(
 {
 	let mut cb = TrieRoot::<KeccakHasher, _>::default();
 	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
-		data.into_iter().map(|(k, v)| (k, IndexOrValue::StoredValue(v))),
+		IterNoSub(data.into_iter().map(|(k, v)| (k, IndexOrValue::StoredValue(v)))),
 		&mut cb,
 	);
 	cb.root.unwrap_or(Default::default())
 }
 
+pub struct IterNoSub<I>(I);
+
+impl<A, I> Iterator for IterNoSub<I>
+	where I: Iterator<Item = (A, IndexOrValue<Vec<u8>>)> {
+		type Item = (A, IndexOrValue<Vec<u8>>);
+	fn next(&mut self) -> Option<Self::Item> {
+		self.0.next()
+	}
+}
+
+impl<A, I> trie_db::partial_db::SubIter<A, Vec<u8>> for IterNoSub<I> {
+	fn sub_iterate(
+		&mut self,
+		_key: &[u8],
+		_depth: usize,
+		_child_index: usize,
+		_buffed: (A, IndexOrValue<Vec<u8>>),
+	) {
+		unreachable!("IterNoSub should not be use with change");
+	}
+}
 
 /// Trie builder trie building utility.
 pub fn calc_root_build<I, A, B, DB>(
@@ -1265,10 +1286,10 @@ pub fn calc_root_build_no_extension2<I, A, DB>(
 {
 	let mut cb = TrieBuilder::new(hashdb);
 	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
-		data.into_iter().map(|(k, mut v)| {
+		IterNoSub(data.into_iter().map(|(k, mut v)| {
 			v.resize(32, v[0]);
 			(k, IndexOrValue::StoredValue(v))
-		}),
+		})),
 		&mut cb,
 	);
 	cb.root.unwrap_or(Default::default())

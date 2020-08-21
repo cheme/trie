@@ -490,12 +490,31 @@ impl<T: TrieLayout> From<IndexOrValue<Vec<u8>>> for IndexOrValueDecoded<T> {
 	}
 }
 
+/// Get iterator on value and index only, past a given index (used to recalculate
+/// unchanged index child when we fuse the index).
+/// This is needed when fusing an index with parent, and the only child
+/// was not modified, then we need to use another
+/// iteration that goes into this modified child entries (only index and value there).
+/// Note that the subiteration will get an unordered key (but only unordered with a
+/// delete that do not trigger a callback, this is only relevant when extracting 
+/// proof).
+pub trait SubIter<A, B> {
+	/// Sub iterate on value and index. 
+	fn sub_iterate(
+		&mut self,
+		key: &[u8],
+		depth: usize,
+		child_index: usize,
+		buffed: (A, IndexOrValue<B>),
+	);
+}
+
 /// Same as `trie_visit` but allows to use some indexes node to skip part of the processing.
 /// The function assumes that index and value from the input iterator do not overlap.
 pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 	where
 		T: TrieLayout,
-		I: IntoIterator<Item = (A, IndexOrValue<Vec<u8>>)>,
+		I: Iterator<Item = (A, IndexOrValue<Vec<u8>>)> + SubIter<A, Vec<u8>>,
 		A: AsRef<[u8]> + Ord,
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
@@ -517,29 +536,45 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 		let mut previous_key = (k, index_depth);
 
-		for (k, v) in iter_input {
-			let v: IndexOrValueDecoded<T> = v.into();
+		while let Some((k, v)) = iter_input.next() {
 
 			let common_depth = nibble_ops::biggest_depth(&previous_key.0.as_ref()[..], &k.as_ref()[..]);
 			let common_depth = cmp::min(previous_key.1, common_depth);
-			let (common_depth, depth) = if let IndexOrValueDecoded::Index(_, _, d, _) = &v {
-				(cmp::min(common_depth, *d), *d)
+			let (common_depth, depth) = if let IndexOrValue::Index(index, _) = &v {
+				(cmp::min(common_depth, index.actual_depth), index.actual_depth)
 			} else {
 				(common_depth, k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE)
 			};
 			// TODO this depth could be return by the iterator since internally we already compare keys.
 			let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
 			let parent_depth = common_depth;
+			let mut subiterat = None;
 			while parent_depth < last_stack_depth {
-				last_stack_depth = depth_queue.unstack_item(previous_key.0.as_ref(), callback, Some(parent_depth))
-					.unwrap_or(0);
+				match depth_queue.unstack_item(previous_key.0.as_ref(), callback, Some(parent_depth)) {
+					Some((new_depth, None)) => {
+						last_stack_depth = new_depth;
+					},
+					Some((new_depth, Some(sub))) => {
+						last_stack_depth = new_depth;
+						subiterat = Some(sub);
+						break;
+					},
+					None => {
+						last_stack_depth = 0;
+					},
+				}
+			}
+			if let Some((new_iter_depth, new_iter_index)) = subiterat {
+				iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, (k, v));
+				continue;
 			}
 
+			let v: IndexOrValueDecoded<T> = v.into();
 			if let IndexOrValueDecoded::DroppedValue = &v {
 				if parent_depth == last_stack_depth {
 					depth_queue.taint_child(k.as_ref());
 				} else {
-					unreachable!("we insert empty in unstack");
+					unreachable!("we did insert empty in unstack");
 				}
 				previous_key = (k, depth);
 				continue;
@@ -556,7 +591,15 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 			previous_key = (k, depth);
 		}
-		while depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) != None { }
+		loop {
+			match depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) {
+				Some((new_depth, None)) => (),
+				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
+					unimplemented!("switch iterator (also need to save current)");
+				},
+				None => break,
+			}
+		}
 	} else {
 		// nothing null root corner case
 		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
@@ -638,7 +681,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		current_key: &[u8],
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
 		target_parent_depth: Option<usize>,
-	) -> Option<usize> {
+	) -> Option<(usize, Option<(usize, usize)>)> {
 		enum Action {
 			UnstackValue,
 			UnstackBranch,
@@ -695,7 +738,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							depth,
 						}, stack_len - 1));
 
-						return Some(par.depth);
+						return Some((par.depth, None));
 					}
 				}
 			}
@@ -730,7 +773,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						)	
 					},
 					Action::FuseParent => {
-						debug_assert!(children.iter().find(|c| c.is_some()).is_none());
+						debug_assert!(is_index || children.iter().find(|c| c.is_some()).is_none());
 						// first buff goes upward
 						if let Some((key, _cache, buffed_stack_depth)) = self.1.as_mut() {
 							//debug_assert!(*buffed_stack_depth == stack_len + 1); not true due to insert of empty br
@@ -742,12 +785,18 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							}
 							*buffed_stack_depth = stack_len - 1;
 							*parent_buffed = buffed;
-							return Some(*parent_depth);
+							return Some((*parent_depth, None));
 						} else {
-							unreachable!("fuse only with buffed child");
+							debug_assert!(is_index);
+							let child_index = children.iter().position(|c| c.is_some())
+								.expect("checked one index and no first buff before");
+							// index is invalidated here (cannot use existing child hash since it will change post fuse)
+							// the iterator must therefore goes bellow this index next child.
+							// And this branch is already deleted.
+							return self.last_depth().map(|d| (d, Some((depth, child_index))));
 						}
 					},
-					Action::Ignore => return self.last_depth(),
+					Action::Ignore => return self.last_depth().map(|d| (d, None)),
 				};
 				let hash = callback.process(
 					pr.left(),
@@ -761,7 +810,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					*parent_nb_children = *parent_nb_children + 1;
 				}
 				parent_children[parent_ix] = Some(hash);
-				return Some(*parent_depth);
+				return Some((*parent_depth, None));
 			} else {
 				// root
 				match action {
@@ -835,11 +884,11 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						}
 						return None;
 					},
-					Action::Ignore => return self.last_depth(),
+					Action::Ignore => return self.last_depth().map(|d| (d, None)),
 				}
 			}
 		}
-		self.last_depth()
+		self.last_depth().map(|d| (d, None))
 	}
 
 	fn unbuff_first_child(&mut self, callback: &mut impl ProcessEncodedNode<TrieHash<T>>) {

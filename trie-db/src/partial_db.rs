@@ -24,6 +24,8 @@ use crate::rstd::btree_map::BTreeMap;
 use crate::rstd::cmp::Ordering;
 use crate::nibble::nibble_ops;
 use crate::nibble::LeftNibbleSlice;
+use crate::nibble::NibbleVec;
+pub use crate::iter_build::SubIter;
 
 #[cfg(feature = "std")]
 use std::sync::atomic::Ordering as AtomOrd;
@@ -405,6 +407,16 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	// key and depth of previous index touch, get reset each time we change
 	// prefix (return index or pop)
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
+
+	sub_iterator: Option<SubIterator<'a, V>>,
+}
+
+struct SubIterator<'a, V> {
+	base: NibbleVec,
+	index_iter: Option<StackedIndex<'a>>,
+	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
+	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
+	next_value: Option<(Vec<u8>, Vec<u8>)>,
 }
 
 struct StackedIndex<'a> {
@@ -446,6 +458,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			next_change: None,
 			next_value: None,
 			previous_touched_index_depth: None,
+			sub_iterator: None,
 		};
 
 		// get first change
@@ -486,6 +499,9 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 	type Item = (Vec<u8>, IndexOrValue<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
+		if let Some(sub_iter) = self.sub_iterator.as_mut() {
+			unimplemented!("subiter iter");
+		}
 	/*	match self.state {
 			State::ValueReachingTarget => self.next_change_or_value(),
 			State::ValueReachingIndex => self.next_value_or_index(),
@@ -598,6 +614,60 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 */
 }
 
+impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	fn sub_iterate(
+		&mut self,
+		key: &[u8],
+		depth: usize,
+		child_index: usize,
+		buffed: (Vec<u8>, IndexOrValue<V>),
+	) {
+		let mut base = NibbleVec::new();
+		base.append_partial(((0, 0), key));
+		let len = base.len();
+		let to_drop = len - depth;
+		base.drop_lasts(to_drop);
+		base.push(child_index as u8);
+		let key = base.inner();
+		let indexes = &mut self.indexes;
+		// get index iterator
+		let index_iter = self.indexes_conf.next_depth(depth + 1, key)
+			.map(move |d| {
+				let iter = indexes.iter(d, key);
+				// TODO try avoid this alloc
+				let range = value_prefix_index(d, key.to_vec());
+				StackedIndex {
+					iter,
+					range,
+					next_index: None,
+					conf_index_depth: d,
+					end_saved_value_iter: None,
+				}
+			});
+		let current_value_iter = {
+			let values = self.values.iter_from(&key[..]);
+			let end = end_prefix(&key[..]);
+			Some((values, (key.to_vec(), end)))
+		};
+
+		self.sub_iterator = Some(SubIterator {
+			base,
+			index_iter,
+			current_value_iter,
+			buffed_next_value: buffed,
+			next_value: None,
+		});
+		self.sub_advance_index();
+		self.sub_advance_value();
+	}
+}
+
 impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
@@ -605,6 +675,66 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		V: AsRef<[u8]>,
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
+	fn sub_next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		let mut result = None;
+		if let Some(sub_iter) = self.sub_iterator.as_mut() {
+			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
+				result = index_iter.next_index.take();
+			}
+		}
+
+		result.map(|(k, i)| {
+			if let Some(sub_iter) = self.sub_iterator.as_mut() {
+				let end_value = if let Some(value_iter) = self.current_value_iter.as_mut() {
+					(value_iter.1).1.take()
+				} else {
+					end_prefix(sub_iter.base.inner())
+				};
+				let last_index: Vec<u8> = unimplemented!();
+				let common_depth = nibble_ops::biggest_depth(
+					&last_index[..],
+					&k[..],
+				);
+				let common_depth = crate::rstd::cmp::min(common_depth, i.actual_depth);
+
+				let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+				// TODO this next value iter is incorrect (probably also in the base algo, determining the
+				// start iter value is not as simple.
+				let values = self.values.iter_from(&k[base_depth..]);
+
+				sub_iter.current_value_iter = Some((values, (k[base_depth..].to_vec(), end_value)));
+			}
+
+			self.sub_advance_value();
+			self.sub_advance_index();
+			(k, IndexOrValue::Index(i, None))
+		})
+	}
+
+	fn sub_advance_index(
+		&mut self,
+	) {
+		if let Some(sub_iter) = self.sub_iterator.as_mut() {
+			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
+				index_iter.next_index = index_iter.iter.next().filter(|kv| {
+					index_iter.range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
+				});
+			}
+		}
+	}
+
+	fn sub_advance_value(
+		&mut self,
+	) {
+		if let Some(sub_iter) = self.sub_iterator.as_mut() {
+			if let Some(iter) = sub_iter.current_value_iter.as_mut() {
+				sub_iter.next_value = iter.0.next()
+					.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end)
+						.unwrap_or(true));
+			}
+		}
+	}
+
 	// Return true if we stacked something and the stack item is not over current item.
 	fn try_stack_index(&self, current_key_vec: &Vec<u8>, current_depth: usize) -> Option<usize> {
 		// see if next change is bellow
