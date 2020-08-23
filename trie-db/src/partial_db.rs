@@ -953,14 +953,30 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		}
 		match (self.previous_touched_index_depth.as_ref(), &self.next_change) {
 			(Some(previous_depth), Some(next_change)) => {
-				let odd = previous_depth.1 % nibble_ops::NIBBLE_PER_BYTE;
+				let (start, end) = if let Some(index) = self.buffed_next_index() {
+					let common_depth =  nibble_ops::biggest_depth(
+						&previous_depth.0[..],
+						&index.0[..],
+					);
+					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth);
+					let common_depth = crate::rstd::cmp::min(common_depth, previous_depth.1);
+
+					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+					let start = previous_depth.0[..base_depth].to_vec();
+					let end = end_prefix(&start[..]);
+					(start, end)
+				} else {
+					unimplemented!(" TODO this is incorrect, running code of sub iter at each stack seems more correct -> TODO refactor");
+				};
+				let values = self.values.iter_from(start.as_slice());
+	
+/*				let odd = previous_depth.1 % nibble_ops::NIBBLE_PER_BYTE;
 				let ref_depth = previous_depth.1 / nibble_ops::NIBBLE_PER_BYTE; // TODO could we include an out of range in odd as first value (then advance twice)
 				let mut start = next_change.0[..ref_depth].to_vec(); // TODO avoid clone by advance value once more on smaller first key and have end_prefix_odd variant
 				if odd > 0 {
 					start.push(0);
 				}
-				let values = self.values.iter_from(&start[..]);
-				let end = end_prefix(&start[..]);
+				let values = self.values.iter_from(&start[..]);*/
 				// TODO we shall remove start
 				let range = (start, end);
 				self.current_value_iter = Some((values, range));
