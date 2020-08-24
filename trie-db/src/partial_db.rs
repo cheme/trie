@@ -930,16 +930,24 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			_ => false,
 		}
 	}
-	fn is_change_after_index(&self) -> bool {
+	fn is_change_bellow_index(&self) -> bool {
 		match (self.buffed_next_index(), &self.next_change) {
 			(Some(next_index), Some(next_change)) => {
+				let common_depth =  nibble_ops::biggest_depth(
+					&next_change.0[..],
+					&next_index.0[..],
+				);
+				let common_depth = crate::rstd::cmp::min(common_depth, next_index.1.actual_depth);
+				common_depth > next_index.1.actual_depth
+/*	
+				// TODO this is not bellow
 				match next_index.1.compare(&next_index.0, &next_change.0) {
 					Ordering::Equal => false,
 					Ordering::Less => true,
 					Ordering::Greater => false,
-				}
+				}*/
 			},
-			(None, Some(_next_value)) => false,
+			(None, Some(_next_value)) => true,
 			_ => false,
 		}
 	}
@@ -996,7 +1004,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}
 
 	fn next_index(&mut self, change: Option<Option<V>>) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		self.previous_touched_index_depth = None;
+		//self.previous_touched_index_depth = None;
 		let current_index_depth = &mut self.current_index_depth;
 		let previous_touched_index_depth = &mut self.previous_touched_index_depth;
 		// stop value iteration after index
@@ -1011,6 +1019,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		);
 		// TODO no need for read ahead?
 		self.advance_index();
+		self.try_new_value_iter();
 		r
 	}
 
@@ -1021,7 +1030,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		}
 		match (self.previous_touched_index_depth.as_ref(), &self.next_change) {
 			(Some(previous_depth), Some(next_change)) => {
-				if self.is_change_after_index() {
+				if self.is_change_bellow_index() {
 					let (start, end) = if let Some(index) = self.buffed_next_index() {
 						let common_depth =  nibble_ops::biggest_depth(
 							&previous_depth.0[..],
@@ -1035,7 +1044,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						let end = end_prefix(&start[..]);
 						(start, end)
 					} else {
-						let base_depth = (previous_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+						let base_depth = if previous_depth.1 == 0 {
+							0
+						} else {
+							(previous_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
+						};
 						let start = previous_depth.0[..base_depth].to_vec();
 						let end = if self.index_iter.len() > 1 {
 							let parent_index_depth = self.index_iter[self.index_iter.len() - 2].conf_index_depth;
