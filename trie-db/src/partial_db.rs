@@ -58,6 +58,10 @@ pub type KVBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 /// a depth (which can differ from the depth we queried).
 pub type IndexBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
 
+/// Iterator over encoded indexes of a IndexBackend, encoded indexes also have
+/// a depth (which can differ from the depth we queried).
+pub type IndexBackendIter2<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index2)> + 'a>;
+
 impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
 		self.get(key).cloned()
@@ -154,11 +158,36 @@ pub trait IndexBackend {
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
+/// Storage of encoded index for a trie.
+/// Depth is a nibble depth.
+pub trait IndexBackend2 {
+	/// Query for an index, also return the depth of this index (it can differs from
+	/// the index depth when there is a nibble encoded in the node).
+	fn read(&self, depth: usize, index: &[u8]) -> Option<Index2>;
+	/// Insert an `encode_index` with and `actual_depth` at configured `depth` for a given `index`.
+	fn write(&mut self, depth: usize, index: IndexPosition, value: Index2);
+	/// Remove any value at a key.
+	fn remove(&mut self, depth: usize, index: IndexPosition);
+	/// Iterate over the index from a key.
+	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter2<'a>;
+}
+
 #[derive(Debug, Clone)]
 /// Content of an index.
 /// Index are only branches.
 pub struct Index {
 	pub encoded_node: Vec<u8>,
+	pub actual_depth: usize,
+}
+
+#[derive(Debug, Clone)]
+/// Content of an index.
+/// Index is a hash, and its actual depth is parent branch depth + 1 or
+/// 0 if root.
+/// actual depth is <= index depth. (< when there is a partial nible overlapping
+/// the index position).
+pub struct Index2 {
+	pub hash: Vec<u8>, // TODO hash as inner type ?? (no need to encode vec length here)
 	pub actual_depth: usize,
 }
 
@@ -328,10 +357,12 @@ impl DepthIndexes {
 	/// TODO this is not really efficient and use on every node
 	/// TODO put in IdenxesConf trait.
 	pub fn next_depth(&self, depth: usize, _index: &[u8]) -> Option<usize> {
-		if depth == 0 {
-			// 0 is always indexed to remove many corner case at very small cost.
-			return Some(0);
-		}
+		// No index 0 as they are ignored.
+		let depth = if depth == 0 {
+			1
+		} else{
+			depth
+		};
 		for i in self.0.iter() {
 			let i = *i as usize;
 			if i >= depth {
@@ -379,6 +410,38 @@ impl<B> IndexOrValue<B> {
 		}
 	}
 }
+
+/// Enum containing either a value or an index, mostly for internal use
+/// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
+pub enum IndexOrValue2<B> {
+	/// Contains depth as number of bit and the encoded value of the node for this index.
+	/// Also an optional `Change of value is attached`.
+	Index(Index2),
+	/// Value node value, from change set.
+	Value(B),
+	/// Dropped value node, from change set.
+	DroppedValue,
+	/// Value node value, from existing values.
+	StoredValue(Vec<u8>),
+}
+
+impl<B> IndexOrValue2<B> {
+	/// Access the index branch depth (including the partial key).
+	pub fn index_depth(&self) -> Option<usize> {
+		match self {
+			IndexOrValue2::Index(index) => Some(index.actual_depth),
+			_ => None,
+		}
+	}
+	/// Access the index branch depth (including the partial key).
+	pub fn index_parent_depth(&self) -> Option<usize> {
+		match self {
+			IndexOrValue2::Index(index) => Some(index.actual_depth - 1),
+			_ => None,
+		}
+	}
+}
+
 
 /// Iterator over index and value for root calculation
 /// and index update.

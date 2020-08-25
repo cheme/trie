@@ -25,7 +25,7 @@ use crate::nibble::nibble_ops;
 use crate::node_codec::NodeCodec;
 use crate::node::Node;
 use crate::{TrieLayout, TrieHash};
-use crate::partial_db::{IndexBackend, IndexPosition, IndexOrValue, Index as PartialIndex};
+use crate::partial_db::{IndexBackend2, IndexBackend, IndexPosition, IndexOrValue, IndexOrValue2, Index as PartialIndex, Index2 as PartialIndex2};
 use crate::rstd::convert::TryInto;
 
 
@@ -509,6 +509,25 @@ pub trait SubIter<A, B> {
 	);
 }
 
+/// Get iterator on value and index only, past a given index (used to recalculate
+/// unchanged index child when we fuse the index).
+/// This is needed when fusing an index with parent, and the only child
+/// was not modified, then we need to use another
+/// iteration that goes into this modified child entries (only index and value there).
+/// Note that the subiteration will get an unordered key (but only unordered with a
+/// delete that do not trigger a callback, this is only relevant when extracting 
+/// proof).
+pub trait SubIter2<A, B> {
+	/// Sub iterate on value and index. 
+	fn sub_iterate2(
+		&mut self,
+		key: &[u8],
+		depth: usize,
+		child_index: usize,
+		buffed: (A, IndexOrValue2<B>),
+	);
+}
+
 /// Same as `trie_visit` but allows to use some indexes node to skip part of the processing.
 /// The function assumes that index and value from the input iterator do not overlap.
 pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
@@ -606,6 +625,118 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 	}
 }
 
+/// Same as `trie_visit` but allows to use some indexes node to skip part of the processing.
+/// The function assumes that index and value from the input iterator do not overlap.
+pub fn trie_visit_with_indexes2<T, I, A, F>(input: I, callback: &mut F)
+	where
+		T: TrieLayout,
+		I: Iterator<Item = (A, IndexOrValue2<Vec<u8>>)> + SubIter2<A, Vec<u8>>,
+		A: AsRef<[u8]> + Ord,
+		F: ProcessEncodedNode<TrieHash<T>>,
+{
+	assert!(!T::USE_EXTENSION, "No extension not implemented");
+	let mut depth_queue = CacheAccumIndex::<T, Vec<u8>>::default();
+	// compare iter ordering
+	let mut iter_input = input.into_iter();
+	let mut first = iter_input.next();
+	while let Some((_k, IndexOrValue2::DroppedValue)) = &first {
+		// drop value without a first stacked item do nothing (they are guarantied to be
+		// above an index).
+		first = iter_input.next();
+	};
+	// root index cannot be written in stack (we write the index in their direct parent branch).
+	debug_assert!(!if let Some((_k, IndexOrValue2::Index(PartialIndex2 { hash, actual_depth }))) = &first {
+		if *actual_depth == 0 {
+			true
+		} else {
+			false
+		}
+	} else {
+		false
+	});
+/*	if index_root {
+		// we simply ignore this index as it we will need to query bellow, so it is useless to index
+		// at depth 0. TODO consider ignoring from conf index 0 instead??
+		first = iter_input.next();
+	}*/
+	if let Some((k, v)) = first {
+
+		// can taint if consecutive in depth with an index
+		let index_depth = v.index_depth().unwrap_or(k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE);
+		depth_queue.stack_item2(k.as_ref(), v, callback);
+
+		let mut previous_key = (k, index_depth);
+
+		while let Some((k, v)) = iter_input.next() {
+
+			let common_depth = nibble_ops::biggest_depth(&previous_key.0.as_ref()[..], &k.as_ref()[..]);
+			let common_depth = cmp::min(previous_key.1, common_depth);
+			let (common_depth, depth) = if let IndexOrValue2::Index(index) = &v {
+				(cmp::min(common_depth, index.actual_depth - 1), index.actual_depth - 1)
+			} else {
+				(common_depth, k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE)
+			};
+			// TODO this depth could be return by the iterator since internally we already compare keys.
+			let mut last_stack_depth = depth_queue.last_depth().unwrap_or(0);
+			let parent_depth = common_depth;
+			let mut subiterat = None;
+			while parent_depth < last_stack_depth {
+				match depth_queue.unstack_item(previous_key.0.as_ref(), callback, Some(parent_depth)) {
+					Some((new_depth, None)) => {
+						last_stack_depth = new_depth;
+					},
+					Some((new_depth, Some(sub))) => {
+						last_stack_depth = new_depth;
+						subiterat = Some(sub);
+						break;
+					},
+					None => {
+						last_stack_depth = 0;
+					},
+				}
+			}
+			if let Some((new_iter_depth, new_iter_index)) = subiterat {
+				iter_input.sub_iterate2(previous_key.0.as_ref(), new_iter_depth, new_iter_index, (k, v));
+				continue;
+			}
+
+			if let IndexOrValue2::DroppedValue = &v {
+				if parent_depth == last_stack_depth {
+					depth_queue.taint_child(k.as_ref());
+				} else {
+					unreachable!("we did insert empty in unstack");
+				}
+				previous_key = (k, depth);
+				continue;
+			}
+
+			if parent_depth > last_stack_depth {
+				// TODO seems unreachable since parent/common is from the last stacked item
+				// which in turn is used to calculate common thuse best parent == last
+				// Need to add an intermediatory branch as sibling and then simply stack.
+				depth_queue.stack_empty_branch(parent_depth);
+			}
+			
+			depth_queue.stack_item2(k.as_ref(), v, callback);
+
+			previous_key = (k, depth);
+		}
+		loop {
+			match depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) {
+				Some((new_depth, None)) => (),
+				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
+					unimplemented!("switch iterator (also need to save current)");
+				},
+				None => break,
+			}
+		}
+	} else {
+		// nothing null root corner case
+		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
+	}
+}
+
+
 impl<T> CacheAccumIndex<T, Vec<u8>>
 	where
 		T: TrieLayout,
@@ -659,6 +790,67 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 				})
 			},
 			IndexOrValueDecoded::DroppedValue => {
+				unreachable!();
+			},
+		}
+	}
+
+	fn stack_item2(
+		&mut self,
+		key: &[u8],
+		item: IndexOrValue2<Vec<u8>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>
+	) {
+		match item {
+			IndexOrValue2::StoredValue(v)
+			| IndexOrValue2::Value(v) => {
+				// having a value we can unbuff first child (key ordering ensure that).
+				self.unbuff_first_child(callback);
+
+				let depth = key.len() * nibble_ops::NIBBLE_PER_BYTE;
+				debug_assert!(self.last_depth().map(|last| last < depth).unwrap_or(true));
+				self.0.push(CacheEltIndex {
+					children: Default::default(),
+					nb_children: 0,
+					value: Some(v),
+					depth,
+					buffed: BuffedElt::Buff,
+					is_index: false,
+				})
+			},
+			IndexOrValue2::Index(PartialIndex2 { hash, actual_depth }) => {
+				debug_assert!(actual_depth > 0);
+				let branch_ix = actual_depth - 1;
+				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), branch_ix) as usize;
+
+				let mut h_hash = TrieHash::<T>::default();  // TODO puth actual hash type in indexes (useless copy here)
+				h_hash.as_mut()[..].copy_from_slice(hash.as_slice());
+				let hash = ChildReference::Hash(h_hash);
+				debug_assert!(self.last_depth().map(|last| last <= branch_ix).unwrap_or(true));
+				let new_elt = if let Some(element) = self.0.last_mut() {
+					if element.depth == branch_ix {
+						element.children[parent_ix] = Some(hash);
+						false
+					} else {
+						true
+					}
+				} else {
+					true
+				};
+				if new_elt {
+					let mut element = CacheEltIndex {
+						children: Default::default(),
+						nb_children: 1,
+						value: None,
+						depth: branch_ix,
+						buffed: BuffedElt::Buff,
+						is_index: true,
+					};
+					element.children[parent_ix] = Some(hash);
+					self.0.push(element);
+				}
+			},
+			IndexOrValue2::DroppedValue => {
 				unreachable!();
 			},
 		}
@@ -1075,6 +1267,56 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 	}
 }
 
+/// Get trie root and insert index for trie.
+pub struct TrieRootIndexes2<'a, H, HO, DB> {
+	db: &'a mut DB,
+	pub root: Option<HO>,
+	indexes: &'a crate::partial_db::DepthIndexes,
+	_ph: PhantomData<H>,
+}
+
+impl<'a, H, HO, DB> TrieRootIndexes2<'a, H, HO, DB> {
+	pub fn new(db: &'a mut DB, indexes: &'a crate::partial_db::DepthIndexes) -> Self {
+		TrieRootIndexes2 { db, indexes, root: None, _ph: PhantomData }
+	}
+}
+
+impl<'a, H: Hasher, DB: IndexBackend2> ProcessEncodedNode<<H as Hasher>::Out>
+	for TrieRootIndexes2<'a, H, <H as Hasher>::Out, DB> {
+	fn process(
+		&mut self,
+		prefix: Prefix,
+		encoded_node: Vec<u8>,
+		is_root: bool,
+		node_key: (&[u8], usize),
+		is_leaf: bool, // TODO remove this param
+	) -> ChildReference<<H as Hasher>::Out> {
+		let len = encoded_node.len();
+		if !is_root && len < <H as Hasher>::LENGTH {
+			let mut h = <<H as Hasher>::Out as Default>::default();
+			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
+
+			return ChildReference::Inline(h, len);
+		}
+		let hash = <H as Hasher>::hash(&encoded_node[..]);
+		let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
+		let index_position: IndexPosition = node_key.0.into();
+		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
+			if node_key.1 >= next_save_index {
+				let partial_index = PartialIndex2 {
+					hash: hash.as_ref().to_vec(),
+					actual_depth: prefix_start,
+				};
+				// TODO consider changing write to reference input
+				self.db.write(next_save_index, node_key.0.into(), partial_index);
+			}
+		}
+		if is_root {
+			self.root = Some(hash);
+		};
+		ChildReference::Hash(hash)
+	}
+}
 
 /// Calculate the trie root of the trie.
 pub struct TrieRoot<H, HO> {
