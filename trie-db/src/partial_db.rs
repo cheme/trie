@@ -638,6 +638,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 		// buff first change
 		iter.advance_change();
+
+		iter.stack_index();
 	
 		iter
 	}
@@ -938,41 +940,6 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 			},
 		}
 	}
-/*
-// TODO EMCH we stack iter to always try to have an iter above us
-// we here get next element by comparing three (on start state must always be good
-// We move index pop in advance index
-// we match result and do change in this function accordingly.
-// - on index, try advance index -> does pop internaly, then new index so clear value iter and init
-// a new
-// - on change, try advance change -> on fail nothing, on success try stack index and if advance
-// and if init value iter
-// - on value, try advance -> on fail clear and do nothing on success do nothing.
-
-		// in fact we stack over change and vaul (all the stae pof new function with different starts orders.
-		// -> probably lot of redundancy in compare but first get something working
-
-		// value iteration is well define in interval between indexes and
-		// only need to be compared with change.
-		if self.current_value_iter.is_some() {
-			if self.next_value.is_none() {
-				self.advance_value();
-			}
-			if self.next_change.is_none() {
-				self.advance_change();
-			}
-			let result = self.next_change_or_value();
-			if result.is_some() {
-				return result;
-			}
-		}
-
-		// change init
-
-		// index and value resolve.
-		None
-	}
-*/
 }
 
 
@@ -1558,11 +1525,18 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					});
 		
 					if first.is_some() {
-						let end_saved_value_iter = current_value_iter.take()
+						let end_saved_value_iter = current_value_iter.as_ref()
 							.and_then(|iter| {
 								end_prefix(&next_change_key[..(d + 1) / nibble_ops::NIBBLE_PER_BYTE])
-									.map(|start| (start, (iter.1).1))
+									.map(|start| (start, (iter.1).1.clone()))
 							});
+						let end_value = index_iter.last().map(|iter| {
+							iter.range.1.clone()
+						}).flatten();
+						debug_assert!(current_value_iter.is_some());
+						// continue iter bellow.
+						current_value_iter.as_mut().map(|value_iter| (value_iter.1).1 = end_value);
+
 						index_iter.push(StackedIndex2 {
 							iter,
 							range,
