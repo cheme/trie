@@ -422,8 +422,9 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 
 struct SubIterator<'a, V> {
 	base: NibbleVec,
+	end_iter: Option<Vec<u8>>,
 	index_iter: Option<StackedIndex<'a>>,
-	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
+	current_value_iter: Option<KVBackendIter<'a>>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
 	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
@@ -629,14 +630,12 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 					end_saved_value_iter: None,
 				}
 			});
-		let current_value_iter = {
-			let values = self.values.iter_from(&key[..]);
-			let end = end_prefix(&key[..]);
-			Some((values, (key.to_vec(), end)))
-		};
+		let current_value_iter = Some(self.values.iter_from(&key[..]));
 
+		let end_iter = end_prefix(&key[..]);
 		self.sub_iterator = Some(SubIterator {
 			base,
+			end_iter,
 			index_iter,
 			current_value_iter,
 			buffed_next_value: buffed,
@@ -682,28 +681,15 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			// last interval
 			if let Some(sub_iter) = self.sub_iterator.as_mut() {
 				if let Some(previous_touched_index_depth) = sub_iter.previous_touched_index_depth.take() {
-					// TODO can factor with next result.map, actually just storing end in sub_iter would make
-					// more senses.
-					let end_value = if let Some(value_iter) = sub_iter.current_value_iter.as_mut() {
-						(value_iter.1).1.take()
-					} else {
-						end_prefix(sub_iter.base.inner())
-					};
-
 					let base_depth = (previous_touched_index_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
 					let values = self.values.iter_from(&previous_touched_index_depth.0[..base_depth]);
-					sub_iter.current_value_iter = Some((values, (previous_touched_index_depth.0[..base_depth].to_vec(), end_value)));
+					sub_iter.current_value_iter = Some(values);
 				}
 				self.sub_advance_value();
 			}
 		}
 		result.map(|(k, i)| {
 			if let Some(sub_iter) = self.sub_iterator.as_mut() {
-				let end_value = if let Some(value_iter) = sub_iter.current_value_iter.as_mut() {
-					(value_iter.1).1.take()
-				} else {
-					end_prefix(sub_iter.base.inner())
-				};
 				let base_depth = if let Some(common_depth) = common_depth {
 					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
 				} else {
@@ -711,7 +697,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				};
 				let values = self.values.iter_from(&k[..base_depth]);
 
-				sub_iter.current_value_iter = Some((values, (k[..base_depth].to_vec(), end_value)));
+				sub_iter.current_value_iter = Some(values);
 			}
 
 			self.sub_advance_value();
@@ -737,8 +723,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	) {
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			if let Some(iter) = sub_iter.current_value_iter.as_mut() {
-				sub_iter.next_value = iter.0.next()
-					.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end)
+				sub_iter.next_value = iter.next()
+					.filter(|kv| sub_iter.end_iter.as_ref().map(|end| &kv.0 < end)
 						.unwrap_or(true));
 			}
 		}
