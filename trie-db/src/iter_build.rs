@@ -605,6 +605,9 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 				debug_assert!(self.last_depth().map(|last| last <= branch_ix).unwrap_or(true));
 				let new_elt = if let Some(element) = self.0.last_mut() {
 					if element.depth == branch_ix {
+						if element.children[parent_ix].is_none() {
+							element.nb_children += 1;
+						}
 						element.children[parent_ix] = Some(hash);
 						false
 					} else {
@@ -1516,30 +1519,30 @@ mod test {
 		];
 
 		let inputs = vec![
-//			(one_level_branch.clone(), vec![(b"testi".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
 			(empty.clone(), vec![], vec![], Some(0)),
 			(empty.clone(), vec![], vec![2, 5], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), None)], vec![2, 5], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![], Some(0)),
 			(empty.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![8, 20], Some(0)),
 
-			(one_level_branch.clone(), vec![], vec![], Some(0)),
-			(one_level_branch.clone(), vec![], vec![2, 5], Some(0)),
-			(one_level_branch.clone(), vec![], vec![5], Some(0)),
-			(one_level_branch.clone(), vec![], vec![6], Some(0)),
-			(one_level_branch.clone(), vec![], vec![7], Some(0)),
-			(one_level_branch.clone(), vec![], vec![6, 7], Some(0)),
+			(one_level_branch.clone(), vec![], vec![], Some(6)),
+			// 6 as read ahead.
+			(one_level_branch.clone(), vec![], vec![2, 5], Some(6)),
+			(one_level_branch.clone(), vec![], vec![5], Some(6)),
+			(one_level_branch.clone(), vec![], vec![6], Some(6)),
+			(one_level_branch.clone(), vec![], vec![7], Some(6)),
+			(one_level_branch.clone(), vec![], vec![6, 7], Some(6)),
 
 			// insert before indexes
 			// index one child
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(1)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(6)),
 			// index on children
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(1)),
-			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(1)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
 			// index after children
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
-			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(1)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(9)),
 
 			// insert onto indexes
 			// insert after indexes
