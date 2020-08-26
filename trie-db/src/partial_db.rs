@@ -56,7 +56,7 @@ pub type KVBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 
 /// Iterator over encoded indexes of a IndexBackend, encoded indexes also have
 /// a depth (which can differ from the depth we queried).
-pub type IndexBackendIter2<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
+pub type IndexBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
 
 impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -151,7 +151,7 @@ pub trait IndexBackend {
 	/// Remove any value at a key.
 	fn remove(&mut self, depth: usize, index: IndexPosition);
 	/// Iterate over the index from a key.
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter2<'a>;
+	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
 #[derive(Debug, Clone)]
@@ -286,7 +286,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		debug_assert!(range_iter.next().is_none());
 		first.map(|key| self.remove(&key));
 	}
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter2<'a> {
+	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let start = &index_tree_key(depth, from_index);
@@ -431,7 +431,7 @@ struct SubIterator<'a, V> {
 }
 
 struct StackedIndex<'a> {
-	iter: IndexBackendIter2<'a>, 
+	iter: IndexBackendIter<'a>, 
 	range: (Vec<u8>, Option<Vec<u8>>),
 	next_index: Option<(Vec<u8>, Index)>,
 	conf_index_depth: usize,

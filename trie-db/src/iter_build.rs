@@ -23,10 +23,8 @@ use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
 use crate::node_codec::NodeCodec;
-use crate::node::Node;
 use crate::{TrieLayout, TrieHash};
 use crate::partial_db::{IndexBackend, IndexPosition, IndexOrValue, Index as PartialIndex};
-use crate::rstd::convert::TryInto;
 
 
 macro_rules! exponential_out {
