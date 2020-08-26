@@ -262,14 +262,17 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		self.get(&index_tree_key(depth, index)[..]).cloned()
 	}
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
-		let odd = (index.actual_depth - 1) % nibble_ops::NIBBLE_PER_BYTE;
-		// TODO EMCH can trim the position to actual size of index (just gain size storage).
-		if odd != 0 {
-			position.last_mut().map(|l| 
-				*l = *l & !(255 >> (odd * nibble_ops::BIT_PER_NIBBLE))
-			);
+		// do not write single element index
+		if index.actual_depth > 0 {
+			let odd = (index.actual_depth - 1) % nibble_ops::NIBBLE_PER_BYTE;
+			// TODO EMCH can trim the position to actual size of index (just gain size storage).
+			if odd != 0 {
+				position.last_mut().map(|l| 
+					*l = *l & !(255 >> (odd * nibble_ops::BIT_PER_NIBBLE))
+				);
+			}
+			self.insert(index_tree_key_owned(depth, position).to_vec(), index);
 		}
-		self.insert(index_tree_key_owned(depth, position).to_vec(), index);
 	}
 	fn remove(&mut self, depth: usize, index: IndexPosition) {
 		let l_size = crate::rstd::mem::size_of::<u32>();
