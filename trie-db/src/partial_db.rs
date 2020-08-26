@@ -761,9 +761,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			0
 		};
 		self.advance_index(); // skip this index (no need to return it)
-		let result = if let Some((next_change_key, _)) = self.next_change.as_ref() {
+		if let Some((next_change_key, _)) = self.next_change.as_ref() {
 			let index_iter = &mut self.index_iter;
-			let current_value_iter = &mut self.current_value_iter;
 			let indexes = &self.indexes;
 //			let change_depth = next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 			self.indexes_conf.next_depth(first_possible_next_index, next_change_key)
@@ -776,9 +775,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					});
 		
 					if first.is_some() {
-						let end_value = index_iter.last().map(|iter| {
-							iter.range.1.clone()
-						}).flatten();
 						index_iter.push(StackedIndex {
 							iter,
 							range,
@@ -791,9 +787,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					}
 				}).unwrap_or(false)
 		} else {
-			unreachable!("function entered when change over an index");
-		};
-		if !result {
+			false
+		}
+/*		if !result {
 			// Nothing to do, we already put higer bound of value iter to lower stack index end.
 			// so since we did skip index and did not reset iter, we include values that are over
 			// this index.
@@ -801,7 +797,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				self.advance_value();
 			}
 		}
-		result
+		result*/
 	}
 
 	fn advance_index(&mut self) -> bool {
