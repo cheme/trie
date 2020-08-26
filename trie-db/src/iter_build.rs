@@ -523,7 +523,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				} else {
 					unreachable!("we did insert empty in unstack");
 				}
-				previous_key = (k, depth);
+				//previous_key = (k, depth);
 				continue;
 			}
 
@@ -637,13 +637,13 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 
 	fn taint_child(&mut self, key_branch: &[u8]) {
 		if let Some(CacheEltIndex { children, depth, is_index, nb_children, buffed, value, .. }) = self.0.last_mut() {
-			if *is_index {
-				let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
-				if children[ix].is_some() {
-					*nb_children = *nb_children - 1;
-				}
-				children[ix] = None;
+			//if *is_index { // TODO try bringing back this condition
+			let ix = NibbleSlice::new(key_branch.as_ref()).at(*depth) as usize;
+			if children[ix].is_some() {
+				*nb_children = *nb_children - 1;
 			}
+			children[ix] = None;
+			//}
 		}
 	}
 
@@ -697,12 +697,12 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			if let Some(par) = self.0.last_mut() {
 				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), par.depth) as usize;
 				let is_overwrite = par.children[parent_ix].is_some();
-				if let Some(do_stack) = match action {
+				if let Some(do_buff) = match action {
 					Action::UnstackBranch => Some(par.buff_transition(true, is_overwrite)),
 					Action::UnstackValue => Some(par.buff_transition(false, is_overwrite)),
 					_ => None,
 				} {
-					if do_stack {
+					if do_buff {
 						self.1 = Some((key.to_vec(), CacheElt {
 							children,
 							value,
