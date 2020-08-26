@@ -103,14 +103,6 @@ struct CacheEltIndex<T: TrieLayout, V> {
 }
 
 impl<T: TrieLayout, V> CacheEltIndex<T, V> { 
-	fn is_empty(&self) -> bool {
-		self.value.is_none() && self.nb_children == 0
-	}
-
-	fn is_value(&self) -> bool {
-		self.value.is_some() && self.nb_children == 0
-	}
-
 	// Return true when we need to buff.
 	// Update status to post buff status.
 	// Only when necessary (ordered change
@@ -685,7 +677,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			self.unbuff_first_child(callback);
 		}
 		if let Some(
-			CacheEltIndex { children, depth, is_index, value, buffed, nb_children }
+			CacheEltIndex { children, depth, is_index, value, buffed, nb_children: _ }
 		) = self.0.pop() {
 			if let Some(target) = target_parent_depth {
 				let parent_depth = self.last_depth();
