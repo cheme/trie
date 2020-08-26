@@ -56,11 +56,7 @@ pub type KVBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 
 /// Iterator over encoded indexes of a IndexBackend, encoded indexes also have
 /// a depth (which can differ from the depth we queried).
-pub type IndexBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
-
-/// Iterator over encoded indexes of a IndexBackend, encoded indexes also have
-/// a depth (which can differ from the depth we queried).
-pub type IndexBackendIter2<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index2)> + 'a>;
+pub type IndexBackendIter2<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
 
 impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -155,29 +151,7 @@ pub trait IndexBackend {
 	/// Remove any value at a key.
 	fn remove(&mut self, depth: usize, index: IndexPosition);
 	/// Iterate over the index from a key.
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
-}
-
-/// Storage of encoded index for a trie.
-/// Depth is a nibble depth.
-pub trait IndexBackend2 {
-	/// Query for an index, also return the depth of this index (it can differs from
-	/// the index depth when there is a nibble encoded in the node).
-	fn read(&self, depth: usize, index: &[u8]) -> Option<Index2>;
-	/// Insert an `encode_index` with and `actual_depth` at configured `depth` for a given `index`.
-	fn write(&mut self, depth: usize, index: IndexPosition, value: Index2);
-	/// Remove any value at a key.
-	fn remove(&mut self, depth: usize, index: IndexPosition);
-	/// Iterate over the index from a key.
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter2<'a>;
-}
-
-#[derive(Debug, Clone)]
-/// Content of an index.
-/// Index are only branches.
-pub struct Index {
-	pub encoded_node: Vec<u8>,
-	pub actual_depth: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -186,28 +160,13 @@ pub struct Index {
 /// 0 if root.
 /// actual depth is <= index depth. (< when there is a partial nible overlapping
 /// the index position).
-pub struct Index2 {
+pub struct Index {
 	pub hash: Vec<u8>, // TODO hash as inner type ?? (no need to encode vec length here)
 	pub actual_depth: usize,
 }
 
 impl Index {
-	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Ordering {
-		let end = self.actual_depth;
-		let odd = end % nibble_ops::NIBBLE_PER_BYTE;
-		let end = end / nibble_ops::NIBBLE_PER_BYTE;
-		if odd == 0 {
-			index_key[..end].cmp(change_key)
-		} else {
-			let size = self.actual_depth;
-			let slice1 = LeftNibbleSlice::new(index_key).truncate(size);
-			let slice2 = LeftNibbleSlice::new(change_key);
-			slice1.cmp(&slice2)
-		}
-	}
-}
-
-impl Index2 {
+	// TODO check if used or can be replaced
 	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Ordering {
 		let end = self.actual_depth;
 		let odd = end % nibble_ops::NIBBLE_PER_BYTE;
@@ -327,7 +286,7 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		debug_assert!(range_iter.next().is_none());
 		first.map(|key| self.remove(&key));
 	}
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter2<'a> {
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let start = &index_tree_key(depth, from_index);
@@ -407,8 +366,7 @@ impl DepthIndexes {
 pub enum IndexOrValue<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
 	/// Also an optional `Change of value is attached`.
-	/// TODO probably do not need the usize
-	Index(Index, Option<Option<B>>),
+	Index(Index),
 	/// Value node value, from change set.
 	Value(B),
 	/// Dropped value node, from change set.
@@ -421,43 +379,18 @@ impl<B> IndexOrValue<B> {
 	/// Access the index branch depth (including the partial key).
 	pub fn index_depth(&self) -> Option<usize> {
 		match self {
-			IndexOrValue::Index(index, _change_value) => Some(index.actual_depth),
-			_ => None,
-		}
-	}
-}
-
-/// Enum containing either a value or an index, mostly for internal use
-/// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
-pub enum IndexOrValue2<B> {
-	/// Contains depth as number of bit and the encoded value of the node for this index.
-	/// Also an optional `Change of value is attached`.
-	Index(Index2),
-	/// Value node value, from change set.
-	Value(B),
-	/// Dropped value node, from change set.
-	DroppedValue,
-	/// Value node value, from existing values.
-	StoredValue(Vec<u8>),
-}
-
-impl<B> IndexOrValue2<B> {
-	/// Access the index branch depth (including the partial key).
-	pub fn index_depth(&self) -> Option<usize> {
-		match self {
-			IndexOrValue2::Index(index) => Some(index.actual_depth),
+			IndexOrValue::Index(index) => Some(index.actual_depth),
 			_ => None,
 		}
 	}
 	/// Access the index branch depth (including the partial key).
 	pub fn index_parent_depth(&self) -> Option<usize> {
 		match self {
-			IndexOrValue2::Index(index) => Some(index.actual_depth - 1),
+			IndexOrValue::Index(index) => Some(index.actual_depth - 1),
 			_ => None,
 		}
 	}
 }
-
 
 /// Iterator over index and value for root calculation
 /// and index update.
@@ -483,73 +416,23 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	index_iter: Vec<StackedIndex<'a>>,
 	next_change: Option<(Vec<u8>, Option<V>)>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	// key and depth of previous index touch, get reset each time we change
-	// prefix (return index or pop)
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
-
 	sub_iterator: Option<SubIterator<'a, V>>,
 }
-
-/// Iterator over index and value for root calculation
-/// and index update.
-pub struct RootIndexIterator2<'a, KB, IB, V, ID>
-	where
-		KB: KVBackend,
-		IB: IndexBackend2,
-		V: AsRef<[u8]>,
-		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
-{
-	values: &'a KB,
-	indexes: &'a IB,
-	indexes_conf: &'a DepthIndexes,
-	changes_iter: ID,
-	pub deleted_indexes: Vec<(usize, IndexPosition)>,
-	current_index_depth: usize,
-	/// value iterator in use and the range that needs to be covered.
-	/// A boolean record first touched value or change, at end if no touch
-	/// value or change, a delete child is returned.
-	/// TODO the end range is currently unnecessary as the next index would
-	/// also end it.
-	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
-	index_iter: Vec<StackedIndex2<'a>>,
-	next_change: Option<(Vec<u8>, Option<V>)>,
-	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
-	sub_iterator: Option<SubIterator2<'a, V>>,
-}
-
 
 struct SubIterator<'a, V> {
 	base: NibbleVec,
 	index_iter: Option<StackedIndex<'a>>,
 	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
+	next_value: Option<(Vec<u8>, Vec<u8>)>,
 	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
-	next_value: Option<(Vec<u8>, Vec<u8>)>,
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
 }
-
-struct SubIterator2<'a, V> {
-	base: NibbleVec,
-	index_iter: Option<StackedIndex2<'a>>,
-	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
-	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	buffed_next_value: (Vec<u8>, IndexOrValue2<V>),
-	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
-}
-
 
 struct StackedIndex<'a> {
-	iter: IndexBackendIter<'a>, 
-	range: (Vec<u8>, Option<Vec<u8>>),
-	next_index: Option<(Vec<u8>, Index)>,
-	conf_index_depth: usize,
-	end_saved_value_iter: Option<(Vec<u8>, Option<Vec<u8>>)>,
-}
-
-struct StackedIndex2<'a> {
 	iter: IndexBackendIter2<'a>, 
 	range: (Vec<u8>, Option<Vec<u8>>),
-	next_index: Option<(Vec<u8>, Index2)>,
+	next_index: Option<(Vec<u8>, Index)>,
 	conf_index_depth: usize,
 	end_saved_value_iter: Option<(Vec<u8>, Option<Vec<u8>>)>,
 }
@@ -568,60 +451,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		changes_iter: ID,
 		deleted_indexes: Vec<(usize, IndexPosition)>,
 	) -> Self {
-
-/*		for a in changes_iter {
-			println!("{:?}", (a.0, a.1.as_ref().map(|v| v.as_ref())));
-		}
-		panic!("dd");*/
 		let mut iter = RootIndexIterator {
-			values,
-			indexes,
-			indexes_conf,
-			changes_iter,
-			deleted_indexes,
-			current_index_depth: 0,
-			current_value_iter: None,
-			index_iter: Vec::new(),
-			next_change: None,
-			next_value: None,
-			previous_touched_index_depth: None,
-			sub_iterator: None,
-		};
-
-		// get first change
-		iter.advance_change();
-		// 0 depth index is always defined.
-		let mut root_iter = iter.indexes.iter(0, &[]);
-		let first = root_iter.next();
-		if first.is_some() {
-			iter.index_iter.push(StackedIndex {
-				iter: root_iter,
-				range: (Vec::new(), None),
-				next_index: first,
-				conf_index_depth: 0,
-				end_saved_value_iter: None,
-			});
-		}
-	
-		iter
-	}
-}
-
-impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
-	where
-		KB: KVBackend,
-		IB: IndexBackend2,
-		V: AsRef<[u8]>,
-		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
-{
-	pub fn new(
-		values: &'a KB,
-		indexes: &'a IB,
-		indexes_conf: &'a DepthIndexes,
-		changes_iter: ID,
-		deleted_indexes: Vec<(usize, IndexPosition)>,
-	) -> Self {
-		let mut iter = RootIndexIterator2 {
 			values,
 			indexes,
 			indexes_conf,
@@ -666,185 +496,6 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 
 	fn next(&mut self) -> Option<Self::Item> {
 		let mut last_sub = false;
-		if let Some(sub_iter) = self.sub_iterator.as_mut() {
-/*	current_value_iter: Option<(KVBackendIter<'a>, (Vec<u8>, Option<Vec<u8>>))>,
-	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
-	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
-	index_iter: Option<StackedIndex<'a>>,
-}*/
-
-			let action = if let Some(index_iter) = sub_iter.index_iter.as_ref() {
-				match (sub_iter.next_value.as_ref(), index_iter.next_index.as_ref()) {
-					(Some(next_value), Some(next_index)) => {
-						match next_value.0.cmp(&next_index.0) {
-							Ordering::Equal => unreachable!("iterate under index"),
-							Ordering::Greater => Element::Index,
-							Ordering::Less => Element::Value,
-						}
-					},
-					(Some(_next_value), None) => {
-						Element::Value
-					},
-					(None, Some(_index)) => {
-						Element::Index
-					},
-					(None, None) => {
-						Element::None
-					},
-				}
-			} else {
-				if sub_iter.next_value.is_some() {
-					Element::Value
-				} else {
-					Element::None
-				}
-			};
-			match action {
-				Element::Index => {
-					return self.sub_next_index();
-				},
-				Element::Value => {
-					let result = sub_iter.next_value.take().map(|value|
-						(value.0, IndexOrValue::StoredValue(value.1)));
-					self.sub_advance_value();
-					return result
-				},
-				Element::None => {
-					last_sub = true;
-				},
-				_ => unreachable!(),
-			}
-		}
-		if last_sub {
-			return Some(self.sub_iterator.take()
-				.expect("last_sub only when exists")
-				.buffed_next_value)
-		}
-	/*	match self.state {
-			State::ValueReachingTarget => self.next_change_or_value(),
-			State::ValueReachingIndex => self.next_value_or_index(),
-			State::ValueToEnd => self.next_value(),
-			State::IndexReachingTarget => self.next_change_or_index(),
-			State::IndexToEnd => self.next_index(None),
-			State::Ended => None,
-		}*/
-		let next_element = self.next_element();
-		let stacked = match next_element {
-			Element::Value => false,
-			Element::None => false,
-			Element::IndexChange
-			| Element::Change
-			| Element::ChangeValue => if let Some(kv) = self.next_change.as_ref().map(|kv| &kv.0) {
-				if let Some(i) = self.try_stack_index(&kv, kv.len() * nibble_ops::NIBBLE_PER_BYTE) { // TODO some internal do not make sense for change eg common path is always change length
-					self.do_stack_index(i)
-				} else {
-					false
-				}
-			} else {
-				false
-			},
-			Element::Index  => if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
-				if let Some(i) = self.try_stack_index(&kv, depth) {
-					self.do_stack_index(i)
-				} else {
-					false
-				}
-			} else {
-				false
-			},
-		};
-		if stacked {
-			return self.next();
-		}
-		match next_element {
-			Element::Value => self.next_value(),
-			Element::Index => {
-				let r = self.next_index(None);
-				if r.is_none() {
-					self.next();
-				}
-				r
-			},
-			Element::IndexChange => {
-				let next_change = self.next_change.take();
-				self.advance_change();
-				if let Some((_key, change)) = next_change {
-					let r = self.next_index(Some(change));
-					if r.is_none() {
-						return self.next();
-					}
-					r
-				} else {
-					// skip delete
-					self.next()
-				}
-			},
-			Element::Change => if self.try_new_value_iter() {
-				self.next()
-			} else {
-				self.next_change()
-			},
-			Element::ChangeValue => {
-				self.advance_value();
-				self.next_change()
-			},
-			Element::None => {
-				if self.pop_index() {
-					return self.next();
-				}
-				None
-			},
-		}
-	}
-/*
-// TODO EMCH we stack iter to always try to have an iter above us
-// we here get next element by comparing three (on start state must always be good
-// We move index pop in advance index
-// we match result and do change in this function accordingly.
-// - on index, try advance index -> does pop internaly, then new index so clear value iter and init
-// a new
-// - on change, try advance change -> on fail nothing, on success try stack index and if advance
-// and if init value iter
-// - on value, try advance -> on fail clear and do nothing on success do nothing.
-
-		// in fact we stack over change and vaul (all the stae pof new function with different starts orders.
-		// -> probably lot of redundancy in compare but first get something working
-
-		// value iteration is well define in interval between indexes and
-		// only need to be compared with change.
-		if self.current_value_iter.is_some() {
-			if self.next_value.is_none() {
-				self.advance_value();
-			}
-			if self.next_change.is_none() {
-				self.advance_change();
-			}
-			let result = self.next_change_or_value();
-			if result.is_some() {
-				return result;
-			}
-		}
-
-		// change init
-
-		// index and value resolve.
-		None
-	}
-*/
-}
-
-impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
-	where
-		KB: KVBackend,
-		IB: IndexBackend2,
-		V: AsRef<[u8]>,
-		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
-{
-	type Item = (Vec<u8>, IndexOrValue2<V>);
-
-	fn next(&mut self) -> Option<Self::Item> {
-		let mut last_sub = false;
 		// TODO factor with standard iter
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			let action = if let Some(index_iter) = sub_iter.index_iter.as_ref() {
@@ -879,7 +530,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 				},
 				Element::Value => {
 					let result = sub_iter.next_value.take().map(|value|
-						(value.0, IndexOrValue2::StoredValue(value.1)));
+						(value.0, IndexOrValue::StoredValue(value.1)));
 					self.sub_advance_value();
 					return result;
 				},
@@ -941,7 +592,6 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 	}
 }
-
 
 impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V, ID>
 	where
@@ -1011,381 +661,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
 				if let Some(index) = index_iter.next_index.take() {
-					common_depth = self.previous_touched_index_depth.as_ref().map(|last_index| {
-						let common_depth =  nibble_ops::biggest_depth(
-							&last_index.0[..],
-							&index.0[..],
-						);
-						let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth);
-						let common_depth = crate::rstd::cmp::min(common_depth, last_index.1);
-						common_depth
-					});
-					sub_iter.previous_touched_index_depth = Some((index.0.clone(), (index.1).actual_depth));
-					result = Some(index);
-				} else {
-					sub_iter.previous_touched_index_depth = None;
-				}
-			}
-		}
-
-		if result.is_none() {
-			// last interval
-			if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.take() {
-				if let Some(sub_iter) = self.sub_iterator.as_mut() {
-					// TODO can factor with next result.map
-					let end_value = if let Some(value_iter) = self.current_value_iter.as_mut() {
-						(value_iter.1).1.take()
-					} else {
-						end_prefix(sub_iter.base.inner())
-					};
-
-					let base_depth = (previous_touched_index_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
-					let values = self.values.iter_from(&previous_touched_index_depth.0[..base_depth]);
-					sub_iter.current_value_iter = Some((values, (previous_touched_index_depth.0[..base_depth].to_vec(), end_value)));
-				}
-				self.sub_advance_value();
-			}
-		}
-		result.map(|(k, i)| {
-			if let Some(sub_iter) = self.sub_iterator.as_mut() {
-				let end_value = if let Some(value_iter) = self.current_value_iter.as_mut() {
-					(value_iter.1).1.take()
-				} else {
-					end_prefix(sub_iter.base.inner())
-				};
-				let base_depth = if let Some(common_depth) = common_depth {
-					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-				} else {
-					unreachable!();
-				};
-				let values = self.values.iter_from(&k[..base_depth]);
-
-				sub_iter.current_value_iter = Some((values, (k[..base_depth].to_vec(), end_value)));
-			}
-
-			self.sub_advance_value();
-			self.sub_advance_index();
-			(k, IndexOrValue::Index(i, None))
-		})
-	}
-
-	fn sub_advance_index(
-		&mut self,
-	) {
-		if let Some(sub_iter) = self.sub_iterator.as_mut() {
-			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
-				index_iter.next_index = index_iter.iter.next().filter(|kv| {
-					index_iter.range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
-				});
-			}
-		}
-	}
-
-	fn sub_advance_value(
-		&mut self,
-	) {
-		if let Some(sub_iter) = self.sub_iterator.as_mut() {
-			if let Some(iter) = sub_iter.current_value_iter.as_mut() {
-				sub_iter.next_value = iter.0.next()
-					.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end)
-						.unwrap_or(true));
-			}
-		}
-	}
-
-	// Return true if we stacked something and the stack item is not over current item.
-	fn try_stack_index(&self, current_key_vec: &Vec<u8>, current_depth: usize) -> Option<usize> {
-		// see if next change is bellow
-		if let Some((next_k, _)) = self.next_change.as_ref() {
-			let common_depth = nibble_ops::biggest_depth(
-				&current_key_vec[..],
-				&next_k[..],
-			);
-			if common_depth < current_depth {
-				return None;
-			}
-			// the index is contain in the change
-			Some(current_depth + 1)
-		} else {
-			None
-		}
-	}
-
-	fn do_stack_index(&mut self, first_possible_next_index: usize) -> bool {
-		if let Some((next_change_key, _)) = self.next_change.as_ref() {
-			let index_iter = &mut self.index_iter;
-			let current_value_iter = &mut self.current_value_iter;
-			let indexes = &self.indexes;
-//			let change_depth = next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE;
-			self.indexes_conf.next_depth(first_possible_next_index, next_change_key)
-				.map(move |d| {
-					let mut iter = indexes.iter(d, next_change_key);
-					// TODO try avoid this alloc
-					let range = value_prefix_index(d, next_change_key.to_vec());
-					let first = iter.next().filter(|kv| {
-						range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
-					});
-		
-					if first.is_some() {
-						let end_saved_value_iter = current_value_iter.take()
-							.and_then(|iter| {
-								end_prefix(&next_change_key[..(d + 1) / nibble_ops::NIBBLE_PER_BYTE])
-									.map(|start| (start, (iter.1).1))
-							});
-						index_iter.push(StackedIndex {
-							iter,
-							range,
-							next_index: first,
-							conf_index_depth: d,
-							end_saved_value_iter,
-						});
-						true
-					} else {
-						false
-					}
-				}).unwrap_or(false)
-		} else {
-			false
-		}
-	}
-
-	fn advance_index(&mut self) -> bool {
-		self.index_iter.last_mut().map(|i| {
-			i.next_index = i.iter.next()
-				.filter(|kv| {
-					i.range.1.as_ref().map(|end| &kv.0 < end)
-						.unwrap_or(true)
-				});
-			i.next_index.is_some()
-		}).unwrap_or(false)
-	}
-
-	fn advance_change(&mut self) {
-		if let Some(next_change) = self.changes_iter.next() {
-			self.next_change = Some(next_change)
-		}
-	}
-
-	fn pop_index(&mut self) -> bool {
-		if let Some(index) = self.index_iter.pop() {
-			if let Some((start, end)) = index.end_saved_value_iter {
-				let values = self.values.iter_from(&start[..]);
-				let range = (start, end);
-				assert!(self.current_value_iter.is_none());
-				self.current_value_iter = Some((values, range));
-				self.advance_value();
-			}
-			true
-		} else {
-			false
-		}
-	}
-
-	fn is_value_before_index(&self) -> bool {
-		match (self.buffed_next_index(), &self.next_value) {
-			(Some(next_index), Some(next_value)) => {
-				match next_index.1.compare(&next_index.0, &next_value.0) {
-					Ordering::Equal => unreachable!("Value are not indexed"),
-					Ordering::Less => false,
-					Ordering::Greater => true,
-				}
-			},
-			(None, Some(_next_value)) => true,
-			_ => false,
-		}
-	}
-
-	fn is_change_bellow_index(&self) -> bool {
-		match (self.buffed_next_index(), &self.next_change) {
-			(Some(next_index), Some(next_change)) => {
-				let common_depth =  nibble_ops::biggest_depth(
-					&next_change.0[..],
-					&next_index.0[..],
-				);
-				let common_depth = crate::rstd::cmp::min(common_depth, next_index.1.actual_depth);
-				common_depth > next_index.1.actual_depth
-/*	
-				// TODO this is not bellow
-				match next_index.1.compare(&next_index.0, &next_change.0) {
-					Ordering::Equal => false,
-					Ordering::Less => true,
-					Ordering::Greater => false,
-				}*/
-			},
-			(None, Some(_next_value)) => true,
-			_ => false,
-		}
-	}
-
-	fn value_or_change(&self) -> Element {
-		match (&self.next_change, &self.next_value) {
-			(Some(next_change), Some(next_value)) => {
-				match next_change.0.cmp(&next_value.0) {
-					Ordering::Equal => Element::ChangeValue,
-					Ordering::Less => Element::Change,
-					Ordering::Greater => Element::Value,
-				}
-			},
-			(Some(_next_change), None) => Element::Change,
-			(None, Some(_next_value)) => Element::Value,
-			(None, None) => Element::None,
-		}
-	}
-	fn index_or_change(&self) -> Element {
-		match (self.buffed_next_index(), &self.next_change) {
-			(Some(next_index), Some(next_change)) => {
-				match next_index.1.compare(&next_index.0, &next_change.0) {
-					Ordering::Equal => Element::IndexChange,
-					Ordering::Less => Element::Index,
-					Ordering::Greater => Element::Change,
-				}
-			},
-			(Some(_next_index), None) => Element::Index,
-			(None, Some(_next_change)) => Element::Change,
-			(None, None) => Element::None,
-		}
-	}
-	
-	fn next_element(&self) -> Element {
-		if self.is_value_before_index() {
-			self.value_or_change()
-		} else {
-			self.index_or_change()
-		}
-	}
-
-	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		let next_change = self.next_change.take();
-		self.advance_change();
-		match next_change {
-			Some((key, Some(change))) => Some((key, IndexOrValue::Value(change))),
-			Some((key, None)) => Some((key, IndexOrValue::DroppedValue)),
-			None => None
-		}
-	}
-
-	fn buffed_next_index(&self) -> Option<&(Vec<u8>, Index)> {
-		self.index_iter.last().and_then(|item| item.next_index.as_ref())
-	}
-
-	fn next_index(&mut self, change: Option<Option<V>>) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		//self.previous_touched_index_depth = None;
-		let current_index_depth = &mut self.current_index_depth;
-		let previous_touched_index_depth = &mut self.previous_touched_index_depth;
-		// stop value iteration after index
-		self.next_value = None;
-		self.current_value_iter = None;
-		let r = self.index_iter.last_mut().and_then(|i|
-			i.next_index.take().map(|index| {
-				*current_index_depth = (index.1).actual_depth;
-				*previous_touched_index_depth = Some((index.0.clone(), (index.1).actual_depth));
-				(index.0, IndexOrValue::Index(index.1, change))
-			})
-		);
-		// TODO no need for read ahead?
-		self.advance_index();
-		self.try_new_value_iter();
-		r
-	}
-
-	// attempt to init a new value iter (at start, on new index against next change).
-	fn try_new_value_iter(&mut self) -> bool {
-		if self.current_value_iter.is_some() {
-			return false;
-		}
-		match (self.previous_touched_index_depth.as_ref(), &self.next_change) {
-			(Some(previous_depth), Some(next_change)) => {
-				if self.is_change_bellow_index() {
-					let (start, end) = if let Some(index) = self.buffed_next_index() {
-						let common_depth =  nibble_ops::biggest_depth(
-							&previous_depth.0[..],
-							&index.0[..],
-						);
-						let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth);
-						let common_depth = crate::rstd::cmp::min(common_depth, previous_depth.1);
-
-						let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
-						let start = previous_depth.0[..base_depth].to_vec();
-						let end = end_prefix(&start[..]);
-						(start, end)
-					} else {
-						let base_depth = if previous_depth.1 == 0 {
-							0
-						} else {
-							(previous_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-						};
-						let start = previous_depth.0[..base_depth].to_vec();
-						let end = if self.index_iter.len() > 1 {
-							let parent_index_depth = self.index_iter[self.index_iter.len() - 2].conf_index_depth;
-							end_prefix(&next_change.0[..parent_index_depth / nibble_ops::NIBBLE_PER_BYTE])
-						} else {
-							None
-						};
-						(start, end)
-					};
-					let values = self.values.iter_from(start.as_slice());
-		
-	/*				let odd = previous_depth.1 % nibble_ops::NIBBLE_PER_BYTE;
-					let ref_depth = previous_depth.1 / nibble_ops::NIBBLE_PER_BYTE; // TODO could we include an out of range in odd as first value (then advance twice)
-					let mut start = next_change.0[..ref_depth].to_vec(); // TODO avoid clone by advance value once more on smaller first key and have end_prefix_odd variant
-					if odd > 0 {
-						start.push(0);
-					}
-					let values = self.values.iter_from(&start[..]);*/
-					// TODO we shall remove start
-					let range = (start, end);
-					self.current_value_iter = Some((values, range));
-					self.advance_value();
-					true
-				} else {
-					// no need for values in this interval
-					false
-				}
-			},
-			(None, Some(_next_change)) => {
-				let values = self.values.iter_from(&[]);
-				let range = (Vec::new(), None);
-				self.current_value_iter = Some((values, range));
-				self.advance_value();
-				true
-			},
-			(Some(_), None)
-			| (None, None) => false,
-		}
-	}
-
-	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		let r = self.next_value.take()
-			.map(|value| (value.0, IndexOrValue::StoredValue(value.1)));
-		if r.is_some() {
-			self.advance_value();
-		}
-		r
-	}
-
-	fn advance_value(&mut self) {
-		let next_value = &mut self.next_value;
-		self.current_value_iter.as_mut().map(|iter| {
-			*next_value = iter.0.next()
-				.filter(|kv| (iter.1).1.as_ref().map(|end| &kv.0 < end)
-					.unwrap_or(true));
-		});
-	}
-}
-
-impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
-	where
-		KB: KVBackend,
-		IB: IndexBackend2,
-		V: AsRef<[u8]>,
-		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
-{
-	fn sub_next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue2<V>)> {
-		let mut result = None;
-		let mut common_depth = None;
-		if let Some(sub_iter) = self.sub_iterator.as_mut() {
-			if let Some(index_iter) = sub_iter.index_iter.as_mut() {
-				if let Some(index) = index_iter.next_index.take() {
 					common_depth = sub_iter.previous_touched_index_depth.as_ref().map(|last_index| {
 						let common_depth =  nibble_ops::biggest_depth(
 							&last_index.0[..],
@@ -1441,7 +716,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 			self.sub_advance_value();
 			self.sub_advance_index();
-			(k, IndexOrValue2::Index(i))
+			(k, IndexOrValue::Index(i))
 		})
 	}
 
@@ -1537,7 +812,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						// continue iter bellow.
 						current_value_iter.as_mut().map(|value_iter| (value_iter.1).1 = end_value);
 
-						index_iter.push(StackedIndex2 {
+						index_iter.push(StackedIndex {
 							iter,
 							range,
 							next_index: first,
@@ -1677,22 +952,22 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 	}
 
-	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue2<V>)> {
+	fn next_change(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let next_change = self.next_change.take();
 		self.advance_change();
 		match next_change {
-			Some((key, Some(change))) => Some((key, IndexOrValue2::Value(change))),
-			Some((key, None)) => Some((key, IndexOrValue2::DroppedValue)),
+			Some((key, Some(change))) => Some((key, IndexOrValue::Value(change))),
+			Some((key, None)) => Some((key, IndexOrValue::DroppedValue)),
 			None => None
 		}
 	}
 
-	fn buffed_next_index(&self) -> Option<&(Vec<u8>, Index2)> {
+	fn buffed_next_index(&self) -> Option<&(Vec<u8>, Index)> {
 		self.index_iter.last().and_then(|item| item.next_index.as_ref())
 	}
 
 	// TODO factor with next_sub_index
-	fn next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue2<V>)> {
+	fn next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		//self.previous_touched_index_depth = None;
 		let mut common_depth = None;
 		let current_index_depth = &mut self.current_index_depth;
@@ -1749,13 +1024,13 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 			self.advance_value();
 			self.advance_index();
-			(k, IndexOrValue2::Index(i))
+			(k, IndexOrValue::Index(i))
 		})
 	}
 
-	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue2<V>)> {
+	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
 		let r = self.next_value.take()
-			.map(|value| (value.0, IndexOrValue2::StoredValue(value.1)));
+			.map(|value| (value.0, IndexOrValue::StoredValue(value.1)));
 		if r.is_some() {
 			self.advance_value();
 		}
