@@ -152,7 +152,8 @@ pub trait IndexBackend {
 	fn write(&mut self, depth: usize, index: IndexPosition, value: Index);
 	/// Remove any value at a key.
 	fn remove(&mut self, depth: usize, index: IndexPosition);
-	/// Iterate over the index from a key.
+	/// Iterate over the index from a key. TODO change this to include range (so depth is not all depth
+	/// items but those in range corresponding to parent index depth) 
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
@@ -185,7 +186,7 @@ impl Index {
 	}
 }
 
-/// Calculate the prefix to apply for value iterator start (and end).
+/// Calculate the prefix to apply for index iterator start (and end). TODO parameters are confusing (actual_index_depth seems to be actual_index_depth + 1)
 // TODO consider trying to use small vec (need to be usable in range) for result, we can even use
 // nibblevec internally
 fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
@@ -427,7 +428,7 @@ struct SubIterator<'a, V> {
 	index_iter: Option<StackedIndex<'a>>,
 	current_value_iter: KVBackendIter<'a>,
 	next_value: Option<(Vec<u8>, Vec<u8>)>,
-	buffed_next_value: (Vec<u8>, IndexOrValue<V>),
+	buffed_next_value: Option<(Vec<u8>, IndexOrValue<V>)>,
 	previous_touched_index_depth: Option<(Vec<u8>, usize)>,
 }
 
@@ -544,9 +545,14 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			}
 		}
 		if last_sub {
-			return Some(self.sub_iterator.take()
+			let result = self.sub_iterator.take()
 				.expect("last_sub only when exists")
-				.buffed_next_value)
+				.buffed_next_value;
+			if result.is_some() {
+				return result;
+			} else {
+				return self.next();
+			}
 		}
 		let next_element = self.next_element();
 		match next_element {
@@ -607,7 +613,7 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		key: &[u8],
 		depth: usize,
 		child_index: usize,
-		buffed: (Vec<u8>, IndexOrValue<V>),
+		buffed: Option<(Vec<u8>, IndexOrValue<V>)>,
 	) {
 		let mut base = NibbleVec::new();
 		base.append_partial(((0, 0), key));
@@ -632,7 +638,7 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 			});
 		let current_value_iter = self.values.iter_from(&key[..]);
 
-		let end_iter = end_prefix(&key[..]);
+		let end_iter = end_prefix_index(&key[..], depth + 1);
 		self.sub_iterator = Some(SubIterator {
 			end_iter,
 			index_iter,
@@ -722,7 +728,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	) {
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			sub_iter.next_value = sub_iter.current_value_iter.next()
-				.filter(|kv| sub_iter.end_iter.as_ref().map(|end| &kv.0 < end)
+				.filter(|kv| sub_iter.end_iter.as_ref().map(|end| {
+					&kv.0 < end
+				})
 					.unwrap_or(true));
 		}
 	}

@@ -1234,7 +1234,7 @@ impl<A, I> trie_db::partial_db::SubIter<A, Vec<u8>> for IterNoSub<I> {
 		_key: &[u8],
 		_depth: usize,
 		_child_index: usize,
-		_buffed: (A, IndexOrValue<Vec<u8>>),
+		_buffed: Option<(A, IndexOrValue<Vec<u8>>)>,
 	) {
 		unreachable!("IterNoSub should not be use with change");
 	}

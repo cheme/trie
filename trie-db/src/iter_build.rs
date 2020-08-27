@@ -440,7 +440,7 @@ pub trait SubIter<A, B> {
 		key: &[u8],
 		depth: usize,
 		child_index: usize,
-		buffed: (A, IndexOrValue<B>),
+		buffed: Option<(A, IndexOrValue<B>)>,
 	);
 }
 
@@ -456,7 +456,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 	assert!(!T::USE_EXTENSION, "No extension not implemented");
 	let mut depth_queue = CacheAccumIndex::<T, Vec<u8>>::default();
 	// compare iter ordering
-	let mut iter_input = input.into_iter();
+	let mut iter_input = input;
 	let mut first = iter_input.next();
 	while let Some((_k, IndexOrValue::DroppedValue)) = &first {
 		// drop value without a first stacked item do nothing (they are guarantied to be
@@ -515,7 +515,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				}
 			}
 			if let Some((new_iter_depth, new_iter_index)) = subiterat {
-				iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, (k, v));
+				iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Some((k, v)));
 				continue;
 			}
 
@@ -544,7 +544,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			match depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) {
 				Some((new_depth, None)) => (),
 				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
-					unimplemented!("switch iterator (also need to save current)");
+					iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Default::default());
+					return trie_visit_with_indexes::<T, I, A, F>(iter_input, callback);
 				},
 				None => break,
 			}
@@ -853,7 +854,14 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 								_ => unreachable!(),
 							}
 						} else {
-							unimplemented!("TODO fuse as root to when index and not buffed child");
+							// fusing root branch, just sub iter in the only child
+							debug_assert!(is_index);
+							let child_index = children.iter().position(|c| c.is_some())
+								.expect("checked one index and no first buff before");
+							// index is invalidated here (cannot use existing child hash since it will change post fuse)
+							// the iterator must therefore goes bellow this index next child.
+							// And this branch is already deleted.
+							return Some((0, Some((depth, child_index))));
 						}
 						return None;
 					},
