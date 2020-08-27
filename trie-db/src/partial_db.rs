@@ -26,6 +26,9 @@ use crate::nibble::nibble_ops;
 use crate::nibble::LeftNibbleSlice;
 use crate::nibble::NibbleVec;
 pub use crate::iter_build::SubIter;
+use crate::rstd::vec;
+use crate::rstd::vec::Vec;
+use crate::rstd::boxed::Box;
 
 #[cfg(feature = "std")]
 use std::sync::atomic::Ordering as AtomOrd;

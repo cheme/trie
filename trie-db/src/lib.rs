@@ -31,7 +31,7 @@ mod rstd {
 	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result};
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
-	pub use std::collections::btree_map;
+	pub use alloc::collections::btree_map;
 	pub trait Error {}
 	impl<T> Error for T {}
 }
