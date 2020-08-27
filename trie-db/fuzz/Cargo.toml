@@ -76,3 +76,15 @@ path = "fuzz_targets/trie_proof_invalid.rs"
 [[bin]]
 name = "indexing"
 path = "fuzz_targets/indexing.rs"
+
+[[bin]]
+name = "indexing1"
+path = "fuzz_targets/indexing1.rs"
+
+[[bin]]
+name = "indexing2"
+path = "fuzz_targets/indexing2.rs"
+
+[[bin]]
+name = "indexing3"
+path = "fuzz_targets/indexing3.rs"

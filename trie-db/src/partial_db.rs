@@ -545,7 +545,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				.buffed_next_value)
 		}
 		let next_element = self.next_element();
-		let stacked = match next_element {
+		match next_element {
 			Element::Value => false,
 			Element::None => false,
 			Element::IndexChange
@@ -553,8 +553,8 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			| Element::ChangeValue => false,
 			Element::Index  => if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
 				if self.try_stack_on_index(&kv, depth) {
-					self.advance_index(); // skip this index (no need to return it)
-					self.stack_index()
+					self.stack_index();
+					return self.next();
 				} else {
 					false
 				}
@@ -562,9 +562,6 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				false
 			},
 		};
-		if stacked {
-			return self.next();
-		}
 		match next_element {
 			Element::Value => self.next_value(),
 			Element::Index => {
@@ -575,9 +572,10 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				}
 				r
 			},
-			Element::IndexChange =>
-				// TODO remove enum variant
-				unreachable!("we did stack before and index are skip in this case"),
+			Element::IndexChange => {
+				self.advance_index();
+				self.next_change()
+			},
 			Element::Change => self.next_change(),
 			Element::ChangeValue => {
 				self.advance_value();
@@ -760,6 +758,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}*/
 
 	fn stack_index(&mut self) -> bool {
+		self.advance_index(); // Skip this index
 		let first_possible_next_index = if let Some(index) = self.index_iter.last() {
 			index.conf_index_depth + 1
 		} else {
@@ -826,12 +825,15 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		}
 	}
 
-	fn is_value_before_index(&self) -> bool {
+	fn value_or_index(&mut self) -> bool {
 		match (self.buffed_next_index(), &self.next_value) {
 			(Some(next_index), Some(next_value)) => {
 				match next_index.1.compare(&next_index.0, &next_value.0) {
 					// Always favor index over value
-					Ordering::Equal => false,
+					Ordering::Equal => {
+						self.advance_value();
+						false
+					},
 					Ordering::Less => false,
 					Ordering::Greater => true,
 				}
@@ -891,8 +893,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		}
 	}
 	
-	fn next_element(&self) -> Element {
-		if self.is_value_before_index() {
+	fn next_element(&mut self) -> Element {
+		if self.value_or_index() {
 			self.value_or_change()
 		} else {
 			self.index_or_change()
