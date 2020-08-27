@@ -63,7 +63,8 @@ impl<T: TrieLayout, V> Default for CacheAccumIndex<T, V> {
 }
 
 /// State for incomming indexes in stack
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 enum BuffedElt {
 	// no need to bufff.
 	Nothing,
@@ -85,14 +86,16 @@ impl Default for BuffedElt {
 	}
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
+#[cfg_attr(feature = "std", derive(Debug))]
 struct CacheElt<T: TrieLayout, V> {
 	children: ArrayNode<T>,
 	value: Option<V>,
 	depth: usize,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
+#[cfg_attr(feature = "std", derive(Debug))]
 struct CacheEltIndex<T: TrieLayout, V> {
 	children: ArrayNode<T>,
 	nb_children: usize,

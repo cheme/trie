@@ -156,7 +156,8 @@ pub trait IndexBackend {
 	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[cfg_attr(feature = "std", derive(Debug))]
 /// Content of an index.
 /// Index is a hash, and its actual depth is parent branch depth + 1 or
 /// 0 if root.
