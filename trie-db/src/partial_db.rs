@@ -554,6 +554,11 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				return self.next();
 			}
 		}
+		while self.buffed_next_index().is_none() {
+			if !self.pop_index() {
+				break;
+			}
+		}
 		let next_element = self.next_element();
 		match next_element {
 			Element::Value => false,
