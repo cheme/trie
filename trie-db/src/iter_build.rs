@@ -850,7 +850,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 								_ => unreachable!(),
 							}
 						} else {
-							unreachable!("fuse only with buffed child");
+							unimplemented!("TODO fuse as root to when index and not buffed child");
 						}
 						return None;
 					},
