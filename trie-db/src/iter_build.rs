@@ -322,7 +322,7 @@ impl<T, V> CacheAccum<T, V>
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
-			callback.process(pr.left(), encoded, is_root, (key_branch, branch_d + 1), false);
+			callback.process(pr.left(), encoded, is_root, (key_branch, branch_d + 1), false)
 		} else {
 			branch_hash
 		}
