@@ -660,6 +660,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
 	fn sub_next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
+		// TODO need to read this against next_index: this is not aligned.
 		let mut result = None;
 		let mut common_depth = None;
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
