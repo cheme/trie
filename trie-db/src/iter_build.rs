@@ -602,9 +602,15 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 				let branch_ix = actual_depth - 1;
 				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), branch_ix) as usize;
 
-				let mut h_hash = TrieHash::<T>::default();  // TODO puth actual hash type in indexes (useless copy here)
-				h_hash.as_mut()[..].copy_from_slice(hash.as_slice());
-				let hash = ChildReference::Hash(h_hash);
+				let hash = if hash.len() < <T::Hash as Hasher>::LENGTH {
+					let mut h_hash = TrieHash::<T>::default();  // TODO puth actual hash type in indexes (useless copy here)
+					h_hash.as_mut()[..hash.len()].copy_from_slice(&hash[..hash.len()]);
+					ChildReference::Inline(h_hash, hash.len())
+				} else {
+					let mut h_hash = TrieHash::<T>::default();  // TODO puth actual hash type in indexes (useless copy here)
+					h_hash.as_mut()[..].copy_from_slice(hash.as_slice());
+					ChildReference::Hash(h_hash)
+				};
 				debug_assert!(self.last_depth().map(|last| last <= branch_ix).unwrap_or(true));
 				let new_elt = if let Some(element) = self.0.last_mut() {
 					if element.depth == branch_ix {
@@ -734,7 +740,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref())
 					},
 					Action::UnstackBranch => {
-						let pr = NibbleSlice::new_offset(
+						let pr = NibbleSlice::new_offset( // TODO useless pr build??
 							key.as_ref(),
 							*parent_depth + 1,
 						);
@@ -1028,29 +1034,45 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 		is_leaf: bool, // TODO remove this param
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
-		if !is_root && len < <H as Hasher>::LENGTH {
+		let inline = if !is_root && len < <H as Hasher>::LENGTH {
 			let mut h = <<H as Hasher>::Out as Default>::default();
 			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
 
-			return ChildReference::Inline(h, len);
-		}
-		let hash = <H as Hasher>::hash(&encoded_node[..]);
+			Some(ChildReference::Inline(h, len))
+		} else {
+			None
+		};
+		let hash = if inline.is_none() {
+			Some(<H as Hasher>::hash(&encoded_node[..]))
+		} else {
+			None
+		};
 		let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
 		let index_position: IndexPosition = node_key.0.into();
 		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
 			if node_key.1 >= next_save_index {
+				let index = match (hash.as_ref(), inline.as_ref()) {
+					(Some(hash), None) => hash.as_ref().to_vec(),
+					(None, Some(_)) => encoded_node,
+					_ => unreachable!(),
+				};
 				let partial_index = PartialIndex {
-					hash: hash.as_ref().to_vec(),
+					hash: index,
 					actual_depth: prefix_start,
 				};
 				// TODO consider changing write to reference input
 				self.db.write(next_save_index, node_key.0.into(), partial_index);
 			}
 		}
-		if is_root {
-			self.root = Some(hash);
-		};
-		ChildReference::Hash(hash)
+		if let Some(hash) = hash {
+			if is_root {
+				self.root = Some(hash);
+			};
+			ChildReference::Hash(hash)
+		} else {
+			inline
+				.expect("Either inline or hash")
+		}
 	}
 }
 
