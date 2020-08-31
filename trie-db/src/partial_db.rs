@@ -154,7 +154,7 @@ pub trait IndexBackend {
 	fn remove(&mut self, depth: usize, index: IndexPosition);
 	/// Iterate over the index from a key. TODO change this to include range (so depth is not all depth
 	/// items but those in range corresponding to parent index depth) 
-	/// Depth base is the next index available from previous index.
+	/// Depth base is the previous index plus one (or 0 if no previous index).
 	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
@@ -192,23 +192,24 @@ impl Index {
 /// Calculate the prefix to apply for index iterator start (and end). TODO parameters are confusing (actual_index_depth seems to be actual_index_depth + 1)
 // TODO consider trying to use small vec (need to be usable in range) for result, we can even use
 // nibblevec internally
-fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Vec<u8>, Option<Vec<u8>>) {
+// TODO input change key should be slice by refact end_prefix index??
+fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>, depth_base: usize) -> Option<Vec<u8>> {
 	// TODO change key is always odd, some code here is useless.
 	// TODO consider not returning start (especially since it can allocates).
 	let start = actual_index_depth;
 	let odd = start % nibble_ops::NIBBLE_PER_BYTE;
 	let start_byte = start / nibble_ops::NIBBLE_PER_BYTE + if odd > 0 { 1 } else { 0 };
 
-	change_key.resize(start_byte, 0);
+	change_key.resize(start_byte + depth_base, 0);
 
 	// we can round index start since values are only on even position.
-	let index_start = change_key[..start_byte].to_vec();
+	let index_start = &change_key[..start_byte + depth_base];
 	let index_end = if start == 0 {
-		None
+		end_prefix(&index_start[..])
 	} else {
-		end_prefix_index(index_start.as_slice(), start - 1)
+		end_prefix_index(index_start, (depth_base * nibble_ops::NIBBLE_PER_BYTE) + start - 1)
 	};
-	(index_start, index_end)
+	index_end
 }
 
 // TODO consider trying to use small vec (need to be usable in range) for result
@@ -305,8 +306,10 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 //		unimplemented!("handle parent depth");
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
+		let base = depth_prefix.len();
 		let start = &index_tree_key(depth, from_index);
-		let range = if let Some(end_range) = end_prefix(&depth_prefix[..]) {
+		// TODO switch to IndexPosition instead of vecs
+		let range = if let Some(end_range) = value_prefix_index(depth_base, start.to_vec(), base) {
 			self.range(start.to_vec()..end_range)
 		} else {
 			self.range(start.to_vec()..)
@@ -443,7 +446,6 @@ struct SubIterator<'a, V> {
 
 struct StackedIndex<'a> {
 	iter: IndexBackendIter<'a>, 
-	range: (Vec<u8>, Option<Vec<u8>>),
 	next_index: Option<(Vec<u8>, Index)>,
 	conf_index_depth: usize,
 }
@@ -646,11 +648,8 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		let index_iter = self.indexes_conf.next_depth(depth + 1, key)
 			.map(move |d| {
 				let iter = indexes.iter(d, depth + 1, key);
-				// TODO try avoid this alloc
-				let range = value_prefix_index(depth + 1, key.to_vec());
 				StackedIndex {
 					iter,
-					range,
 					next_index: None,
 					conf_index_depth: d,
 				}
@@ -733,17 +732,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			.map(move |d| {
 				let mut iter = indexes.iter(d, first_possible_next_index, next_change_key);
 				// TODO try avoid this alloc
-				let range = value_prefix_index(first_possible_next_index, next_change_key.to_vec());
-				let first = iter.next().filter(|kv| {
-					range.1.as_ref().map(|end| {
-						&kv.0 < end
-					}).unwrap_or(true)
-				});
+				let first = iter.next();
 	
 				if first.is_some() {
 					index_iter.push(StackedIndex {
 						iter,
-						range,
 						next_index: first,
 						conf_index_depth: d,
 					});
@@ -756,11 +749,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 	fn advance_index(&mut self) -> bool {
 		self.index_iter.last_mut().map(|i| {
-			i.next_index = i.iter.next()
-				.filter(|kv| {
-					i.range.1.as_ref().map(|end| &kv.0 < end)
-						.unwrap_or(true)
-				});
+			i.next_index = i.iter.next();
 			i.next_index.is_some()
 		}).unwrap_or(false)
 	}
@@ -948,11 +937,7 @@ impl<'a, V> SubIterator<'a, V>
 		&mut self,
 	) {
 		if let Some(index_iter) = self.index_iter.as_mut() {
-			index_iter.next_index = index_iter.iter.next().filter(|kv| {
-				index_iter.range.1.as_ref()
-					.map(|end| &kv.0 < end)
-					.unwrap_or(true)
-			});
+			index_iter.next_index = index_iter.iter.next();
 		}
 	}
 
