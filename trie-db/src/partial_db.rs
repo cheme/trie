@@ -641,7 +641,7 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		let len = base.len();
 		let to_drop = len - depth;
 		base.drop_lasts(to_drop);
-		base.push(child_index as u8);
+		base.push(child_index as u8); // TODO see if we don't always rebuild key??
 		let key = base.inner();
 		let indexes = &mut self.indexes;
 		let indexes_conf = &mut self.indexes_conf;

@@ -517,6 +517,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 			}
 			if let Some((new_iter_depth, new_iter_index)) = subiterat {
 				iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Some((k, v)));
+				let last_stack_depth = depth_queue.last_depth().unwrap_or(0);
+				previous_key.1 = last_stack_depth;
 				continue;
 			}
 
@@ -546,6 +548,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				Some((new_depth, None)) => (),
 				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
 					iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Default::default());
+					let last_stack_depth = depth_queue.last_depth().unwrap_or(0);
+					previous_key.1 = last_stack_depth;
 					continue 'subiterlast;
 				},
 				None => break,
