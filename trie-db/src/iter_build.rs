@@ -486,6 +486,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 		let mut previous_key = (k, index_depth);
 
+		'subiterlast:	loop  {
 		while let Some((k, v)) = iter_input.next() {
 
 			let common_depth = nibble_ops::biggest_depth(&previous_key.0.as_ref()[..], &k.as_ref()[..]);
@@ -545,10 +546,12 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				Some((new_depth, None)) => (),
 				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
 					iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Default::default());
-					return trie_visit_with_indexes::<T, I, A, F>(iter_input, callback);
+					continue 'subiterlast;
 				},
 				None => break,
 			}
+		}
+		break;
 		}
 	} else {
 		// nothing null root corner case

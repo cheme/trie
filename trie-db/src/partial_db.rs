@@ -644,8 +644,10 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		base.push(child_index as u8);
 		let key = base.inner();
 		let indexes = &mut self.indexes;
+		let indexes_conf = &mut self.indexes_conf;
 		// get index iterator
-		let index_iter = self.indexes_conf.next_depth(depth + 1, key)
+		let index_iter = indexes_conf.next_depth(depth, key)
+			.and_then(|d| indexes_conf.next_depth(d + 1, key))
 			.map(move |d| {
 				let iter = indexes.iter(d, depth + 1, key);
 				StackedIndex {
@@ -898,7 +900,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					let base_depth = if previous_touched_index_depth.1 % nibble_ops::NIBBLE_PER_BYTE > 0 {
 						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE) + 1
 					} else {
-						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
+						(previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE
 					};
 					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1) {
 						let values = self.values.iter_from(start.as_slice());
@@ -983,7 +985,7 @@ impl<'a, V> SubIterator<'a, V>
 					let base_depth = if previous_touched_index_depth.1 % nibble_ops::NIBBLE_PER_BYTE > 0 {
 						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE) + 1
 					} else {
-						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
+						(previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE
 					};
 					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1) {
 						let values = values_backend.iter_from(start.as_slice());
