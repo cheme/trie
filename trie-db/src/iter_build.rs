@@ -1561,20 +1561,20 @@ mod test {
 			// 6 as read ahead.
 			(one_level_branch.clone(), vec![], vec![2, 5], Some(6)),
 			(one_level_branch.clone(), vec![], vec![5], Some(6)),
-			(one_level_branch.clone(), vec![], vec![6], Some(6)),
-			(one_level_branch.clone(), vec![], vec![7], Some(6)),
-			(one_level_branch.clone(), vec![], vec![6, 7], Some(6)),
+			(one_level_branch.clone(), vec![], vec![6], Some(7)),
+			(one_level_branch.clone(), vec![], vec![7], Some(7)),
+			(one_level_branch.clone(), vec![], vec![6, 7], Some(7)),
 
 			// insert before indexes
 			// index one child
 			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![5], Some(6)),
 			// index on children
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
-			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(6)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(7)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![7], Some(8)),
 			// index after children
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
-			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(6)),
-			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(9)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(7)),
+			(one_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(7)),
+			(two_level_branch.clone(), vec![(b"te".to_vec(), Some(vec![12; 32]))], vec![10], Some(11)),
 
 			// insert onto indexes
 			// insert after indexes

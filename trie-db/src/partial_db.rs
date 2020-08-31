@@ -167,6 +167,8 @@ pub trait IndexBackend {
 /// the index position).
 pub struct Index {
 	pub hash: Vec<u8>, // TODO hash as inner type ?? (no need to encode vec length here)
+	/// Nibbled depth of the node in the trie. Root depth is 0, generally depth is the length of
+	/// the prefix to the node.
 	pub actual_depth: usize,
 }
 
