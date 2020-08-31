@@ -605,6 +605,9 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 				})
 			},
 			IndexOrValue::Index(PartialIndex { hash, actual_depth }) => {
+				// iterator return no index when change that can delete it are after.
+				self.unbuff_first_child(callback);
+
 				debug_assert!(actual_depth > 0);
 				let branch_ix = actual_depth - 1;
 				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), branch_ix) as usize;
