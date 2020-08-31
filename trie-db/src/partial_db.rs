@@ -167,8 +167,8 @@ pub trait IndexBackend {
 /// the index position).
 pub struct Index {
 	pub hash: Vec<u8>, // TODO hash as inner type ?? (no need to encode vec length here)
-	/// Nibbled depth of the node in the trie. Root depth is 0, generally depth is the length of
-	/// the prefix to the node.
+	/// Nibbled depth of the node in the trie.
+	/// Root is 0 but not indexable. Generally the depth is the length of the node prefix.
 	pub actual_depth: usize,
 }
 
@@ -203,7 +203,11 @@ fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>) -> (Ve
 
 	// we can round index start since values are only on even position.
 	let index_start = change_key[..start_byte].to_vec();
-	let index_end = end_prefix_index(index_start.as_slice(), start);
+	let index_end = if start == 0 {
+		None
+	} else {
+		end_prefix_index(index_start.as_slice(), start - 1)
+	};
 	(index_start, index_end)
 }
 
@@ -272,11 +276,12 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
 		// do not write single element index
 		if index.actual_depth > 0 {
-			let odd = (index.actual_depth - 1) % nibble_ops::NIBBLE_PER_BYTE;
-			// TODO EMCH can trim the position to actual size of index (just gain size storage).
-			if odd != 0 {
+			let truncate = ((index.actual_depth - 1) / nibble_ops::NIBBLE_PER_BYTE) + 1;
+			position.truncate(truncate);
+			let unaligned = index.actual_depth % nibble_ops::NIBBLE_PER_BYTE;
+			if unaligned != 0 {
 				position.last_mut().map(|l| 
-					*l = *l & !(255 >> (odd * nibble_ops::BIT_PER_NIBBLE))
+					*l = *l & !(255 >> (unaligned * nibble_ops::BIT_PER_NIBBLE))
 				);
 			}
 			self.insert(index_tree_key_owned(depth, position).to_vec(), index);
@@ -730,7 +735,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 				// TODO try avoid this alloc
 				let range = value_prefix_index(first_possible_next_index, next_change_key.to_vec());
 				let first = iter.next().filter(|kv| {
-					range.1.as_ref().map(|end| &kv.0 < end).unwrap_or(true)
+					range.1.as_ref().map(|end| {
+						&kv.0 < end
+					}).unwrap_or(true)
 				});
 	
 				if first.is_some() {
@@ -893,7 +900,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
 				}).expect("Initialized above");
 				let start = &index.0[..base_depth];
-				let values = self.values.iter_from(start);
+				let values = self.values.iter_from(start); // TODO common depth -1 of depth do not need ix
 				self.current_value_iter = values;
 				self.advance_value();
 			} else {
@@ -904,7 +911,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					} else {
 						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
 					};
-					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1 + 1) {
+					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1) {
 						let values = self.values.iter_from(start.as_slice());
 						self.current_value_iter = values;
 						self.advance_value();
@@ -993,7 +1000,7 @@ impl<'a, V> SubIterator<'a, V>
 					} else {
 						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
 					};
-					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1 + 1) {
+					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1) {
 						let values = values_backend.iter_from(start.as_slice());
 						self.current_value_iter = values;
 						self.advance_value();
@@ -1098,7 +1105,8 @@ mod test {
 //			println!("{:?} at {:?}", k, ix);
 		}
 		let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
-		let depth_index = DepthIndexes::new(&[2]);
+		let idepth1: usize = 3;
+		let depth_index = DepthIndexes::new(&[idepth1 as u32]);
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1114,8 +1122,8 @@ mod test {
 		let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
 		let index1 = vec![0];
 		let index2 = vec![5];
-		index_backend.write(2, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 1});
-		index_backend.write(2, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 1});
+		index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2});
+		index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1137,21 +1145,18 @@ mod test {
 					index2.as_slice(),
 				);
 				assert!(common_depth < 2);
-
 			}
 			nb3 += 1;
 		}
 		assert_ne!(nb2, nb3);
-		let depth_index = DepthIndexes::new(&[2, 5]);
+		let depth_index = DepthIndexes::new(&[3, 6]);
 		let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
 		let index1 = vec![0, 0];
 		let index11 = vec![0, 1, 0];
 		let index12 = vec![0, 1, 5];
-	//	let index2 = vec![5, 5, 5];
-		index_backend.write(2, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2});
-		index_backend.write(5, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 5});
-		index_backend.write(5, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 5});
-	//	index_backend.write(5, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 5}); this is actual misshape as parent index must be defined.
+		index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3});
+		index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6});
+		index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1168,21 +1173,6 @@ mod test {
 					index1.as_slice(),
 				);
 				assert!(common_depth < 3);
-				let common_depth = nibble_ops::biggest_depth(
-					&k[..],
-					index11.as_slice(),
-				);
-				assert!(common_depth < 6);
-				let common_depth = nibble_ops::biggest_depth(
-					&k[..],
-					index12.as_slice(),
-				);
-				assert!(common_depth < 6);
-				/*let common_depth = nibble_ops::biggest_depth(
-					&k[..],
-					index2.as_slice(),
-				);
-				assert!(common_depth < 6);*/
 			}
 			nb3 += 1;
 		}

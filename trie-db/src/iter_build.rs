@@ -464,14 +464,14 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		first = iter_input.next();
 	};
 	// root index cannot be written in stack (we write the index in their direct parent branch).
-	debug_assert!(!if let Some((_k, IndexOrValue::Index(PartialIndex { actual_depth, .. }))) = &first {
+	debug_assert!(if let Some((_k, IndexOrValue::Index(PartialIndex { actual_depth, .. }))) = &first {
 		if *actual_depth == 0 {
-			true
-		} else {
 			false
+		} else {
+			true
 		}
 	} else {
-		false
+		true
 	});
 /*	if index_root {
 		// we simply ignore this index as it we will need to query bellow, so it is useless to index
