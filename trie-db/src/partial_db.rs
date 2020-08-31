@@ -154,7 +154,8 @@ pub trait IndexBackend {
 	fn remove(&mut self, depth: usize, index: IndexPosition);
 	/// Iterate over the index from a key. TODO change this to include range (so depth is not all depth
 	/// items but those in range corresponding to parent index depth) 
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
+	/// Depth base is the next index available from previous index.
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
 }
 
 #[derive(Clone)]
@@ -293,7 +294,8 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		debug_assert!(range_iter.next().is_none());
 		first.map(|key| self.remove(&key));
 	}
-	fn iter<'a>(&'a self, depth: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+//		unimplemented!("handle parent depth");
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let start = &index_tree_key(depth, from_index);
@@ -636,9 +638,9 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		// get index iterator
 		let index_iter = self.indexes_conf.next_depth(depth + 1, key)
 			.map(move |d| {
-				let iter = indexes.iter(d, key);
+				let iter = indexes.iter(d, depth + 1, key);
 				// TODO try avoid this alloc
-				let range = value_prefix_index(d, key.to_vec());
+				let range = value_prefix_index(depth + 1, key.to_vec());
 				StackedIndex {
 					iter,
 					range,
@@ -722,7 +724,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		let indexes = &self.indexes;
 		self.indexes_conf.next_depth(first_possible_next_index, next_change_key)
 			.map(move |d| {
-				let mut iter = indexes.iter(d, next_change_key);
+				let mut iter = indexes.iter(d, first_possible_next_index, next_change_key);
 				// TODO try avoid this alloc
 				let range = value_prefix_index(first_possible_next_index, next_change_key.to_vec());
 				let first = iter.next().filter(|kv| {
@@ -895,8 +897,12 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			} else {
 				// last interval
 				if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.as_ref() {
-					let base_depth = (previous_touched_index_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
-					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth + 1], previous_touched_index_depth.1 + 1) {
+					let base_depth = if previous_touched_index_depth.1 % nibble_ops::NIBBLE_PER_BYTE > 0 {
+						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE) + 1
+					} else {
+						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
+					};
+					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1 + 1) {
 						let values = self.values.iter_from(start.as_slice());
 						self.current_value_iter = values;
 						self.advance_value();
@@ -980,9 +986,13 @@ impl<'a, V> SubIterator<'a, V>
 			} else {
 				// last interval
 				if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.as_ref() {
-					let base_depth = (previous_touched_index_depth.1 - 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
-					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth + 1], previous_touched_index_depth.1 + 1) {
-							let values = values_backend.iter_from(start.as_slice());
+					let base_depth = if previous_touched_index_depth.1 % nibble_ops::NIBBLE_PER_BYTE > 0 {
+						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE) + 1
+					} else {
+						((previous_touched_index_depth.1) / nibble_ops::NIBBLE_PER_BYTE)
+					};
+					if let Some(start) = end_prefix_index(&previous_touched_index_depth.0[..base_depth], previous_touched_index_depth.1 + 1) {
+						let values = values_backend.iter_from(start.as_slice());
 						self.current_value_iter = values;
 						self.advance_value();
 					} else {
