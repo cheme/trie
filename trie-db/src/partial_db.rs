@@ -54,7 +54,7 @@ pub trait KVBackend {
 }
 
 #[cfg(feature = "std")]
-impl KVBackend for Arc<dyn KVBackend> {
+impl KVBackend for Arc<dyn KVBackend + Send + Sync> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
 		KVBackend::read(self.as_ref(), key) 
 	}
@@ -179,7 +179,7 @@ pub trait IndexBackend {
 }
 
 #[cfg(feature = "std")]
-impl IndexBackend for Arc<dyn IndexBackend> {
+impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
 	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
 		IndexBackend::read(self.as_ref(), depth, index)
 	}
