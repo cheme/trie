@@ -53,6 +53,26 @@ pub trait KVBackend {
 	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a>;
 }
 
+#[cfg(feature = "std")]
+impl KVBackend for Arc<dyn KVBackend> {
+	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
+		KVBackend::read(self.as_ref(), key) 
+	}
+	fn write(&mut self, key: &[u8], value: &[u8]) {
+		unimplemented!("TODO split trait with mut and non mut");
+	}
+	fn remove(&mut self, key: &[u8]) {
+		unimplemented!("TODO split trait with mut and non mut");
+	}
+	fn iter<'a>(&'a self) -> KVBackendIter<'a> {
+		KVBackend::iter(&*self) 
+	}
+	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a> {
+		KVBackend::iter_from(self.as_ref(), start) 
+	}
+
+}
+
 /// Iterator over key values of a `KVBackend`.
 pub type KVBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 
@@ -156,6 +176,22 @@ pub trait IndexBackend {
 	/// items but those in range corresponding to parent index depth) 
 	/// Depth base is the previous index plus one (or 0 if no previous index).
 	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
+}
+
+#[cfg(feature = "std")]
+impl IndexBackend for Arc<dyn IndexBackend> {
+	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
+		IndexBackend::read(self.as_ref(), depth, index)
+	}
+	fn write(&mut self, depth: usize, index: IndexPosition, value: Index) {
+		unimplemented!("TODO split trait with mut and non mut");
+	}
+	fn remove(&mut self, depth: usize, index: IndexPosition) {
+		unimplemented!("TODO split trait with mut and non mut");
+	}
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, depth_base, from_index)
+	}
 }
 
 #[derive(Clone)]
