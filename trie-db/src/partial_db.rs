@@ -193,7 +193,7 @@ impl Index {
 // TODO consider trying to use small vec (need to be usable in range) for result, we can even use
 // nibblevec internally
 // TODO input change key should be slice by refact end_prefix index??
-fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>, depth_base: usize) -> Option<Vec<u8>> {
+pub fn value_prefix_index(actual_index_depth: usize, mut change_key: Vec<u8>, depth_base: usize) -> Option<Vec<u8>> {
 	// TODO change key is always odd, some code here is useless.
 	// TODO consider not returning start (especially since it can allocates).
 	let start = actual_index_depth;
@@ -257,14 +257,14 @@ fn end_prefix_index(prefix: &[u8], index: usize) -> Option<Vec<u8>> {
 }
 
 /// Key for an index.
-fn index_tree_key(depth: usize, index: &[u8]) -> IndexPosition {
+pub fn index_tree_key(depth: usize, index: &[u8]) -> IndexPosition {
 	let mut result: IndexPosition = index.into();
 	result.insert_from_slice(0, &(depth as u32).to_be_bytes()[..]);
 	result
 }
 
 /// Key for an index with owned input.
-fn index_tree_key_owned(depth: usize, mut index: IndexPosition) -> IndexPosition {
+pub fn index_tree_key_owned(depth: usize, mut index: IndexPosition) -> IndexPosition {
 	index.insert_from_slice(0, &(depth as u32).to_be_bytes()[..]);
 	index
 }
