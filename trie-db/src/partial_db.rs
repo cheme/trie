@@ -681,20 +681,33 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		let key = base.inner();
 		let indexes = &mut self.indexes;
 		let indexes_conf = &mut self.indexes_conf;
+		let end_iter = end_prefix_index(&key[..], depth + 1);
+		let mut start_index_depth = depth + 1;
+		let mut index_iter = None;
 		// get index iterator
-		let index_iter = indexes_conf.next_depth(depth, key)
-			.and_then(|d| indexes_conf.next_depth(d + 1, key))
-			.map(move |d| {
-				let iter = indexes.iter(d, depth + 1, key);
-				StackedIndex {
-					iter,
-					next_index: None,
-					conf_index_depth: d,
+		while let Some(d) = indexes_conf.next_depth(start_index_depth, key) {
+			let last_start_index_depth = start_index_depth;
+			start_index_depth = d + 1;
+			let mut iter = indexes.iter(d, last_start_index_depth, key);
+			if let Some(first) = iter.next()
+				.filter(|kv| end_iter.as_ref().map(|end| {
+						&kv.0 < end
+					}).unwrap_or(true))
+			{
+				if first.1.actual_depth > depth + 1 {
+					index_iter = Some(StackedIndex {
+						iter,
+						next_index: None,
+						conf_index_depth: d,
+					});
+					break;
 				}
-			});
+			} else {
+				break;
+			}
+		};
 		let current_value_iter = self.values.iter_from(&key[..]);
 
-		let end_iter = end_prefix_index(&key[..], depth + 1);
 		let mut sub_iter = SubIterator {
 			end_iter,
 			index_iter,
