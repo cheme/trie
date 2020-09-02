@@ -6,7 +6,7 @@ use libfuzzer_sys::fuzz_target;
 fuzz_target!(|data: &[u8]| {
 		fuzz_indexing_root_calc(
 			data,
-			Some(reference_trie::DepthIndexes::new(&[4])),
+			Some(reference_trie::DepthIndexes::new(&[3])),
 			true,
 			false,
 		);

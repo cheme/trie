@@ -88,3 +88,7 @@ path = "fuzz_targets/indexing2.rs"
 [[bin]]
 name = "indexing3"
 path = "fuzz_targets/indexing3.rs"
+
+[[bin]]
+name = "indexing4"
+path = "fuzz_targets/indexing4.rs"

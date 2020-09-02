@@ -917,19 +917,22 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		self.advance_index();
 		if let Some(i) = self.index_iter.last() {
 			if let Some(index) = i.next_index.as_ref() {
-				let base_depth = self.previous_touched_index_depth.as_ref().map(|last_index| {
+				if let Some(start) = self.previous_touched_index_depth.as_ref().and_then(|last_index| {
 					let common_depth =  nibble_ops::biggest_depth(
 						&last_index.0[..],
 						&index.0[..],
 					);
 					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
 					let common_depth = crate::rstd::cmp::min(common_depth, last_index.1 - 1);
-					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-				}).expect("Initialized above");
-				let start = &index.0[..base_depth];
-				let values = self.values.iter_from(start); // TODO common depth -1 of depth do not need ix
-				self.current_value_iter = values;
-				self.advance_value();
+					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+					end_prefix_index(&last_index.0[..base_depth], common_depth + 1) // TODO is there a need for base depth??(end_prefix_index doing trim for us)
+				}) {
+					let values = self.values.iter_from(start.as_slice()); // TODO common depth -1 of depth do not need ix
+					self.current_value_iter = values;
+					self.advance_value();
+				} else {
+					self.next_value = None; // this is same as no iterator (see next_value implementation)				
+				}
 			} else {
 				// last interval
 				if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.as_ref() {
@@ -1002,19 +1005,22 @@ impl<'a, V> SubIterator<'a, V>
 		self.advance_index();
 		if let Some(i) = self.index_iter.as_ref() {
 			if let Some(index) = i.next_index.as_ref() {
-				let base_depth = self.previous_touched_index_depth.as_ref().map(|last_index| {
+				if let Some(start) = self.previous_touched_index_depth.as_ref().and_then(|last_index| {
 					let common_depth =  nibble_ops::biggest_depth(
 						&last_index.0[..],
 						&index.0[..],
 					);
 					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
 					let common_depth = crate::rstd::cmp::min(common_depth, last_index.1 - 1);
-					(common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE
-				}).expect("Initialized above");
-				let start = &index.0[..base_depth];
-				let values = values_backend.iter_from(start);
-				self.current_value_iter = values;
-				self.advance_value();
+					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+					end_prefix_index(&last_index.0[..base_depth], last_index.1)
+				}) {
+					let values = values_backend.iter_from(start.as_slice());
+					self.current_value_iter = values;
+					self.advance_value();
+				} else {
+					self.next_value = None; // this is same as no iterator (see next_value implementation)				
+				}
 			} else {
 				// last interval
 				if let Some(previous_touched_index_depth) = self.previous_touched_index_depth.as_ref() {
@@ -1209,6 +1215,7 @@ mod test {
 			Default::default(),
 		);
 		let mut nb3 = 0;
+		let mut nb4 = 0;
 		for (k, v) in root_iter {
 			if let IndexOrValue::Index(..) = v {
 			} else {
@@ -1222,9 +1229,11 @@ mod test {
 					index12.as_slice(),
 				);
 				assert!(common_depth < 6);
+				nb3 += 1;
 			}
-			nb3 += 1;
+			nb4 += 1;
 		}
 		assert_ne!(nb2, nb3);
+		assert_eq!(nb2, nb4);
 	}
 }

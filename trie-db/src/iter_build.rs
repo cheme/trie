@@ -482,7 +482,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 
 		// can taint if consecutive in depth with an index
 		let index_depth = v.index_depth().unwrap_or(k.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE);
-		depth_queue.stack_item2(k.as_ref(), v, callback);
+		depth_queue.stack_item(k.as_ref(), v, callback);
 
 		let mut previous_key = (k, index_depth);
 
@@ -539,7 +539,7 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 				depth_queue.stack_empty_branch(parent_depth);
 			}
 			
-			depth_queue.stack_item2(k.as_ref(), v, callback);
+			depth_queue.stack_item(k.as_ref(), v, callback);
 
 			previous_key = (k, depth);
 		}
@@ -581,7 +581,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		}
 	}
 
-	fn stack_item2(
+	fn stack_item(
 		&mut self,
 		key: &[u8],
 		item: IndexOrValue<Vec<u8>>,
