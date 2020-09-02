@@ -977,8 +977,12 @@ impl<'a, V> SubIterator<'a, V>
 	fn advance_index(
 		&mut self,
 	) {
+		let end_iter = &self.end_iter;
 		if let Some(index_iter) = self.index_iter.as_mut() {
-			index_iter.next_index = index_iter.iter.next();
+			index_iter.next_index = index_iter.iter.next()
+				.filter(|kv| end_iter.as_ref().map(|end| {
+					&kv.0 < end
+				}).unwrap_or(true));
 		}
 	}
 
