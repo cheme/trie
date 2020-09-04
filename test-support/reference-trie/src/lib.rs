@@ -1426,6 +1426,16 @@ pub fn compare_no_extension_insert_remove(
 	assert_eq!(*t.root(), calc_root_no_extension(data2));
 }
 
+pub fn build_index(
+	indexes_backend: &mut impl trie_db::partial_db::IndexBackend,
+	indexes: &DepthIndexes,
+	kvbackenditer: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
+) -> <KeccakHasher as Hasher>::Out {
+	let mut cb = trie_db::TrieRootIndexes::<keccak_hasher::KeccakHasher, _, _>::new(indexes_backend, indexes);
+	crate::trie_visit::<NoExtensionLayout, _, _, _, _>(kvbackenditer, &mut cb);
+	cb.root.unwrap_or(Default::default())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1488,4 +1498,5 @@ mod tests {
 			assert_eq!(s_dec, Ok(sizes[i]));
 		}
 	}
+
 }

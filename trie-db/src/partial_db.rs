@@ -1253,4 +1253,70 @@ mod test {
 		assert_ne!(nb2, nb3);
 		assert_eq!(nb2, nb4);
 	}
+
+	#[test]
+	fn test_root_index_1() {
+		let width = 16;
+		let mut kvbackend = TestKVBackend(4, width);
+		let mut kvbackenditer = kvbackend.iter();
+		let mut nb = 0;
+		let mut indexes_backend = BTreeMap::new();
+
+		let indexes = reference_trie::DepthIndexes::new(&[1, 2, 3]);
+		reference_trie::build_index(&mut indexes_backend, &indexes, kvbackenditer);
+		//panic!("{:?}, {:?}", indexes_backend, indexes_backend.len())
+	}
+	#[test]
+	fn test_root_index_2() {
+		use trie_standardmap::*;
+
+		let mut kvbackenditer = vec![
+			(vec![1;32], vec![0;32]),
+			(vec![1;64], vec![3;32]),
+		];
+		let mut nb = 0;
+		let mut indexes_backend = BTreeMap::new();
+
+		let indexes = reference_trie::DepthIndexes::new(&[]);
+		let root_1 = reference_trie::build_index(&mut indexes_backend, &indexes, kvbackenditer.clone().into_iter());
+		let mut indexes_backend = BTreeMap::new();
+		let indexes = reference_trie::DepthIndexes::new(&[65]);
+		let root_2 = reference_trie::build_index(&mut indexes_backend, &indexes, kvbackenditer.into_iter());
+		assert_eq!(root_1, root_2);
+//		panic!("{:?}, {:?}, {:?}", indexes_backend, indexes_backend.len(), root_1 == root_2);
+
+		let mut seed = Default::default();
+		for _ in 0..5000 {
+			// TODO should move to iter_build
+			let x = StandardMap {
+				alphabet: Alphabet::Custom(b"@QWERTYUIOPASDFGHJKLZXCVBNM[/]^_".to_vec()),
+				min_key: 5,
+				journal_key: 32 - 5,
+				value_mode: ValueMode::Index,
+				count: 4,
+			}.make_with(&mut seed);
+/*
+			let mut nb = 0;
+			let mut indexes_backend = BTreeMap::new();
+
+			let indexes = reference_trie::DepthIndexes::new(&[]);
+			let root_1 = reference_trie::build_index(&mut indexes_backend, &indexes, x.clone().into_iter());
+			let mut indexes_backend = BTreeMap::new();
+			let indexes = reference_trie::DepthIndexes::new(&[32]);
+			let root_2 = reference_trie::build_index(&mut indexes_backend, &indexes, x.into_iter());
+*/
+
+				use memory_db::{MemoryDB, HashKey, PrefixedKey};
+				use keccak_hasher::KeccakHasher;
+
+			let indexes_conf = reference_trie::DepthIndexes::new(&[32]);
+			let memdb = MemoryDB::<KeccakHasher, PrefixedKey<_>, Vec<u8>>::default();
+			let mut indexes = std::collections::BTreeMap::new();
+			let change = Vec::new();
+			let data: BTreeMap<_, _> = x.into_iter().collect();
+			let data: Vec<_> = data.into_iter().collect();
+			reference_trie::compare_index_calc(data, change, memdb, &mut indexes, &indexes_conf, None);
+		}
+	}
+
 }
