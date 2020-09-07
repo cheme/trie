@@ -935,8 +935,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						&last_index.0[..],
 						&index.0[..],
 					);
+					// TODO not sure this is usefull
 					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
-					let common_depth = crate::rstd::cmp::min(common_depth, last_index.1 - 1);
+					// base upon last index at minimum.
+					let common_depth = crate::rstd::cmp::max(common_depth, last_index.1 - 1);
 					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
 					end_prefix_index(&last_index.0[..base_depth], common_depth + 1) // TODO is there a need for base depth??(end_prefix_index doing trim for us)
 				}) {
@@ -1027,8 +1029,10 @@ impl<'a, V> SubIterator<'a, V>
 						&last_index.0[..],
 						&index.0[..],
 					);
+					// TODO not sure this is usefull
 					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
-					let common_depth = crate::rstd::cmp::min(common_depth, last_index.1 - 1);
+					// base upon last index at minimum.
+					let common_depth = crate::rstd::cmp::max(common_depth, last_index.1 - 1);
 					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
 					end_prefix_index(&last_index.0[..base_depth], last_index.1)
 				}) {
