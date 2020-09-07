@@ -935,8 +935,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						&last_index.0[..],
 						&index.0[..],
 					);
-					// TODO not sure this is usefull
-					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
 					// base upon last index at minimum.
 					let common_depth = crate::rstd::cmp::max(common_depth, last_index.1 - 1);
 					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
@@ -1029,8 +1027,6 @@ impl<'a, V> SubIterator<'a, V>
 						&last_index.0[..],
 						&index.0[..],
 					);
-					// TODO not sure this is usefull
-					let common_depth = crate::rstd::cmp::min(common_depth, index.1.actual_depth - 1);
 					// base upon last index at minimum.
 					let common_depth = crate::rstd::cmp::max(common_depth, last_index.1 - 1);
 					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
@@ -1272,8 +1268,6 @@ mod test {
 	}
 	#[test]
 	fn test_root_index_2() {
-		use trie_standardmap::*;
-
 		let mut kvbackenditer = vec![
 			(vec![1;32], vec![0;32]),
 			(vec![1;64], vec![3;32]),
@@ -1288,32 +1282,35 @@ mod test {
 		let root_2 = reference_trie::build_index(&mut indexes_backend, &indexes, kvbackenditer.into_iter());
 		assert_eq!(root_1, root_2);
 //		panic!("{:?}, {:?}, {:?}", indexes_backend, indexes_backend.len(), root_1 == root_2);
+	}
 
-		let mut seed = Default::default();
-		for _ in 0..5000 {
+	#[test]
+	fn test_root_index_runs() {
+		test_root_index(&[32], 500, 4);
+		//test_root_index(&[15], 500, 60);
+//		test_root_index(&[1, 2, 3, 4, 5, 15, 20], 500, 160);
+		test_root_index(&[15, 25, 30], 50, 600);
+//		test_root_index(&[15, 25, 30], 1, 600_000);
+	}
+	#[cfg(test)]
+	fn test_root_index(indexes: &'static [u32], nb_iter: usize, count: u32) {
+		use trie_standardmap::*;
+
+		let mut seed: [u8; 32] = Default::default();
+		for _ in 0..nb_iter {
 			// TODO should move to iter_build
 			let x = StandardMap {
 				alphabet: Alphabet::Custom(b"@QWERTYUIOPASDFGHJKLZXCVBNM[/]^_".to_vec()),
 				min_key: 5,
 				journal_key: 32 - 5,
 				value_mode: ValueMode::Index,
-				count: 4,
+				count,
 			}.make_with(&mut seed);
-/*
-			let mut nb = 0;
-			let mut indexes_backend = BTreeMap::new();
 
-			let indexes = reference_trie::DepthIndexes::new(&[]);
-			let root_1 = reference_trie::build_index(&mut indexes_backend, &indexes, x.clone().into_iter());
-			let mut indexes_backend = BTreeMap::new();
-			let indexes = reference_trie::DepthIndexes::new(&[32]);
-			let root_2 = reference_trie::build_index(&mut indexes_backend, &indexes, x.into_iter());
-*/
+			use memory_db::{MemoryDB, HashKey, PrefixedKey};
+			use keccak_hasher::KeccakHasher;
 
-				use memory_db::{MemoryDB, HashKey, PrefixedKey};
-				use keccak_hasher::KeccakHasher;
-
-			let indexes_conf = reference_trie::DepthIndexes::new(&[32]);
+			let indexes_conf = reference_trie::DepthIndexes::new(indexes);
 			let memdb = MemoryDB::<KeccakHasher, PrefixedKey<_>, Vec<u8>>::default();
 			let mut indexes = std::collections::BTreeMap::new();
 			let change = Vec::new();
