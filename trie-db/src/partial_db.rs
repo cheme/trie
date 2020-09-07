@@ -175,7 +175,7 @@ pub trait IndexBackend {
 	/// Iterate over the index from a key. TODO change this to include range (so depth is not all depth
 	/// items but those in range corresponding to parent index depth) 
 	/// Depth base is the previous index plus one (or 0 if no previous index).
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a>;
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a>;
 }
 
 #[cfg(feature = "std")]
@@ -189,8 +189,8 @@ impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
 	fn remove(&mut self, depth: usize, index: IndexPosition) {
 		unimplemented!("TODO split trait with mut and non mut");
 	}
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
-		IndexBackend::iter(self.as_ref(), depth, depth_base, from_index)
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, depth_base, change)
 	}
 }
 
@@ -338,12 +338,28 @@ impl IndexBackend for BTreeMap<Vec<u8>, Index> {
 		debug_assert!(range_iter.next().is_none());
 		first.map(|key| self.remove(&key));
 	}
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, from_index: &[u8]) -> IndexBackendIter<'a> {
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
+		// TODO consider util function for it as this code will be duplicated in any ordered db.
 //		unimplemented!("handle parent depth");
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let base = depth_prefix.len();
-		let start = &index_tree_key(depth, from_index);
+		let start = if depth_base > 0 {
+
+			let mut start = index_tree_key(depth, change);
+			let truncate = ((depth_base - 1) / nibble_ops::NIBBLE_PER_BYTE) + 1;
+			start.truncate(truncate + base);
+			let unaligned = depth_base % nibble_ops::NIBBLE_PER_BYTE;
+			if unaligned != 0 {
+				start.last_mut().map(|l| 
+					*l = *l & !(255 >> (unaligned * nibble_ops::BIT_PER_NIBBLE))
+				);
+			}
+			start
+		} else {
+			index_tree_key(depth, &[])
+		};
+		
 		// TODO switch to IndexPosition instead of vecs
 		let range = if let Some(end_range) = value_prefix_index(depth_base, start.to_vec(), base) {
 			self.range(start.to_vec()..end_range)
