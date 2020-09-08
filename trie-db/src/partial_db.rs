@@ -785,13 +785,13 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}*/
 
 	fn stack_index(&mut self) -> bool {
-		let mut first_possible_next_index = Some(if let Some(index) = self.index_iter.last() {
+		let mut first_possible_next_index = if let Some(index) = self.index_iter.last() {
 			index.next_index.as_ref().map(|index| index.1.top_depth + 1)
 				// TODO this unwrap expression should be unreachable (condition to enter stack index).
 				.unwrap_or_else(|| index.conf_index_depth + 1)
 		} else {
 			0
-		});
+		};
 		self.advance_index(); // Skip this index
 		let empty: Vec<u8> = Default::default();
 		let next_change_key = if let Some((next_change_key, _)) = self.next_change.as_ref() {
@@ -805,9 +805,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		// TODO this loop is a bit awkward, could be alot of empty query that are
 		// a costy iterator: so it should be done at the IndexBackend level. TODO add
 		// info of lower index in index ???
-		while let Some(index_basis) = first_possible_next_index {
-			if let Some(d) = self.indexes_conf.next_depth(index_basis, next_change_key) {
-				let mut iter = indexes.iter(d, index_basis, next_change_key);
+		loop {
+			if let Some(d) = self.indexes_conf.next_depth(first_possible_next_index, next_change_key) {
+				let mut iter = indexes.iter(d, first_possible_next_index, next_change_key);
 				// TODO try avoid this alloc
 				let first = iter.next();
 	
@@ -817,20 +817,20 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						next_index: first,
 						conf_index_depth: d,
 					});
-					first_possible_next_index = None;
+					return true;
 				} else {
-					first_possible_next_index = if d < next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE {
+					if d < next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE {
 						// TODO might/should be unreachable (if well formated trie of index)
-						Some(d + 1)
+						first_possible_next_index = d + 1
 					} else {
-						None
+						break;
 					};
 				}
 			} else {
 				break;
 			}
 		}
-		first_possible_next_index.is_none()
+		false
 	}
 
 	fn advance_index(&mut self) -> bool {
