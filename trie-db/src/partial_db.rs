@@ -641,7 +641,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			| Element::ChangeValue => false,
 			Element::Index  => if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
 				if self.try_stack_on_index(&kv, depth) {
-					self.stack_index();
+					self.stack_index(); // TODO if false continue with returning index
 					return self.next();
 				} else {
 					false
