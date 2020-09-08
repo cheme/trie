@@ -536,6 +536,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		iter.advance_change();
 		iter.advance_value();
 
+		// always stack first level of indexes.
 		iter.stack_index();
 	
 		iter
@@ -781,23 +782,25 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 	fn stack_index(&mut self) -> bool {
 		self.advance_index(); // Skip this index
-		let first_possible_next_index = if let Some(index) = self.index_iter.last() {
+		let mut first_possible_next_index = Some(if let Some(index) = self.index_iter.last() {
 			index.conf_index_depth + 1
 		} else {
 			0
-		};
+		});
 		let empty: Vec<u8> = Default::default();
-		let next_change_key =  if let Some((next_change_key, _)) = self.next_change.as_ref() {
+		let next_change_key = if let Some((next_change_key, _)) = self.next_change.as_ref() {
 			next_change_key
 		} else {
 			&empty
 		};
-
 		let index_iter = &mut self.index_iter;
 		let indexes = &self.indexes;
-		self.indexes_conf.next_depth(first_possible_next_index, next_change_key)
-			.map(move |d| {
-				let mut iter = indexes.iter(d, first_possible_next_index, next_change_key);
+
+		// TODO this loop is a bit awkward, could be alot of empty query that are
+		// a costy iterator: so it should be done at the IndexBackend level.
+		while let Some(index_basis) = first_possible_next_index {
+			if let Some(d) = self.indexes_conf.next_depth(index_basis, next_change_key) {
+				let mut iter = indexes.iter(d, index_basis, next_change_key);
 				// TODO try avoid this alloc
 				let first = iter.next();
 	
@@ -807,11 +810,15 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 						next_index: first,
 						conf_index_depth: d,
 					});
-					true
+					first_possible_next_index = None;
 				} else {
-					false
+					first_possible_next_index = Some(d + 1);
 				}
-			}).unwrap_or(false)
+			} else {
+				break;
+			}
+		}
+		first_possible_next_index.is_none()
 	}
 
 	fn advance_index(&mut self) -> bool {
