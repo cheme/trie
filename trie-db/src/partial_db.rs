@@ -206,6 +206,10 @@ pub struct Index {
 	/// Nibbled depth of the node in the trie.
 	/// Root is 0 but not indexable. Generally the depth is the length of the node prefix.
 	pub actual_depth: usize,
+	/// Depth to start looking for parent index.
+	pub top_depth: usize,
+	/// Wether an index exists over this one.
+	pub has_top_index: bool,
 }
 
 impl Index {
@@ -781,12 +785,14 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}*/
 
 	fn stack_index(&mut self) -> bool {
-		self.advance_index(); // Skip this index
 		let mut first_possible_next_index = Some(if let Some(index) = self.index_iter.last() {
-			index.conf_index_depth + 1
+			index.next_index.as_ref().map(|index| index.1.top_depth + 1)
+				// TODO this unwrap expression should be unreachable (condition to enter stack index).
+				.unwrap_or_else(|| index.conf_index_depth + 1)
 		} else {
 			0
 		});
+		self.advance_index(); // Skip this index
 		let empty: Vec<u8> = Default::default();
 		let next_change_key = if let Some((next_change_key, _)) = self.next_change.as_ref() {
 			next_change_key
@@ -813,7 +819,12 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					});
 					first_possible_next_index = None;
 				} else {
-					first_possible_next_index = Some(d + 1);
+					first_possible_next_index = if d < next_change_key.len() * nibble_ops::NIBBLE_PER_BYTE {
+						// TODO might/should be unreachable (if well formated trie of index)
+						Some(d + 1)
+					} else {
+						None
+					};
 				}
 			} else {
 				break;
@@ -1192,8 +1203,8 @@ mod test {
 		let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
 		let index1 = vec![0];
 		let index2 = vec![5];
-		index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2});
-		index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2});
+		index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2, has_top_index: false, top_depth: 9});
+		index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2, has_top_index: false, top_depth: 2});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1224,9 +1235,9 @@ mod test {
 		let index1 = vec![0, 0];
 		let index11 = vec![0, 1, 0];
 		let index12 = vec![0, 1, 5];
-		index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3});
-		index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6});
-		index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6});
+		index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3, has_top_index: false, top_depth: 3});
+		index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6, has_top_index: false, top_depth: 9});
+		index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6, has_top_index: false, top_depth: 6});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,

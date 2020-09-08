@@ -604,7 +604,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					is_index: false,
 				})
 			},
-			IndexOrValue::Index(PartialIndex { hash, actual_depth }) => {
+			IndexOrValue::Index(PartialIndex { hash, actual_depth, .. }) => {
 				// iterator return no index when change that can delete it are after.
 				self.unbuff_first_child(callback);
 
@@ -1069,6 +1069,10 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 				let partial_index = PartialIndex {
 					hash: index,
 					actual_depth: prefix_start,
+					top_depth: node_key.1,
+					// TODO proper implementation here (this leads to descending into index when not needed.
+					// Will be needed for removal of index.
+					has_top_index: !is_leaf,
 				};
 				// TODO consider changing write to reference input
 				self.db.write(next_save_index, node_key.0.into(), partial_index);
