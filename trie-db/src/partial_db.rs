@@ -209,7 +209,7 @@ pub struct Index {
 	/// Depth to start looking for parent index.
 	pub top_depth: usize,
 	/// Wether an index exists over this one.
-	pub has_top_index: bool,
+	pub is_top_index: bool,
 }
 
 impl Index {
@@ -785,14 +785,17 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}*/
 
 	fn stack_index(&mut self) -> bool {
-		let mut first_possible_next_index = if let Some(index) = self.index_iter.last() {
-			index.next_index.as_ref().map(|index| index.1.top_depth + 1)
+		let (mut first_possible_next_index, last) = if let Some(index) = self.index_iter.last() {
+			index.next_index.as_ref().map(|index| (index.1.top_depth + 1, index.1.is_top_index))
 				// TODO this unwrap expression should be unreachable (condition to enter stack index).
-				.unwrap_or_else(|| index.conf_index_depth + 1)
+				.unwrap_or_else(|| (index.conf_index_depth + 1, false))
 		} else {
-			0
+			(0, false)
 		};
 		self.advance_index(); // Skip this index
+		if last {
+			return false;
+		}
 		let empty: Vec<u8> = Default::default();
 		let next_change_key = if let Some((next_change_key, _)) = self.next_change.as_ref() {
 			next_change_key
@@ -1203,8 +1206,8 @@ mod test {
 		let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
 		let index1 = vec![0];
 		let index2 = vec![5];
-		index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2, has_top_index: false, top_depth: 9});
-		index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2, has_top_index: false, top_depth: 2});
+		index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2, is_top_index: true, top_depth: 9});
+		index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2, is_top_index: true, top_depth: 2});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1235,9 +1238,9 @@ mod test {
 		let index1 = vec![0, 0];
 		let index11 = vec![0, 1, 0];
 		let index12 = vec![0, 1, 5];
-		index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3, has_top_index: false, top_depth: 3});
-		index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6, has_top_index: false, top_depth: 9});
-		index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6, has_top_index: false, top_depth: 6});
+		index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3, is_top_index: false, top_depth: 3});
+		index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6, is_top_index: true, top_depth: 9});
+		index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6, is_top_index: true, top_depth: 6});
 		let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 			&kvbackend,
 			&index_backend,
@@ -1354,5 +1357,4 @@ mod test {
 			reference_trie::compare_index_calc(data, change, memdb, &mut indexes, &indexes_conf, None);
 		}
 	}
-
 }

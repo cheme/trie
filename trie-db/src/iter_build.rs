@@ -1024,12 +1024,13 @@ pub struct TrieRootIndexes<'a, H, HO, DB> {
 	db: &'a mut DB,
 	pub root: Option<HO>,
 	indexes: &'a crate::partial_db::DepthIndexes,
+	last_index: (IndexPosition, usize),
 	_ph: PhantomData<H>,
 }
 
 impl<'a, H, HO, DB> TrieRootIndexes<'a, H, HO, DB> {
 	pub fn new(db: &'a mut DB, indexes: &'a crate::partial_db::DepthIndexes) -> Self {
-		TrieRootIndexes { db, indexes, root: None, _ph: PhantomData }
+		TrieRootIndexes { db, indexes, root: None, last_index: (Default::default(), 0), _ph: PhantomData }
 	}
 }
 
@@ -1066,13 +1067,21 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 					(None, Some(_)) => encoded_node,
 					_ => unreachable!(),
 				};
+
+				let common_depth = nibble_ops::biggest_depth(&self.last_index.0.as_ref()[..], &index_position[..]);
+				let is_top_index = if common_depth > prefix_start {
+					// move up
+					false
+				} else {
+					// sibling
+					true
+				};
+				self.last_index = (index_position, prefix_start);
 				let partial_index = PartialIndex {
 					hash: index,
 					actual_depth: prefix_start,
 					top_depth: node_key.1,
-					// TODO proper implementation here (this leads to descending into index when not needed.
-					// Will be needed for removal of index.
-					has_top_index: !is_leaf,
+					is_top_index,
 				};
 				// TODO consider changing write to reference input
 				self.db.write(next_save_index, node_key.0.into(), partial_index);
