@@ -797,7 +797,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 		let indexes = &self.indexes;
 
 		// TODO this loop is a bit awkward, could be alot of empty query that are
-		// a costy iterator: so it should be done at the IndexBackend level.
+		// a costy iterator: so it should be done at the IndexBackend level. TODO add
+		// info of lower index in index ???
 		while let Some(index_basis) = first_possible_next_index {
 			if let Some(d) = self.indexes_conf.next_depth(index_basis, next_change_key) {
 				let mut iter = indexes.iter(d, index_basis, next_change_key);
