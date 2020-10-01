@@ -53,6 +53,24 @@ pub trait KVBackend {
 	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a>;
 }
 
+impl KVBackend for Box<dyn KVBackend + Send + Sync> {
+	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
+		KVBackend::read(self.as_ref(), key) 
+	}
+	fn write(&mut self, key: &[u8], value: &[u8]) {
+		KVBackend::write(self.as_mut(), key, value) 
+	}
+	fn remove(&mut self, key: &[u8]) {
+		KVBackend::remove(self.as_mut(), key) 
+	}
+	fn iter<'a>(&'a self) -> KVBackendIter<'a> {
+		KVBackend::iter(&*self) 
+	}
+	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a> {
+		KVBackend::iter_from(self.as_ref(), start) 
+	}
+}
+
 #[cfg(feature = "std")]
 impl KVBackend for Arc<dyn KVBackend + Send + Sync> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -70,7 +88,6 @@ impl KVBackend for Arc<dyn KVBackend + Send + Sync> {
 	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a> {
 		KVBackend::iter_from(self.as_ref(), start) 
 	}
-
 }
 
 /// Iterator over key values of a `KVBackend`.
