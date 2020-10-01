@@ -118,6 +118,7 @@ impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 /// Count number of key accesses, to check if indexes are used properly.
 pub struct CountCheck<DB: KVBackend>(DB, Option<Arc<AtomicUsize>>);
 
+#[cfg(feature = "std")]
 impl<DB: KVBackend> CountCheck<DB> {
 	/// Instantiate a new count overlay on `KVBackend`.
 	pub fn new(db: DB, active: bool) -> Self {
