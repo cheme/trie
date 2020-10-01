@@ -36,8 +36,7 @@ use std::sync::atomic::Ordering as AtomOrd;
 #[cfg(feature = "std")]
 use std::sync::atomic::AtomicUsize;
 
-#[cfg(feature = "std")]
-use std::sync::Arc;
+use crate::rstd::sync::Arc;
 
 /// Storage of key values.
 pub trait KVBackend {
@@ -71,7 +70,6 @@ impl KVBackend for Box<dyn KVBackend + Send + Sync> {
 	}
 }
 
-#[cfg(feature = "std")]
 impl KVBackend for Arc<dyn KVBackend + Send + Sync> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
 		KVBackend::read(self.as_ref(), key) 
@@ -120,7 +118,6 @@ impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 /// Count number of key accesses, to check if indexes are used properly.
 pub struct CountCheck<DB: KVBackend>(DB, Option<Arc<AtomicUsize>>);
 
-#[cfg(feature = "std")]
 impl<DB: KVBackend> CountCheck<DB> {
 	/// Instantiate a new count overlay on `KVBackend`.
 	pub fn new(db: DB, active: bool) -> Self {
@@ -195,7 +192,6 @@ pub trait IndexBackend {
 	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a>;
 }
 
-#[cfg(feature = "std")]
 impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
 	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
 		IndexBackend::read(self.as_ref(), depth, index)

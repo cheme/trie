@@ -24,6 +24,7 @@ mod rstd {
 	pub use std::collections::VecDeque;
 	pub use std::collections::btree_map;
 	pub use std::error::Error;
+	pub use std::sync;
 }
 
 #[cfg(not(feature = "std"))]
@@ -32,6 +33,7 @@ mod rstd {
 	pub use alloc::{boxed, rc, vec};
 	pub use alloc::collections::VecDeque;
 	pub use alloc::collections::btree_map;
+	pub use alloc::sync;
 	pub trait Error {}
 	impl<T> Error for T {}
 }
