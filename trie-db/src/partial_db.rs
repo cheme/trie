@@ -211,6 +211,21 @@ impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
 	}
 }
 
+impl IndexBackend for Box<dyn IndexBackend + Send + Sync> {
+	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
+		IndexBackend::read(self.as_ref(), depth, index)
+	}
+	fn write(&mut self, depth: usize, index: IndexPosition, value: Index) {
+		IndexBackend::write(self.as_mut(), depth, index, value)
+	}
+	fn remove(&mut self, depth: usize, index: IndexPosition) {
+		IndexBackend::remove(self.as_mut(), depth, index)
+	}
+	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, depth_base, change)
+	}
+}
+
 #[derive(Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
 /// Content of an index.
