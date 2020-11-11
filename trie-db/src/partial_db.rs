@@ -1005,6 +1005,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					// base upon last index at minimum.
 					let common_depth = crate::rstd::cmp::max(common_depth, last_index.1 - 1);
 					let base_depth = (common_depth + 1 + (nibble_ops::NIBBLE_PER_BYTE - 1)) / nibble_ops::NIBBLE_PER_BYTE;
+					// TODO here out of range occurs for base_depth during synch
 					end_prefix_index(&last_index.0[..base_depth], common_depth + 1) // TODO is there a need for base depth??(end_prefix_index doing trim for us)
 				}) {
 					let values = self.values.iter_from(start.as_slice()); // TODO common depth -1 of depth do not need ix
