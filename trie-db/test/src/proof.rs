@@ -284,3 +284,58 @@ fn test_verify_decode_error() {
 		result => panic!("expected VerifyError::DecodeError, got {:?}", result),
 	}
 }
+
+// TODO move test to iterator
+#[test]
+fn trie_iteration_on_incomplete_proof() {
+	let keys = vec![
+		&b"bravo"[..],
+	];
+
+	// Populate DB with full trie from entries.
+	let (db, root) = {
+		let mut db = <MemoryDB<<NoExtensionLayout as TrieLayout>::Hash>>::default();
+		let mut root = Default::default();
+		{
+			let mut trie = <TrieDBMut<NoExtensionLayout>>::new(&mut db, &mut root);
+			for (key, _value) in test_entries().iter() {
+				// using big values to avoid inline nodes.
+				trie.insert(key, &[0; 32][..]).unwrap();
+			}
+		}
+		(db, root)
+	};
+
+	let mut recorder = trie_db::Recorder::new();
+
+	let trie = <TrieDB<NoExtensionLayout>>::new(&db, &root).unwrap();
+	for k in keys.iter() {
+		trie.get_with(k, &mut recorder).unwrap().unwrap();
+	}
+
+	let proof: Vec<_> = recorder.drain().into_iter().map(|r| r.data).collect();
+	
+	let mut db = <MemoryDB<<NoExtensionLayout as TrieLayout>::Hash>>::default();
+	for item in proof {
+		use hash_db::HashDB;
+		db.insert(hash_db::EMPTY_PREFIX, item.as_slice());
+	}
+	let trie = TrieDB::<NoExtensionLayout>::new(&db, &root).unwrap();
+	let mut iter = trie.iter().unwrap();
+
+	// with prefix we got all values in proof.
+	iter.seek(&b"bra".to_vec()[..]).unwrap();
+	for (ix, item) in iter.enumerate() {
+		assert_eq!(keys[ix], item.unwrap().0);
+		if ix + 1 == keys.len() {
+			break;
+		}
+	}
+
+	let trie = TrieDB::<NoExtensionLayout>::new(&db, &root).unwrap();
+	for (ix, item) in trie.iter().unwrap().enumerate() {
+		println!("{:?}", item);
+	}
+	let nb = trie.iter().unwrap().count();
+	assert_eq!(nb, 1);
+}
