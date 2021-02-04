@@ -36,11 +36,11 @@ use trie_db::{
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
 
-pub use trie_db::{
-	decode_compact, encode_compact,
-	nibble_ops, NibbleSlice, NibbleVec, NodeCodec, proof, Record, Recorder,
-	Trie, TrieConfiguration, TrieDB, TrieDBIterator, TrieDBMut, TrieDBNodeIterator, TrieError,
-	TrieIterator, TrieLayout, TrieMut, partial_db::{DepthIndexes, RootIndexIterator, CountCheck},
+use trie_db::{
+	nibble_ops, NodeCodec,
+	Trie, TrieConfiguration,
+	TrieLayout, TrieMut,
+	partial_db::{DepthIndexes, RootIndexIterator, CountCheck},
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -387,7 +387,7 @@ enum NodeHeaderNoExt {
 }
 
 impl Encode for NodeHeader {
-	fn encode_to<T: Output>(&self, output: &mut T) {
+	fn encode_to<T: Output + ?Sized>(&self, output: &mut T) {
 		match self {
 			NodeHeader::Null => output.push_byte(EMPTY_TRIE),
 			NodeHeader::Branch(true) => output.push_byte(BRANCH_NODE_WITH_VALUE),
@@ -428,7 +428,7 @@ fn size_and_prefix_iterator(size: usize, prefix: u8) -> impl Iterator<Item = u8>
 	first_byte.chain(::std::iter::from_fn(next_bytes))
 }
 
-fn encode_size_and_prefix(size: usize, prefix: u8, out: &mut impl Output) {
+fn encode_size_and_prefix(size: usize, prefix: u8, out: &mut (impl Output + ?Sized)) {
 	for b in size_and_prefix_iterator(size, prefix) {
 		out.push_byte(b)
 	}
@@ -451,7 +451,7 @@ fn decode_size<I: Input>(first: u8, input: &mut I) -> Result<usize, CodecError> 
 }
 
 impl Encode for NodeHeaderNoExt {
-	fn encode_to<T: Output>(&self, output: &mut T) {
+	fn encode_to<T: Output + ?Sized>(&self, output: &mut T) {
 		match self {
 			NodeHeaderNoExt::Null => output.push_byte(EMPTY_TRIE_NO_EXT),
 			NodeHeaderNoExt::Branch(true, nibble_count)	=>

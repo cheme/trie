@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog].
 
 ## [Unreleased]
 
+## [0.22.3] - 2021-01-28
+### Added
+- Decode with an iterator. [#121](https://github.com/paritytech/trie/pull/121)
+
+## [0.22.2] - 2021-01-05
+- Update `hashbrown` to 0.9. [#118](https://github.com/paritytech/trie/pull/118)
+
 ## [0.22.1] - 2020-07-24
 - Use `ahash` feature of hashbrown. [#103](https://github.com/paritytech/trie/pull/103)
 
