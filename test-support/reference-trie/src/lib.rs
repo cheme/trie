@@ -43,7 +43,8 @@ pub mod node {
 }
 
 /// Reference hasher is a keccak hasher.
-pub type RefHasher = blake2::Blake2Hasher;
+//pub type RefHasher = blake2::Blake2Hasher;
+pub type RefHasher = blake3::Blake3Hasher;
 //pub type RefHasher = keccak_hasher::KeccakHasher;
 
 /// Apply a test method on every test layouts.
@@ -1244,6 +1245,25 @@ pub mod blake2 {
 			let mut dest = [0u8; 32];
 			dest.copy_from_slice(blake2_rfc::blake2b::blake2b(32, &[], x).as_bytes());
 			dest
+		}
+	}
+}
+
+pub mod blake3 {
+	use hash_db::Hasher;
+	use hash256_std_hasher::Hash256StdHasher;
+
+	/// Concrete implementation of Hasher using Blake2b 256-bit hashes
+	#[derive(Debug)]
+	pub struct Blake3Hasher;
+
+	impl Hasher for Blake3Hasher {
+		type Out = [u8; 32];
+		type StdHasher = Hash256StdHasher;
+		const LENGTH: usize = 32;
+
+		fn hash(x: &[u8]) -> Self::Out {
+			blake3::hash(x).into()
 		}
 	}
 }
