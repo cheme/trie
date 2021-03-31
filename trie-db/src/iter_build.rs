@@ -50,6 +50,7 @@ struct CacheAccum<T: TrieLayout, V> (
 /// Struct containing iteration cache, can be at most the length of the lowest nibble.
 /// This is to use with indexing, and can store inconsistent data, therefore we got
 /// we store a first element in these nodes.
+/// TODO redesign so we use index as a node: no need for second field.
 struct CacheAccumIndex<T: TrieLayout, V> (
 	Vec<CacheEltIndex<T, V>>,
 	Option<(Vec<u8>, CacheElt<T, V>, usize)>,
@@ -63,6 +64,7 @@ impl<T: TrieLayout, V> Default for CacheAccumIndex<T, V> {
 }
 
 /// State for incomming indexes in stack
+/// TODO remove??
 #[derive(Clone, Copy, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 enum BuffedElt {
@@ -96,6 +98,8 @@ struct CacheElt<T: TrieLayout, V> {
 
 #[derive(Default)]
 #[cfg_attr(feature = "std", derive(Debug))]
+// TODO an enum instead : for index only store depth.
+// BuffedElt useless.
 struct CacheEltIndex<T: TrieLayout, V> {
 	children: ArrayNode<T>,
 	nb_children: usize,
@@ -236,7 +240,7 @@ impl<T, V> CacheAccum<T, V>
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
-		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth) as usize;
+		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
 
 		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
 		let encoded = T::Codec::leaf_node(nkey.right(), &v2.as_ref()[..]);
@@ -247,7 +251,7 @@ impl<T, V> CacheAccum<T, V>
 		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
 
 		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value, Some(hash));
+		self.set_node(target_depth, nibble_value as usize, Some(hash));
 	}
 
 	fn flush_branch(
@@ -267,15 +271,15 @@ impl<T, V> CacheAccum<T, V>
 				(lix, llix, lix)
 			} else {*/
 				let llix = cmp::max(self.last_last_depth(), new_depth);
-				let offset = llix;
+//				let offset = llix;
 		//		(llix, lix, llix)
 		//	};
 
 			let (offset, slice_size, is_root) = if llix == 0 && is_last && self.is_one() {
 				// branch root
-				(offset, lix - llix, true)
+				(llix, lix - llix, true)
 			} else {
-				(offset + 1, lix - llix - 1, false)
+				(llix + 1, lix - llix - 1, false)
 			};
 			let nkey = if slice_size > 0 {
 				Some((offset, slice_size))
@@ -369,7 +373,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		T: TrieLayout,
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord,
-		B: AsRef<[u8]> + Clone,
+		B: AsRef<[u8]> + Clone, // TODO why clone, not in master?
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
 	let no_extension = !T::USE_EXTENSION;
@@ -446,6 +450,8 @@ pub trait SubIter<A, B> {
 
 /// Same as `trie_visit` but allows to use some indexes node to skip part of the processing.
 /// The function assumes that index and value from the input iterator do not overlap.
+/// TODO rewrite to be same as `trie_visit`, just changing index to be put on parent child
+/// on stack
 pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 	where
 		T: TrieLayout,
@@ -545,8 +551,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		}
 		loop {
 			match depth_queue.unstack_item(previous_key.0.as_ref(), callback, None) {
-				Some((new_depth, None)) => (),
-				Some((new_depth, Some((new_iter_depth, new_iter_index)))) => {
+				Some((_new_depth, None)) => (),
+				Some((_new_depth, Some((new_iter_depth, new_iter_index)))) => {
 					iter_input.sub_iterate(previous_key.0.as_ref(), new_iter_depth, new_iter_index, Default::default());
 					let last_stack_depth = depth_queue.last_depth().unwrap_or(0);
 					previous_key.1 = last_stack_depth;
@@ -654,6 +660,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		}
 	}
 
+	// TODO trying to remember here: we remove child: seems stupid.
 	fn taint_child(&mut self, key_branch: &[u8]) {
 		if let Some(CacheEltIndex { children, depth, is_index, nb_children, buffed, value, .. }) = self.0.last_mut() {
 			//if *is_index { // TODO try bringing back this condition
@@ -666,6 +673,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		}
 	}
 
+	// USELESS this should be into the iterator.
 	fn unstack_item(
 		&mut self,
 		current_key: &[u8],
@@ -677,7 +685,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			UnstackBranch,
 			FuseParent,
 			Ignore,
-		};
+		}
 		let (action, do_unbuff) = if let Some(
 			CacheEltIndex { value, nb_children, .. }
 		) = self.0.last() {
@@ -888,6 +896,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		self.last_depth().map(|d| (d, None))
 	}
 
+	// Buffing first child is related to bad iterator and should not be needed.
 	fn unbuff_first_child(&mut self, callback: &mut impl ProcessEncodedNode<TrieHash<T>>) {
 		if let Some((key, CacheElt { children, value, depth }, stack_depth)) = self.1.take() {
 			debug_assert!(self.0.len() > stack_depth);
@@ -1042,7 +1051,7 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 		encoded_node: Vec<u8>,
 		is_root: bool,
 		node_key: (&[u8], usize),
-		is_leaf: bool, // TODO remove this param
+		_is_leaf: bool, // TODO remove this param
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		let inline = if !is_root && len < <H as Hasher>::LENGTH {

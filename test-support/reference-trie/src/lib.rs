@@ -1094,7 +1094,7 @@ pub fn compare_index_calc<
 		{
 			let root_new: <KeccakHasher as Hasher>::Out = {
 				let mut cb = TrieBuilder::new(&mut debug_display);
-	
+
 				let iter = RootIndexIterator::new(
 					&reference_memdb,
 					&reference_indexes,
@@ -1116,10 +1116,8 @@ pub fn compare_index_calc<
 
 	//assert!(false);
 	assert_eq!(root, root_new);
-// TODO disable all code related to this test or check back good value!!!
-//	assert_eq!(reference_memdb.get_count(), nb_node_fetch);
+	assert_eq!(reference_memdb.get_count(), nb_node_fetch);
 }
-
 
 /// Compare trie builder and trie root implementations.
 pub fn compare_root(

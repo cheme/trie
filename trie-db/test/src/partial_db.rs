@@ -238,11 +238,12 @@ fn test_root_index_2() {
 #[test]
 fn test_root_index_runs() {
 	test_root_index(&[32], 500, 4);
-	//test_root_index(&[15], 500, 60);
-//		test_root_index(&[1, 2, 3, 4, 5, 15, 20], 500, 160);
+//	test_root_index(&[15], 500, 60);
+//	test_root_index(&[1, 2, 3, 4, 5, 15, 20], 500, 160);
 	test_root_index(&[15, 25, 30], 50, 600);
-//		test_root_index(&[15, 25, 30], 1, 600_000);
+//	test_root_index(&[15, 25, 30], 1, 600_000);
 }
+
 #[cfg(test)]
 fn test_root_index(indexes: &'static [u32], nb_iter: usize, count: u32) {
 	use trie_standardmap::*;
