@@ -172,6 +172,7 @@ impl<'a> NibbleSlice<'a> {
 
 	/// Return `Partial` bytes iterator over a range of byte..
 	/// Warning can be slow when unaligned (similar to `to_stored_range`).
+	/// TODO could be implemented for LeftNibbleSlice when use in iter_build.
 	pub fn right_range_iter(&'a self, to: usize) -> impl Iterator<Item = u8> + 'a {
 		let mut nib_res = to % nibble_ops::NIBBLE_PER_BYTE;
 		let aligned_i = (self.offset + to) % nibble_ops::NIBBLE_PER_BYTE;

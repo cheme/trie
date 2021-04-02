@@ -17,14 +17,16 @@
 //! implementation.
 //! See `trie_visit` function.
 
-use hash_db::{Hasher, HashDB, Prefix};
+use hash_db::{Hasher, HashDB};
 use crate::rstd::{cmp, marker::PhantomData, vec::Vec};
 use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
+use crate::nibble::NibbleVec;
 use crate::nibble::nibble_ops;
+use crate::nibble::LeftNibbleSlice;
 use crate::node_codec::NodeCodec;
 use crate::{TrieLayout, TrieHash};
-use crate::partial_db::{IndexBackend, IndexPosition, IndexOrValue, Index as PartialIndex};
+use crate::partial_db::{IndexBackend, IndexOrValue, Index as PartialIndex};
 
 
 macro_rules! exponential_out {
@@ -244,11 +246,15 @@ impl<T, V> CacheAccum<T, V>
 
 		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
 		let encoded = T::Codec::leaf_node(nkey.right(), &v2.as_ref()[..]);
-		let pr = NibbleSlice::new_offset(
+		let pr = LeftNibbleSlice::new_len(
 			&k2.as_ref()[..],
 			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 		);
-		let hash = callback.process(pr.left(), encoded, false, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
+		let nk = LeftNibbleSlice::new_len(
+			&k2.as_ref()[..],
+			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE,
+		);
+		let hash = callback.process(pr, encoded, false, nk);
 
 		// insert hash in branch (first level branch only at this point)
 		self.set_node(target_depth, nibble_value as usize, Some(hash));
@@ -320,16 +326,19 @@ impl<T, V> CacheAccum<T, V>
 			v.as_ref().map(|v| v.as_ref()),
 		);
 		self.reset_depth(branch_d);
-		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
-		// index value is incorect here, in fact we shall never index for extension (we shall use the
-		// following branch)
-		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none(), (key_branch, branch_d + 1), false);
+		let pr = LeftNibbleSlice::new_len(&key_branch, branch_d);
+		// TODO extension case need some testing and rethinking(here it is a bit random code).
+		let nk = LeftNibbleSlice::new_len(&key_branch, branch_d + 1);
+		let branch_hash = callback.process(pr, encoded, is_root && nkey.is_none(), nk);
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
-			callback.process(pr.left(), encoded, is_root, (key_branch, branch_d + 1), false)
+			let pr = LeftNibbleSlice::new_len(&key_branch, nkeyix.0);
+			// TODO extension case need some testing and rethinking(here it is a bit random code).
+			let nk = LeftNibbleSlice::new_len(&key_branch, branch_d + 1);
+			callback.process(pr, encoded, is_root, nk)
 		} else {
 			branch_hash
 		}
@@ -355,12 +364,18 @@ impl<T, V> CacheAccum<T, V>
 			nkeyix.1,
 			self.0[last].children.as_ref().iter(), v.as_ref().map(|v| v.as_ref()));
 		self.reset_depth(branch_d);
+		// TODO differs from master where it is nkeyix.0 -> change nkey param so it makes
+		// a bit more sense.
 		let ext_length = nkey.as_ref().map(|nkeyix| nkeyix.1).unwrap_or(0);
-		let pr = NibbleSlice::new_offset(
+		let pr = LeftNibbleSlice::new_len(
 			&key_branch,
 			branch_d - ext_length,
 		);
-		callback.process(pr.left(), encoded, is_root, (key_branch, branch_d), false)
+		let nk = LeftNibbleSlice::new_len(
+			&key_branch,
+			branch_d,
+		);
+		callback.process(pr, encoded, is_root, nk)
 	}
 }
 
@@ -413,11 +428,15 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 			let (k2, v2) = previous_value;
 			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
 			let encoded = T::Codec::leaf_node(nkey.right(), &v2.as_ref()[..]);
-			let pr = NibbleSlice::new_offset(
+			let pr = LeftNibbleSlice::new_len(
 				&k2.as_ref()[..],
 				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
 			);
-			callback.process(pr.left(), encoded, true, (k2.as_ref(), k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE), true);
+			let nk = LeftNibbleSlice::new_len(
+				&k2.as_ref()[..],
+				k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE,
+			);
+			callback.process(pr, encoded, true, nk);
 		} else {
 			depth_queue.flush_value(callback, last_depth, &previous_value);
 			let ref_branches = previous_value.0;
@@ -425,7 +444,8 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 		}
 	} else {
 		// nothing null root corner case
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), true); // define empty node as leaf to avoid storing it in indexes
+		// define empty node as leaf to avoid storing it in indexes
+		callback.process(LeftNibbleSlice::new(&[]), T::Codec::empty_node().to_vec(), true, LeftNibbleSlice::new(&[]));
 	}
 }
 
@@ -469,6 +489,8 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		// above an index).
 		first = iter_input.next();
 	};
+	unimplemented!("TODO reimplement");
+	/*
 	// root index cannot be written in stack (we write the index in their direct parent branch).
 	debug_assert!(if let Some((_k, IndexOrValue::Index(PartialIndex { actual_depth, .. }))) = &first {
 		if *actual_depth == 0 {
@@ -565,8 +587,9 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		}
 	} else {
 		// nothing null root corner case
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, (&[], 0), false);
+		callback.process(LeftNibbleSlice::new(&[]), T::Codec::empty_node().to_vec(), true);
 	}
+	*/
 }
 
 
@@ -593,7 +616,9 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 		item: IndexOrValue<Vec<u8>>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>
 	) {
-		match item {
+		// TODO reimplement
+		unimplemented!();
+/*		match item {
 			IndexOrValue::StoredValue(v)
 			| IndexOrValue::Value(v) => {
 				// having a value we can unbuff first child (key ordering ensure that).
@@ -657,7 +682,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 			IndexOrValue::DroppedValue => {
 				unreachable!();
 			},
-		}
+		}*/
 	}
 
 	// TODO trying to remember here: we remove child: seems stupid.
@@ -796,12 +821,19 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 					},
 					Action::Ignore => return self.last_depth().map(|d| (d, None)),
 				};
+				let pr = LeftNibbleSlice::new_len( // TODO check value are correct
+					key.as_ref(),
+					*parent_depth + 1,
+				);
+				let nk = LeftNibbleSlice::new_len( // TODO check value are correct
+					key.as_ref(),
+					depth,
+				);
 				let hash = callback.process(
-					pr.left(),
+					pr,
 					encoded,
 					false,
-					(key.as_ref(), depth),
-					false,
+					nk,
 				);
 				let parent_ix = nibble_ops::left_nibble_at(key.as_ref(), *parent_depth) as usize;
 				if parent_children[parent_ix].is_none() {
@@ -816,11 +848,10 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
 						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
 						callback.process(
-							hash_db::EMPTY_PREFIX,
+							LeftNibbleSlice::new(&[]),
 							encoded,
 							true,
-							(key.as_ref(), depth),
-							false,
+							LeftNibbleSlice::new_len(key.as_ref(), depth),
 						);
 						return None;
 					},
@@ -834,11 +865,10 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							value.as_ref().map(|v| v.as_ref()),
 						);
 						callback.process(
-							pr.left(),
+							LeftNibbleSlice::new(&[]),
 							encoded,
 							true,
-							(key.as_ref(), depth),
-							false,
+							LeftNibbleSlice::new_len(key.as_ref(), depth),
 						);
 						return None;
 					},
@@ -852,11 +882,10 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 									let nkey = NibbleSlice::new_offset(&key[..depth / nibble_ops::NIBBLE_PER_BYTE], 0);
 									let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
 									callback.process(
-										hash_db::EMPTY_PREFIX,
+										LeftNibbleSlice::new(&[]),
 										encoded,
 										true,
-										(key.as_ref(), depth),
-										false,
+										LeftNibbleSlice::new_len(key.as_ref(), depth),
 									);
 								},
 								BuffedElt::Branch => {
@@ -868,11 +897,10 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 										value.as_ref().map(|v| v.as_ref()),
 									);
 									callback.process(
-										hash_db::EMPTY_PREFIX,
+										LeftNibbleSlice::new(&[]),
 										encoded,
 										true,
-										(key.as_ref(), depth),
-										false,
+										LeftNibbleSlice::new_len(key.as_ref(), depth),
 									);
 								},
 								_ => unreachable!(),
@@ -916,12 +944,15 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 							children.as_ref().iter(),
 							value.as_ref().map(|v| v.as_ref()),
 						);
+						let pr = LeftNibbleSlice::new_len(
+							key.as_ref(),
+							parent_depth + 1,
+						);
 						callback.process(
-							pr.left(),
+							pr,
 							encoded,
 							false,
-							(key.as_ref(), depth),
-							false,
+							LeftNibbleSlice::new_len(key.as_ref(), depth),
 						)
 					},
 					BuffedElt::Value => {
@@ -930,16 +961,12 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 						let nkey = NibbleSlice::new_offset(key.as_ref(), parent_depth + 1);
 						let encoded = T::Codec::leaf_node(nkey.right(), value.unwrap_or_default().as_ref());
 						assert_eq!(parent_depth, depth - nkey.len() - 1);
-						let pr = NibbleSlice::new_offset(
-							key.as_ref(),
-							parent_depth + 1,
-						);
+						let pr = LeftNibbleSlice::new_len(key.as_ref(), parent_depth + 1);
 						callback.process(
-							pr.left(),
+							pr,
 							encoded,
 							false,
-							(key.as_ref(), depth),
-							true,
+							LeftNibbleSlice::new_len(key.as_ref(), depth),
 						)
 					},
 					BuffedElt::Nothing
@@ -972,19 +999,18 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 pub trait ProcessEncodedNode<HO> {
 	/// Function call with prefix, encoded value and a boolean indicating if the
 	/// node is the root for each node of the trie.
-	/// Last parameter `node_key` is the path to the node as a slice of bytes and the depth in bit of this node.
 	///
 	/// Note that the returned value can change depending on implementation,
 	/// but usually it should be the Hash of encoded node.
 	/// This is not something direcly related to encoding but is here for
 	/// optimisation purpose (builder hash_db does return this value).
+	/// TODO prefix and node_key are redundant on the slice: can replace prefix by prefix position??.
 	fn process(
 		&mut self,
-		prefix: Prefix,
+		prefix: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		node_key: (&[u8], usize),
-		is_leaf: bool,
+		node_key: LeftNibbleSlice,
 	) -> ChildReference<HO>;
 }
 
@@ -1007,11 +1033,10 @@ impl<'a, H: Hasher, V, DB: HashDB<H, V>> ProcessEncodedNode<<H as Hasher>::Out>
 	for TrieBuilder<'a, H, <H as Hasher>::Out, V, DB> {
 	fn process(
 		&mut self,
-		prefix: Prefix,
+		prefix: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		_node_key: (&[u8], usize),
-		_is_leaf: bool,
+		_node_key: LeftNibbleSlice,
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {
@@ -1020,7 +1045,7 @@ impl<'a, H: Hasher, V, DB: HashDB<H, V>> ProcessEncodedNode<<H as Hasher>::Out>
 
 			return ChildReference::Inline(h, len);
 		}
-		let hash = self.db.insert(prefix, &encoded_node[..]);
+		let hash = self.db.insert(prefix.into(), &encoded_node[..]);
 		if is_root {
 			self.root = Some(hash);
 		};
@@ -1033,13 +1058,14 @@ pub struct TrieRootIndexes<'a, H, HO, DB> {
 	db: &'a mut DB,
 	pub root: Option<HO>,
 	indexes: &'a crate::partial_db::DepthIndexes,
-	last_index: (IndexPosition, usize),
+	// TODO of any use
+	last_index: NibbleVec,
 	_ph: PhantomData<H>,
 }
 
 impl<'a, H, HO, DB> TrieRootIndexes<'a, H, HO, DB> {
 	pub fn new(db: &'a mut DB, indexes: &'a crate::partial_db::DepthIndexes) -> Self {
-		TrieRootIndexes { db, indexes, root: None, last_index: (Default::default(), 0), _ph: PhantomData }
+		TrieRootIndexes { db, indexes, root: None, last_index: Default::default(), _ph: PhantomData }
 	}
 }
 
@@ -1047,64 +1073,34 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 	for TrieRootIndexes<'a, H, <H as Hasher>::Out, DB> {
 	fn process(
 		&mut self,
-		prefix: Prefix,
+		prefix: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		node_key: (&[u8], usize),
-		_is_leaf: bool, // TODO remove this param
+		node_key: LeftNibbleSlice,
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
-		let inline = if !is_root && len < <H as Hasher>::LENGTH {
+		if !is_root && len < <H as Hasher>::LENGTH {
 			let mut h = <<H as Hasher>::Out as Default>::default();
 			h.as_mut()[..len].copy_from_slice(&encoded_node[..len]);
 
-			Some(ChildReference::Inline(h, len))
-		} else {
-			None
-		};
-		let hash = if inline.is_none() {
-			Some(<H as Hasher>::hash(&encoded_node[..]))
-		} else {
-			None
-		};
-		let prefix_start = prefix.0.len() * nibble_ops::NIBBLE_PER_BYTE + if prefix.1.is_some() { 1 } else { 0 };
-		let index_position: IndexPosition = node_key.0.into();
-		if let Some(next_save_index) = self.indexes.next_depth(prefix_start, &index_position) {
-			if node_key.1 >= next_save_index {
-				let index = match (hash.as_ref(), inline.as_ref()) {
-					(Some(hash), None) => hash.as_ref().to_vec(),
-					(None, Some(_)) => encoded_node,
-					_ => unreachable!(),
-				};
-
-				let common_depth = nibble_ops::biggest_depth(&self.last_index.0.as_ref()[..], &index_position[..]);
-				let is_top_index = if common_depth > prefix_start {
-					// move up
-					false
-				} else {
-					// sibling
-					true
-				};
-				self.last_index = (index_position, prefix_start);
-				let partial_index = PartialIndex {
-					hash: index,
-					actual_depth: prefix_start,
-					top_depth: node_key.1,
-					is_top_index,
-				};
-				// TODO consider changing write to reference input
-				self.db.write(next_save_index, node_key.0.into(), partial_index);
-			}
+			// no indexing of inline nodes.
+			return ChildReference::Inline(h, len);
 		}
-		if let Some(hash) = hash {
-			if is_root {
-				self.root = Some(hash);
+		let hash = <H as Hasher>::hash(&encoded_node[..]);
+		if let Some(save_index) = self.indexes.next_depth(&node_key) {
+			debug_assert!(node_key.len() >= save_index);
+			let on_index = node_key.len() == save_index;
+				self.last_index = (&node_key).into();
+			let partial_index = PartialIndex {
+				hash: hash.as_ref().to_vec(),
+				on_index,
 			};
-			ChildReference::Hash(hash)
-		} else {
-			inline
-				.expect("Either inline or hash")
+			self.db.write(save_index, node_key, partial_index);
 		}
+		if is_root {
+			self.root = Some(hash);
+		};
+		ChildReference::Hash(hash)
 	}
 }
 
@@ -1124,11 +1120,10 @@ impl<H, HO> Default for TrieRoot<H, HO> {
 impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRoot<H, <H as Hasher>::Out> {
 	fn process(
 		&mut self,
-		_: Prefix,
+		_: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		_node_key: (&[u8], usize),
-		_is_leaf: bool,
+		_node_key: LeftNibbleSlice,
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {
@@ -1178,11 +1173,10 @@ impl<H, HO> Default for TrieRootPrint<H, HO> {
 impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootPrint<H, <H as Hasher>::Out> {
 	fn process(
 		&mut self,
-		p: Prefix,
+		p: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		_node_key: (&[u8], usize),
-		_is_leaf: bool,
+		_node_key: LeftNibbleSlice,
 	) -> ChildReference<<H as Hasher>::Out> {
 		println!("Encoded node: {:x?}", &encoded_node);
 		println!("	with prefix: {:x?}", &p);
@@ -1206,11 +1200,10 @@ impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootPrint<H, <H a
 impl<H: Hasher> ProcessEncodedNode<<H as Hasher>::Out> for TrieRootUnhashed<H> {
 	fn process(
 		&mut self,
-		_: Prefix,
+		_: LeftNibbleSlice,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		_node_key: (&[u8], usize),
-		_is_leaf: bool,
+		_node_key: LeftNibbleSlice,
 	) -> ChildReference<<H as Hasher>::Out> {
 		let len = encoded_node.len();
 		if !is_root && len < <H as Hasher>::LENGTH {

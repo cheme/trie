@@ -47,6 +47,10 @@ pub trait KVBackend {
 	fn remove(&mut self, key: &[u8]);
 	/// Iterate over the values.
 	fn iter<'a>(&'a self) -> KVBackendIter<'a>;
+	// TODO could also optionally restore from a previous iterator start (complicate types
+	// a lot), would allow 'skipping' implementation: eg for a radix trie: do not
+	// get from root but from last iter state which is closer in number of node than root
+	// (may not be true: would need to be checked over depths).
 	/// Iterate over the values starting at a given position.
 	fn iter_from<'a>(&'a self, start: &[u8]) -> KVBackendIter<'a>;
 }
@@ -174,51 +178,62 @@ impl<'a> Iterator for CountIter<'a> {
 	}
 }
 
+// TODO better name (this one sound like an index when it is a key).
 pub type IndexPosition = crate::nibble::BackingByteVec;
 
 /// Storage of encoded index for a trie.
-/// Depth is a nibble depth.
+/// Depth is a nibble depth, it is the indexing depth. So the actual indexing
+/// for a index group is the part over depth from `IndexPosition`.
 pub trait IndexBackend {
 	/// Query for an index, also return the depth of this index (it can differs from
 	/// the index depth when there is a nibble encoded in the node).
-	fn read(&self, depth: usize, index: &[u8]) -> Option<Index>;
+	fn read(&self, depth: usize, index: LeftNibbleSlice) -> Option<Index>;
 	/// Insert an `encode_index` with and `actual_depth` at configured `depth` for a given `index`.
-	fn write(&mut self, depth: usize, index: IndexPosition, value: Index);
+	fn write(&mut self, depth: usize, index: LeftNibbleSlice, value: Index);
 	/// Remove any value at a key.
-	fn remove(&mut self, depth: usize, index: IndexPosition);
-	/// Iterate over the index from a key. TODO change this to include range (so depth is not all depth
-	/// items but those in range corresponding to parent index depth) 
-	/// Depth base is the previous index plus one (or 0 if no previous index).
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a>;
+	fn remove(&mut self, depth: usize, index: LeftNibbleSlice);
+	/// Iterate over the index from a key.
+	/// `group` is common key at depth.
+	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a>;
+	/// Same as iterate but starting at a given index: in this case the `index` parameter
+	/// contains both the depth and the starting index.
+	/// TODO could be a single iter function only (if start_index len > depth it is from variant).
+	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a>;
 }
 
 impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
-	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
+	fn read(&self, depth: usize, index: LeftNibbleSlice) -> Option<Index> {
 		IndexBackend::read(self.as_ref(), depth, index)
 	}
-	fn write(&mut self, depth: usize, index: IndexPosition, value: Index) {
+	fn write(&mut self, depth: usize, index: LeftNibbleSlice, value: Index) {
 		unimplemented!("TODO split trait with mut and non mut");
 	}
-	fn remove(&mut self, depth: usize, index: IndexPosition) {
+	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
 		unimplemented!("TODO split trait with mut and non mut");
 	}
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
-		IndexBackend::iter(self.as_ref(), depth, depth_base, change)
+	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, group)
+	}
+	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter_from(self.as_ref(), depth, start_index)
 	}
 }
 
 impl IndexBackend for Box<dyn IndexBackend + Send + Sync> {
-	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
+	fn read(&self, depth: usize, index: LeftNibbleSlice) -> Option<Index> {
 		IndexBackend::read(self.as_ref(), depth, index)
 	}
-	fn write(&mut self, depth: usize, index: IndexPosition, value: Index) {
+	fn write(&mut self, depth: usize, index: LeftNibbleSlice, value: Index) {
 		IndexBackend::write(self.as_mut(), depth, index, value)
 	}
-	fn remove(&mut self, depth: usize, index: IndexPosition) {
+	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
 		IndexBackend::remove(self.as_mut(), depth, index)
 	}
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
-		IndexBackend::iter(self.as_ref(), depth, depth_base, change)
+	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, group)
+	}
+	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter_from(self.as_ref(), depth, start_index)
 	}
 }
 
@@ -231,19 +246,15 @@ impl IndexBackend for Box<dyn IndexBackend + Send + Sync> {
 /// the index position).
 pub struct Index {
 	pub hash: Vec<u8>, // TODO hash as inner type ?? (no need to encode vec length here)
-	/// Nibbled depth of the node in the trie.
-	/// Root is 0 but not indexable. Generally the depth is the length of the node prefix.
-	pub actual_depth: usize,
-	/// Depth to start looking for parent index.
-	pub top_depth: usize,
-	/// Wether an index exists over this one.
-	pub is_top_index: bool,
+	/// Indicate if index matches the indexing depth or is bellow.
+	pub on_index: bool,
 }
 
 impl Index {
 	// TODO check if used or can be replaced
 	fn compare(&self, index_key: &[u8], change_key: &[u8]) -> Ordering {
-		let end = self.actual_depth;
+		unimplemented!()
+/*		let end = self.actual_depth;
 		let odd = end % nibble_ops::NIBBLE_PER_BYTE;
 		let end = end / nibble_ops::NIBBLE_PER_BYTE;
 		if odd == 0 {
@@ -253,7 +264,7 @@ impl Index {
 			let slice1 = LeftNibbleSlice::new(index_key).truncate(size);
 			let slice2 = LeftNibbleSlice::new(change_key);
 			slice1.cmp(&slice2)
-		}
+		}*/
 	}
 }
 
@@ -324,80 +335,57 @@ fn end_prefix_index(prefix: &[u8], index: usize) -> Option<Vec<u8>> {
 	}
 }
 
-/// Key for an index.
-pub fn index_tree_key(depth: usize, index: &[u8]) -> IndexPosition {
-	let mut result: IndexPosition = index.into();
+/// Key for an index stored in a tree.
+/// Depth is use as a prefix to isolate iterators.
+pub fn index_tree_key(depth: usize, index: LeftNibbleSlice) -> IndexPosition {
+	// writing directly the bytes with 0 as padding as we cannot have a child (would be
+	// at a different indexing depth).
+	let owned: NibbleVec = (&index).into();
+	index_tree_key_owned(depth, owned)
+}
+
+/// Key for an index stored in a tree.
+/// Depth is use as a prefix to isolate iterators.
+pub fn index_tree_key_owned(depth: usize, index: NibbleVec) -> IndexPosition {
+	let mut result = index.padded_buffer();
 	result.insert_from_slice(0, &(depth as u32).to_be_bytes()[..]);
 	result
 }
 
-/// Key for an index with owned input.
-pub fn index_tree_key_owned(depth: usize, mut index: IndexPosition) -> IndexPosition {
-	index.insert_from_slice(0, &(depth as u32).to_be_bytes()[..]);
-	index
-}
-
-/// Note that this is a test implementation, sparse matrix should be use here. 
-impl IndexBackend for BTreeMap<Vec<u8>, Index> {
-	fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
-		self.get(&index_tree_key(depth, index)[..]).cloned()
+/// Note that this is a test implementation, sparse matrix should be use here.
+impl IndexBackend for BTreeMap<IndexPosition, Index> {
+	fn read(&self, depth: usize, index: LeftNibbleSlice) -> Option<Index> {
+	//fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
+		// api expect index so if key longer, need truncate first
+		debug_assert!(depth <= index.len());
+		self.get(&index_tree_key(depth, index.truncate(depth))[..]).cloned()
 	}
-	fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
-		// do not write single element index
-		if index.actual_depth > 0 {
-			let truncate = ((index.actual_depth - 1) / nibble_ops::NIBBLE_PER_BYTE) + 1;
-			position.truncate(truncate);
-			let unaligned = index.actual_depth % nibble_ops::NIBBLE_PER_BYTE;
-			if unaligned != 0 {
-				position.last_mut().map(|l| 
-					*l = *l & !(255 >> (unaligned * nibble_ops::BIT_PER_NIBBLE))
-				);
-			}
-			self.insert(index_tree_key_owned(depth, position).to_vec(), index);
-		}
+	fn write(&mut self, depth: usize, index: LeftNibbleSlice, value: Index) {
+		debug_assert!(depth <= index.len());
+		// TODO audit if index should be owned???
+	//fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
+		self.insert(index_tree_key(depth, index.truncate(depth)), value);
 	}
-	fn remove(&mut self, depth: usize, index: IndexPosition) {
-		let l_size = crate::rstd::mem::size_of::<u32>();
-		let start = index_tree_key_owned(depth, index);
-		let range = if let Some(end_range) = end_prefix_index(&start[..], depth + l_size * nibble_ops::NIBBLE_PER_BYTE) {
-			self.range(start.to_vec()..end_range)
-		} else {
-			self.range(start.to_vec()..)
-		};
-
-		let mut range_iter = range.into_iter();
-		let first = range_iter.next().map(|kv| kv.0.clone());
-		debug_assert!(range_iter.next().is_none());
-		first.map(|key| self.remove(&key));
+	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
+		// TODO audit if owned index possible
+		debug_assert!(depth <= index.len());
+	//fn remove(&mut self, depth: usize, index: IndexPosition) {
+		self.remove(&index_tree_key(depth, index.truncate(depth))[..]);
 	}
-	fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
+	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		debug_assert!(depth <= group.len());
+	//fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
 		// TODO consider util function for it as this code will be duplicated in any ordered db.
-//		unimplemented!("handle parent depth");
+		self.iter_from(depth, group.truncate(depth))
+	}
+	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
 		let l_size = crate::rstd::mem::size_of::<u32>();
 		let depth_prefix = &(depth as u32).to_be_bytes()[..];
 		let base = depth_prefix.len();
-		let start = if depth_base > 0 {
-
-			let mut start = index_tree_key(depth, change);
-			let truncate = ((depth_base - 1) / nibble_ops::NIBBLE_PER_BYTE) + 1;
-			start.truncate(truncate + base);
-			let unaligned = depth_base % nibble_ops::NIBBLE_PER_BYTE;
-			if unaligned != 0 {
-				start.last_mut().map(|l| 
-					*l = *l & !(255 >> (unaligned * nibble_ops::BIT_PER_NIBBLE))
-				);
-			}
-			start
-		} else {
-			index_tree_key(depth, &[])
-		};
+		let start = index_tree_key(depth, start_index);
+		let end = (depth as u32 + 1).to_be_bytes();
 		
-		// TODO switch to IndexPosition instead of vecs
-		let range = if let Some(end_range) = value_prefix_index(depth_base, start.to_vec(), base) {
-			self.range(start.to_vec()..end_range)
-		} else {
-			self.range(start.to_vec()..)
-		};
+		let range = self.range(start..end[..].into());
 		Box::new(range.into_iter().map(move |(k, ix)| {
 			let k = k[l_size..].to_vec();
 			(k, ix.clone())
@@ -434,20 +422,23 @@ impl DepthIndexes {
 	/// (needed only for unbalanced trie).
 	/// TODO this is not really efficient and use on every node
 	/// TODO put in IdenxesConf trait.
-	pub fn next_depth(&self, depth: usize, _index: &[u8]) -> Option<usize> {
-		// No index 0 as they are ignored.
-		let depth = if depth == 0 {
+	pub fn next_depth(&self, position: &LeftNibbleSlice) -> Option<usize> {
+		// No index 0 as they are ignored. TODO remove this??
+/*		let depth = if position.len() == 0 {
 			1
 		} else{
-			depth
-		};
+			position.len()
+		};*/
+		let depth = position.len();
+		let mut previous = None;
 		for i in self.0.iter() {
 			let i = *i as usize;
-			if i >= depth {
-				return Some(i)
+			if depth < i {
+				break;
 			}
+			previous = Some(i);
 		}
-		None
+		previous
 	}
 	
 	/// See `next_depth`.
@@ -480,16 +471,9 @@ pub enum IndexOrValue<B> {
 
 impl<B> IndexOrValue<B> {
 	/// Access the index branch depth (including the partial key).
-	pub fn index_depth(&self) -> Option<usize> {
+	pub fn exact_index(&self) -> Option<bool> {
 		match self {
-			IndexOrValue::Index(index) => Some(index.actual_depth),
-			_ => None,
-		}
-	}
-	/// Access the index branch depth (including the partial key).
-	pub fn index_parent_depth(&self) -> Option<usize> {
-		match self {
-			IndexOrValue::Index(index) => Some(index.actual_depth - 1),
+			IndexOrValue::Index(index) => Some(index.on_index),
 			_ => None,
 		}
 	}
@@ -667,7 +651,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 			Element::IndexChange
 			| Element::Change
 			| Element::ChangeValue => false,
-			Element::Index  => if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
+			Element::Index  => unimplemented!("TODO reimpl")/*if let Some((kv, depth)) = self.buffed_next_index().map(|kv| (kv.0.clone(), kv.1.actual_depth)) {
 				if self.try_stack_on_index(&kv, depth) {
 					self.stack_index(); // TODO if false continue with returning index
 					return self.next();
@@ -676,7 +660,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				}
 			} else {
 				false
-			},
+			}*/,
 		};
 		match next_element {
 			Element::Value => self.next_value(),
@@ -721,7 +705,8 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		child_index: usize,
 		buffed: Option<(Vec<u8>, IndexOrValue<V>)>,
 	) {
-		let mut base = NibbleVec::new();
+		unimplemented!("TODO remove");
+/*		let mut base = NibbleVec::new();
 		base.append_partial(((0, 0), key));
 		let len = base.len();
 		let to_drop = len - depth;
@@ -767,7 +752,7 @@ impl<'a, KB, IB, V, ID> SubIter<Vec<u8>, V> for RootIndexIterator<'a, KB, IB, V,
 		};
 		sub_iter.advance_index();
 		sub_iter.advance_value();
-		self.sub_iterator = Some(sub_iter);
+		self.sub_iterator = Some(sub_iter);*/
 	}
 }
 
@@ -813,6 +798,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}*/
 
 	fn stack_index(&mut self) -> bool {
+		unimplemented!();
+		/*
 		let (mut first_possible_next_index, last) = if let Some(index) = self.index_iter.last() {
 			index.next_index.as_ref().map(|index| (index.1.top_depth + 1, index.1.is_top_index))
 				// TODO this unwrap expression should be unreachable (condition to enter stack index).
@@ -862,6 +849,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			}
 		}
 		false
+		*/
 	}
 
 	fn advance_index(&mut self) -> bool {
@@ -913,8 +901,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 					&next_change.0[..],
 					&next_index.0[..],
 				);
-				let common_depth = crate::rstd::cmp::min(common_depth, next_index.1.actual_depth);
-				common_depth > next_index.1.actual_depth
+				unimplemented!("TODO we just need to compare over current index depth");
+				//let common_depth = crate::rstd::cmp::min(common_depth, next_index.1.actual_depth);
+				//common_depth > next_index.1.actual_depth
 /*	
 				// TODO this is not bellow
 				match next_index.1.compare(&next_index.0, &next_change.0) {
@@ -981,7 +970,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 
 	// TODO factor with next_sub_index
 	fn next_index(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		//self.previous_touched_index_depth = None;
+		unimplemented!("TODO");
+/*		//self.previous_touched_index_depth = None;
 		let current_index_depth = &mut self.current_index_depth;
 		let previous_touched_index_depth = &mut self.previous_touched_index_depth;
 		// stop value iteration after index
@@ -1034,6 +1024,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			}
 		}
 		result.map(|(k, i)| (k, IndexOrValue::Index(i)))
+i*/
 	}
 
 	fn next_value(&mut self) -> Option<(Vec<u8>, IndexOrValue<V>)> {
@@ -1076,7 +1067,8 @@ impl<'a, V> SubIterator<'a, V>
 	}
 
 	fn next_index<KV: KVBackend>(&mut self, values_backend: &'a KV) -> Option<(Vec<u8>, IndexOrValue<V>)> {
-		// TODO this is a copy of root 'next_index' function, could factor later.
+		unimplemented!("TODO");
+/*		// TODO this is a copy of root 'next_index' function, could factor later.
 		let previous_touched_index_depth = &mut self.previous_touched_index_depth;
 		// stop value iteration after index
 		let result = self.index_iter.as_mut().and_then(|i|
@@ -1126,6 +1118,7 @@ impl<'a, V> SubIterator<'a, V>
 			}
 		}
 		result.map(|(k, i)| (k, IndexOrValue::Index(i)))
+*/
 	}
 }
 

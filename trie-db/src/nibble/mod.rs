@@ -149,11 +149,12 @@ pub mod nibble_ops {
 }
 
 /// Backing storage for `NibbleVec`s.
-pub(crate) type BackingByteVec = smallvec::SmallVec<[u8; 36]>;
+pub type BackingByteVec = smallvec::SmallVec<[u8; 36]>;
 
 /// Owning, nibble-oriented byte vector. Counterpart to `NibbleSlice`.
 /// Nibbles are always left aligned, so making a `NibbleVec` from
 /// a `NibbleSlice` can get costy.
+/// TODO move to module with pub(super)
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, PartialEq, Eq)]
 pub struct NibbleVec {
@@ -183,6 +184,7 @@ pub struct NibbleVec {
 ///   assert_eq!(n2.mid(3).common_prefix(&n1), 3);
 /// }
 /// ```
+/// TODO move to module with pub(super)
 #[derive(Copy, Clone)]
 pub struct NibbleSlice<'a> {
 	data: &'a [u8],
@@ -190,6 +192,7 @@ pub struct NibbleSlice<'a> {
 }
 
 /// Iterator type for a nibble slice.
+/// TODO move to module with pub(super)
 pub struct NibbleSliceIterator<'a> {
 	p: &'a NibbleSlice<'a>,
 	i: usize,

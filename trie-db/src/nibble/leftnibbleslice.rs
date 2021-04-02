@@ -20,9 +20,10 @@ use crate::nibble::{nibble_ops::{self, NIBBLE_PER_BYTE}, NibbleSlice};
 /// right-aligned, meaning it does not support efficient truncation from the right side.
 ///
 /// This is an immutable struct. No operations actually change it.
+/// TODO len is to big, just store a bool to indicate if aligned or not (for radix 16 it is).
 pub struct LeftNibbleSlice<'a> {
-	bytes: &'a [u8],
-	len: usize,
+	pub(super) bytes: &'a [u8],
+	pub(super) len: usize,
 }
 
 impl<'a> LeftNibbleSlice<'a> {
@@ -34,9 +35,25 @@ impl<'a> LeftNibbleSlice<'a> {
 		}
 	}
 
+	/// Constructs a byte-aligned nibble slice from a byte slice, and a given
+	/// number of nibble len.
+	/// TODO find better name
+	pub fn new_len(bytes: &'a [u8], len: usize) -> Self {
+		debug_assert!(bytes.len() * NIBBLE_PER_BYTE >= len) ;
+		LeftNibbleSlice {
+			bytes,
+			len,
+		}
+	}
+
 	/// Returns the length of the slice in nibbles.
 	pub fn len(&self) -> usize {
 		self.len
+	}
+
+	/// TODO remove: do no help, just temporar use.
+	pub fn bytes(&self) -> &[u8] {
+		self.bytes
 	}
 
 	/// Get the nibble at a nibble index padding with a 0 nibble. Returns None if the index is
@@ -145,6 +162,31 @@ impl<'a> std::fmt::Debug for LeftNibbleSlice<'a> {
 			}
 		}
 		Ok(())
+	}
+}
+
+impl<'a> Into<hash_db::Prefix<'a>> for LeftNibbleSlice<'a> {
+	fn into(self) -> hash_db::Prefix<'a> {
+		match self.len % nibble_ops::NIBBLE_PER_BYTE {
+			0 => {
+				(&self.bytes[..self.len / 2], None)
+			},
+			1 => {
+				(&self.bytes[..self.len / 2], self.at(self.len - 1))
+			},
+			_ => {
+				unreachable!();
+			},
+		}
+	}
+}
+
+impl<'a> From<&'a crate::nibble::NibbleVec> for LeftNibbleSlice<'a> {
+	fn from(s: &'a crate::nibble::NibbleVec) -> Self {
+		LeftNibbleSlice {
+			bytes: s.inner.as_slice(),
+			len: s.len,
+		}
 	}
 }
 

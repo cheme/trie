@@ -402,3 +402,65 @@ fn compare_index_calculations() {
 		compare_index_calc(data, change, depth_indexes, nb_fetch);
 	}
 }
+
+#[test]
+fn check_indexing() {
+	use trie_db::BackingByteVec;
+	use trie_db::partial_db::Index;
+	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
+	let data = vec![
+		(b"alfa".to_vec(), vec![0; 32]),
+		(b"bravo".to_vec(), vec![1; 32]),
+//		(b"do".to_vec(), vec![2; 32]),
+		(b"dog".to_vec(), vec![3; 32]),
+		(b"doge".to_vec(), vec![4; 32]),
+		(b"horse".to_vec(), vec![5; 32]),
+		(b"house".to_vec(), vec![6; 32]),
+	];
+	
+	let mut indexes = std::collections::BTreeMap::new();
+	let indexes_conf = DepthIndexes::new(&[
+		6,
+	]);
+	let mut expected = vec![
+		// alf
+		(vec![0, 0, 0, 6, 97, 108, 102], false),
+		// bra
+		(vec![0, 0, 0, 6, 98, 114, 97], false),
+		// dog
+		(vec![0, 0, 0, 6, 100, 111, 103], true),
+		// hor
+		(vec![0, 0, 0, 6, 104, 111, 114], false),
+		// hou
+		(vec![0, 0, 0, 6, 104, 111, 117], false),
+	];
+	reference_trie::compare_indexing(data, memdb, &mut indexes, &indexes_conf);
+	for index in indexes.into_iter().rev() {
+		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
+	}
+	assert!(expected.is_empty());
+	
+//	panic!("{:?}", indexes);
+	let mut indexes = std::collections::BTreeMap::<BackingByteVec, Index>::new();
+	let indexes_conf = DepthIndexes::new(&[
+		0, 2, 4, 6, 8,
+	]);
+	
+	let mut expected = vec![
+		(vec![0, 0, 0, 0], false), // root on nibble 1
+		// 2, a
+		(vec![0, 0, 0, 2, 97], false),
+		(vec![0, 0, 0, 2, 98], false),
+		(vec![0, 0, 0, 2, 100], false),
+		(vec![0, 0, 0, 2, 104], false),
+		// 6 dog
+		(vec![0, 0, 0, 6, 100, 111, 103], true),
+		// 
+		(vec![0, 0, 0, 6, 104, 111, 114], false),
+		(vec![0, 0, 0, 6, 104, 111, 117], false),
+	];
+	for index in indexes.into_iter().rev() {
+		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
+	}
+	assert!(expected.is_empty());
+}

@@ -19,6 +19,7 @@ use trie_db::partial_db::{DepthIndexes, RootIndexIterator, Index,
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use trie_db::nibble_ops;
+use trie_db::BackingByteVec;
 use trie_db::LeftNibbleSlice;
 use trie_db::NibbleVec;
 use trie_db::partial_db::{SubIter, IndexOrValue, IndexBackend};
@@ -101,8 +102,8 @@ fn test_root_iter() {
 		nb += 1;
 //			println!("{:?} at {:?}", k, ix);
 	}
-	let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
-	let idepth1: usize = 3;
+	let mut index_backend: BTreeMap<BackingByteVec, Index> = Default::default();
+	let idepth1: usize = 2;
 	let depth_index = DepthIndexes::new(&[idepth1 as u32]);
 	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
@@ -116,11 +117,11 @@ fn test_root_iter() {
 		nb2 += 1;
 	}
 	assert_eq!(nb, nb2);
-	let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
+	let mut index_backend: BTreeMap<BackingByteVec, Index> = Default::default();
 	let index1 = vec![0];
 	let index2 = vec![5];
-	index_backend.write(idepth1, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 2, is_top_index: true, top_depth: 9});
-	index_backend.write(idepth1, index2.clone().into(), Index{ hash: Default::default(), actual_depth: 2, is_top_index: true, top_depth: 2});
+	index_backend.write(idepth1, LeftNibbleSlice::new_len(index1.as_slice(), idepth1), Index{hash: Default::default(), on_index: false});
+	index_backend.write(idepth1, LeftNibbleSlice::new_len(index2.as_slice(), idepth1), Index{hash: Default::default(), on_index: true});
 	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
@@ -147,13 +148,13 @@ fn test_root_iter() {
 	}
 	assert_ne!(nb2, nb3);
 	let depth_index = DepthIndexes::new(&[3, 6]);
-	let mut index_backend: BTreeMap<Vec<u8>, Index> = Default::default();
+	let mut index_backend: BTreeMap<BackingByteVec, Index> = Default::default();
 	let index1 = vec![0, 0];
 	let index11 = vec![0, 1, 0];
 	let index12 = vec![0, 1, 5];
-	index_backend.write(3, index1.clone().into(), Index{ hash: Default::default(), actual_depth: 3, is_top_index: false, top_depth: 3});
-	index_backend.write(6, index11.clone().into(), Index{ hash: Default::default(), actual_depth: 6, is_top_index: true, top_depth: 9});
-	index_backend.write(6, index12.clone().into(), Index{ hash: Default::default(), actual_depth: 6, is_top_index: true, top_depth: 6});
+	index_backend.write(3, LeftNibbleSlice::new_len(index1.as_slice(), 3), Index{ hash: Default::default(), on_index: true});
+	index_backend.write(6, LeftNibbleSlice::new_len(index11.as_slice(), 6), Index{ hash: Default::default(), on_index: false});
+	index_backend.write(6, LeftNibbleSlice::new_len(index12.as_slice(), 6), Index{ hash: Default::default(), on_index: true});
 	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
