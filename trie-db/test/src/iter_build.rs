@@ -417,7 +417,7 @@ fn check_indexing() {
 		(b"horse".to_vec(), vec![5; 32]),
 		(b"house".to_vec(), vec![6; 32]),
 	];
-	
+
 	let mut indexes = std::collections::BTreeMap::new();
 	let indexes_conf = DepthIndexes::new(&[
 		6,
@@ -434,33 +434,61 @@ fn check_indexing() {
 		// hou
 		(vec![0, 0, 0, 6, 104, 111, 117], false),
 	];
-	reference_trie::compare_indexing(data, memdb, &mut indexes, &indexes_conf);
+	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
 	for index in indexes.into_iter().rev() {
 		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
 	}
 	assert!(expected.is_empty());
-	
+
+	let mut indexes = std::collections::BTreeMap::new();
+	let indexes_conf = DepthIndexes::new(&[
+		4, 8,
+	]);
+	let mut expected = vec![
+		// alf
+		(vec![0, 0, 0, 4, 97, 108], false),
+		// bra
+		(vec![0, 0, 0, 4, 98, 114], false),
+		// dog
+		(vec![0, 0, 0, 4, 100, 111], false),
+		// hou hor branch (7)
+		(vec![0, 0, 0, 4, 104, 111], false),
+		// doge
+		(vec![0, 0, 0, 8, 100, 111, 103, 101], true),
+		// hou
+		(vec![0, 0, 0, 8, 104, 111, 114, 115], false),
+		(vec![0, 0, 0, 8, 104, 111, 117, 115], false),
+	];
+	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
+	for index in indexes.into_iter().rev() {
+		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
+	}
+	assert!(expected.is_empty());
+
+
 //	panic!("{:?}", indexes);
 	let mut indexes = std::collections::BTreeMap::<BackingByteVec, Index>::new();
 	let indexes_conf = DepthIndexes::new(&[
-		0, 2, 4, 6, 8,
+		1, 2, 4, 6, 8,
 	]);
+	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
 	
 	let mut expected = vec![
-		(vec![0, 0, 0, 0], false), // root on nibble 1
+		(vec![0, 0, 0, 1, 6], true), // root on nibble 1
 		// 2, a
 		(vec![0, 0, 0, 2, 97], false),
 		(vec![0, 0, 0, 2, 98], false),
 		(vec![0, 0, 0, 2, 100], false),
 		(vec![0, 0, 0, 2, 104], false),
-		// 6 dog
-		(vec![0, 0, 0, 6, 100, 111, 103], true),
-		// 
+		// h
 		(vec![0, 0, 0, 6, 104, 111, 114], false),
 		(vec![0, 0, 0, 6, 104, 111, 117], false),
+		// doge
+		(vec![0, 0, 0, 8, 100, 111, 103, 101], true),
 	];
 	for index in indexes.into_iter().rev() {
 		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
 	}
+	println!("{:?}", expected);
 	assert!(expected.is_empty());
 }

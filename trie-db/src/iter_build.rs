@@ -1087,7 +1087,7 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 			return ChildReference::Inline(h, len);
 		}
 		let hash = <H as Hasher>::hash(&encoded_node[..]);
-		if let Some(save_index) = self.indexes.next_depth(&node_key) {
+		if let Some(save_index) = self.indexes.next_depth(prefix.len(), node_key.len()) {
 			debug_assert!(node_key.len() >= save_index);
 			let on_index = node_key.len() == save_index;
 				self.last_index = (&node_key).into();

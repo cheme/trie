@@ -422,23 +422,24 @@ impl DepthIndexes {
 	/// (needed only for unbalanced trie).
 	/// TODO this is not really efficient and use on every node
 	/// TODO put in IdenxesConf trait.
-	pub fn next_depth(&self, position: &LeftNibbleSlice) -> Option<usize> {
+	pub fn next_depth(&self, prefix_len: usize, nodekey_len: usize) -> Option<usize> {
 		// No index 0 as they are ignored. TODO remove this??
 /*		let depth = if position.len() == 0 {
 			1
 		} else{
 			position.len()
 		};*/
-		let depth = position.len();
-		let mut previous = None;
 		for i in self.0.iter() {
 			let i = *i as usize;
-			if depth < i {
-				break;
+			if i >= prefix_len  {
+				if i <= nodekey_len {
+					return Some(i)
+				} else {
+					return None;
+				}
 			}
-			previous = Some(i);
 		}
-		previous
+		None
 	}
 	
 	/// See `next_depth`.
