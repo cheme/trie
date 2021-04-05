@@ -109,6 +109,49 @@ impl<'a> LeftNibbleSlice<'a> {
 		// If common nibble prefix is the same, finally compare lengths.
 		self.len().cmp(&other.len())
 	}
+
+	/// Compare a slice with another, also returns true if one does contain another
+	/// (if cmp less then second contains first, if cmp greater first contains second).
+	/// TODO return only to value? TODO force inline?
+	pub fn cmp_common_and_starts_with(&self, other: &Self) -> (Ordering, usize, bool) {
+		let common_len = cmp::min(self.len(), other.len());
+		let common_byte_len = common_len / NIBBLE_PER_BYTE;
+
+		for a in 0 .. common_byte_len {
+			if self.bytes[a] != other.bytes[a] {
+				let ordering = self.bytes[a].cmp(&other.bytes[a]);
+				let commons = a * NIBBLE_PER_BYTE + nibble_ops::left_common(self.bytes[a], other.bytes[a]);
+				let starts_with = match ordering {
+					Ordering::Greater => {
+						commons == other.len()
+					},
+					Ordering::Less => {
+						commons == self.len()
+					},
+					Ordering::Equal => unreachable!(),
+				};
+				return (ordering, commons, starts_with);
+			}
+		}
+	
+		// Compare nibble-by-nibble (either 0 or 1 nibbles) any after the common byte prefix.
+		for i in (common_byte_len * NIBBLE_PER_BYTE)..common_len {
+			let a = self.at(i).expect("i < len; len == self.len() qed");
+			let b = other.at(i).expect("i < len; len == other.len(); qed");
+			match a.cmp(&b) {
+				Ordering::Equal => {}
+				Ordering::Greater => {
+					return (Ordering::Greater, i, i == other.len());
+				},
+				Ordering::Less => {
+					return (Ordering::Less, i, i == self.len());
+				},
+			}
+		}
+
+		// If common nibble prefix is the same, finally compare lengths.
+		(self.len().cmp(&other.len()), common_len, true)
+	}
 }
 
 impl<'a> PartialEq for LeftNibbleSlice<'a> {

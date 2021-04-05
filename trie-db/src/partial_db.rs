@@ -27,6 +27,7 @@ use crate::nibble::LeftNibbleSlice;
 use crate::nibble::NibbleVec;
 pub use crate::iter_build::SubIter;
 use crate::rstd::vec::Vec;
+use crate::rstd::iter::Peekable;
 use crate::rstd::boxed::Box;
 
 #[cfg(feature = "std")]
@@ -45,7 +46,7 @@ pub trait KVBackend {
 	fn write(&mut self, key: &[u8], value: &[u8]);
 	/// Remove any value at a key.
 	fn remove(&mut self, key: &[u8]);
-	/// Iterate over the values.
+	/// Iterate over the values. TODO remove: iter_from is enough.
 	fn iter<'a>(&'a self) -> KVBackendIter<'a>;
 	// TODO could also optionally restore from a previous iterator start (complicate types
 	// a lot), would allow 'skipping' implementation: eg for a radix trie: do not
@@ -96,7 +97,7 @@ pub type KVBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
 
 /// Iterator over encoded indexes of a IndexBackend, encoded indexes also have
 /// a depth (which can differ from the depth we queried).
-pub type IndexBackendIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Index)> + 'a>;
+pub type IndexBackendIter<'a> = Box<dyn Iterator<Item = (NibbleVec, Index)> + 'a>;
 
 impl KVBackend for BTreeMap<Vec<u8>, Vec<u8>> {
 	fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -387,8 +388,8 @@ impl IndexBackend for BTreeMap<IndexPosition, Index> {
 		
 		let range = self.range(start..end[..].into());
 		Box::new(range.into_iter().map(move |(k, ix)| {
-			let k = k[l_size..].to_vec();
-			(k, ix.clone())
+			let k = LeftNibbleSlice::new_len(k, depth);
+			((&k).into(), ix.clone())
 		}))
 	}
 }
@@ -410,10 +411,58 @@ impl crate::rstd::ops::Deref for DepthIndexes {
 	}
 }
 
+struct IndexBranch {
+	depth: usize,
+	has_value: bool,
+	// If a branch was untouched/undeleted.
+	processed_branch: bool,
+	// Is valid when we know of:
+	// - two untouched/undeleted branch index
+	// - a value and a untouch/undeleted branch index
+	// Undeleted check can be done over value and change
+	// iterator without additional read ahead (deleted
+	// value is not part of the iterator.
+	valid: bool,
+}
+
+/// Branches used when iterating.
+/// TODO The latest could be part of the iteration to avoid redundant key
+/// comparison in `iter_build`.
+struct StackBranches(smallvec::SmallVec<[IndexBranch; 10]>);
+
+impl crate::rstd::ops::Deref for StackBranches {
+	type Target = smallvec::SmallVec<[IndexBranch; 10]>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.0
+	}
+}
+
+impl StackBranches {
+	fn current_branch_depth(&self) -> Option<usize> {
+		self.0.last().map(|i| i.depth)
+	}
+}
+
 impl DepthIndexes {
 	/// Instantiate a new depth indexes configuration.
 	pub fn new(indexes: &[u32]) -> Self {
 		DepthIndexes(indexes.into())
+	}
+
+	// TODO rename this or other next_depth + maybe not pub.
+	pub fn next_depth2(&self, current_depth: Option<usize>) -> Option<usize> {
+		if let Some(current) = current_depth {
+			for i in self.0.iter() {
+				let i = *i as usize;
+				if i > current {
+					return Some(i);
+				}
+			}
+		} else {
+			return self.0.get(0).map(|i| *i as usize);
+		}
+		None
 	}
 
 	/// Returns next_index depth to register, starting at a given included depth.
@@ -470,11 +519,33 @@ pub enum IndexOrValue<B> {
 	StoredValue(Vec<u8>),
 }
 
+/// Enum containing either a value or an index, mostly for internal use
+/// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
+pub enum IndexOrValue2<B> {
+	/// Contains depth as number of bit and the encoded value of the node for this index.
+	/// Also an optional `Change of value is attached`.
+	Index(Index),
+	/// Value node value, from change set.
+	Value(B),
+	/// Value node value, from existing values.
+	StoredValue(Vec<u8>),
+}
+
 impl<B> IndexOrValue<B> {
 	/// Access the index branch depth (including the partial key).
 	pub fn exact_index(&self) -> Option<bool> {
 		match self {
 			IndexOrValue::Index(index) => Some(index.on_index),
+			_ => None,
+		}
+	}
+}
+
+impl<B> IndexOrValue2<B> {
+	/// Access the index branch depth (including the partial key).
+	pub fn exact_index(&self) -> Option<bool> {
+		match self {
+			IndexOrValue2::Index(index) => Some(index.on_index),
 			_ => None,
 		}
 	}
@@ -504,6 +575,29 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	sub_iterator: Option<SubIterator<'a, V>>,
 }
 
+/// Iterator over index and value for root calculation
+/// and index update.
+/// TODO remove V as type param?? (already Vec<u8> in
+/// StoredValue), or put V in kvbackend.
+pub struct RootIndexIterator2<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	values: &'a KB,
+	indexes: &'a IB,
+	indexes_conf: &'a DepthIndexes,
+	deleted_indexes: Vec<(usize, NibbleVec)>,
+	changes_iter: Peekable<ID>,
+	index_iter: Vec<StackedIndex2<'a>>,
+	current_value_iter: Peekable<KVBackendIter<'a>>,
+	stack_branches: StackBranches,
+	state: Next2,
+	next_item: Option<(NibbleVec, IndexOrValue2<V>)>,
+}
+
 struct SubIterator<'a, V> {
 	end_iter: Option<Vec<u8>>,
 	index_iter: Option<StackedIndex<'a>>,
@@ -515,8 +609,53 @@ struct SubIterator<'a, V> {
 
 struct StackedIndex<'a> {
 	iter: IndexBackendIter<'a>, 
-	next_index: Option<(Vec<u8>, Index)>,
+	next_index: Option<(NibbleVec, Index)>,
 	conf_index_depth: usize,
+}
+
+struct StackedIndex2<'a> {
+	iter: Peekable<IndexBackendIter<'a>>,
+	conf_index_depth: usize,
+}
+
+impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	pub fn new(
+		values: &'a KB,
+		indexes: &'a IB,
+		indexes_conf: &'a DepthIndexes,
+		changes_iter: ID,
+		deleted_indexes: Vec<(usize, NibbleVec)>,
+	) -> Self {
+		let current_value_iter = Iterator::peekable(values.iter_from(&[]));
+		let mut iter = RootIndexIterator2 {
+			values,
+			indexes,
+			indexes_conf,
+			changes_iter: Iterator::peekable(changes_iter),
+			deleted_indexes,
+			current_value_iter,
+			index_iter: Vec::new(),
+			stack_branches: StackBranches(Default::default()),
+			state: Next2::None,
+			next_item: None,
+		};
+
+		// always stack first level of indexes.
+		iter.init_stack_index();
+	
+		iter
+	}
+
+	/// Access registered indexes to delete.
+	pub fn indexes_to_delete(self) -> Vec<(usize, NibbleVec)> {
+		self.deleted_indexes
+	}
 }
 
 impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
@@ -560,7 +699,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}
 }
 
-
 enum Element {
 	Value,
 	Index,
@@ -580,7 +718,8 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 	type Item = (Vec<u8>, IndexOrValue<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
-		let mut last_sub = false;
+		unimplemented!();
+/*		let mut last_sub = false;
 		// TODO factor with standard iter
 		if let Some(sub_iter) = self.sub_iterator.as_mut() {
 			let action = if let Some(index_iter) = sub_iter.index_iter.as_ref() {
@@ -688,7 +827,21 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 				}
 				None
 			},
-		}
+		}*/
+	}
+}
+
+impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	type Item = (NibbleVec, IndexOrValue2<V>);
+
+	fn next(&mut self) -> Option<Self::Item> {
+		unimplemented!()
 	}
 }
 
@@ -966,7 +1119,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	}
 
 	fn buffed_next_index(&self) -> Option<&(Vec<u8>, Index)> {
-		self.index_iter.last().and_then(|item| item.next_index.as_ref())
+		unimplemented!()
+			//self.index_iter.last().and_then(|item| item.next_index.as_ref())
 	}
 
 	// TODO factor with next_sub_index
@@ -1049,13 +1203,14 @@ impl<'a, V> SubIterator<'a, V>
 	fn advance_index(
 		&mut self,
 	) {
-		let end_iter = &self.end_iter;
+		unimplemented!()
+/*		let end_iter = &self.end_iter;
 		if let Some(index_iter) = self.index_iter.as_mut() {
 			index_iter.next_index = index_iter.iter.next()
 				.filter(|kv| end_iter.as_ref().map(|end| {
 					&kv.0 < end
 				}).unwrap_or(true));
-		}
+		}*/
 	}
 
 	fn advance_value(
@@ -1123,9 +1278,138 @@ impl<'a, V> SubIterator<'a, V>
 	}
 }
 
+// TODO rem pub
 pub enum Next {
 	Ascend,
 	Descend,
 	Value,
 	Index(Option<usize>),
+}
+
+// TODO probaly only need StackNextIndex.
+enum Next2 {
+	None,
+	// Iter index up to next branch with change (then go down index or change).
+	IterToBranch,
+	IterToChange,
+	// Iter until index, then stack child index
+	IterToStackIndex,
+	// next is index.
+	NextIndex,
+}
+
+impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
+	where
+		KB: KVBackend,
+		IB: IndexBackend,
+		V: AsRef<[u8]>,
+		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
+{
+	fn init_stack_index(&mut self) {
+		// stack very first index
+		if let Some(conf_index_depth) = self.indexes_conf.next_depth2(None) {
+			let iter = self.indexes.iter(conf_index_depth, LeftNibbleSlice::new(&[]));
+			let iter = Iterator::peekable(iter);
+			self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+		}
+		self.init_state();
+	}
+
+	// 
+	fn init_state(&mut self) {
+		if let Some(next_change) = self.changes_iter.peek() {
+			let key_change = next_change.0.as_ref();
+			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				match LeftNibbleSlice::new(key_change).cmp_common_and_starts_with(&(&next_index.0).into()) {
+					(Ordering::Less, _commons, _is_prefix) => {
+						// iterate until index (even if not a prefix this will branch to prefix of index and
+						// require change).
+						self.state = Next2::IterToChange;
+					},
+					(_, _commons, false) => {
+						// iterate until index without values.
+						// TODO paded buffer on &mut that return slice.
+						let next_index = next_index.0.clone().padded_buffer();
+						// TODO setting to None should be more efficient or setting on state change.
+						// or TODO iter_from required to be lazy (only costy of first call to peek/next.
+						self.current_value_iter = Iterator::peekable(self.values.iter_from(next_index.as_slice()));
+						self.state = Next2::NextIndex;
+					},
+					(_, _commons, true) => {
+						// iterate then stack index.
+						self.state = Next2::IterToStackIndex;
+					},
+				}
+			}
+
+			unimplemented!("TODO feed next_item and then feed first branch");
+
+/*			assert!(self.value_or_change().is_none());
+			debug_assert!(self.next_item.is_some());*/
+		}
+	}
+
+	fn stack_next_index(&mut self, next_change: &[u8]) {
+		if let Some(next_change) = self.changes_iter.peek() {
+			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
+			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
+				if let Some(next_branch_depth) = self.stack_branches.current_branch_depth() {
+					let iter = self.indexes.iter(conf_index_depth, LeftNibbleSlice::new_len(next_change.0.as_slice(), next_branch_depth));
+					let iter = Iterator::peekable(iter);
+					self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+					self.state = Next2::IterToBranch;
+				}
+			}
+		}
+	}
+
+	// When reading value we skip the deleted ones.
+	fn peek_value_iter(&mut self, bound: Option<&[u8]>) -> Option<&(Vec<u8>, Vec<u8>)> {
+		unimplemented!()
+/*		// TODO save deleted values as deleted indexes.
+		if let Some(next_value) = self.current_value_iter.peek() {
+			if let Some(next_change) = self.changes_iter.peek() {
+				if next_change.1.is_none() {
+					let key_change = ;
+					match next_change.0.as_ref().cmp(next_value.0.as_ref()) {
+						Ordering::Less => {
+							let _ = self.changes_iter.next();
+							return self.peek_value_iter(bound);
+						},
+						Ordering::Greater => {
+						},
+						Ordering::Eq => {
+						},
+					}
+				}
+			}
+		}*/
+	}
+	/*
+	fn value_or_change(&mut self, next_change: &[u8]) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+		let value = if let Some(next_change) = self.changes_iter.peek() {
+			if let Some(next_value) = self.current_value_iter.peek() {
+				match next_value.0.cmp(next_change.0) {
+					Ordering::Equal => {
+						if change.is_some() {
+						} else {
+						}
+					},
+					Ordering::Greater
+					Ordering::Less
+				}
+			}
+		} else {
+		}
+
+		std::mem::replace(&mut self.next_item, value)
+	}*/
+
+	fn current_index_depth(&self) -> Option<usize> {
+		self.index_iter.last().map(|i| i.conf_index_depth)
+	}
+
+	fn iter_value_skip_to(&mut self, key: &[u8]) {
+		self.current_value_iter = Iterator::peekable(self.values.iter_from(key));
+	}
 }
