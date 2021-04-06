@@ -273,22 +273,72 @@ fn test_root_index(indexes: &'static [u32], nb_iter: usize, count: u32) {
 	}
 }
 
+type IndexOrValue2 = trie_db::partial_db::IndexOrValue2<Vec<u8>>;
+
 #[test]
 fn test_fix_set_root_iter() {
-	let (mem_db, indexes, indexes_conf) = crate::iter_build::indexing_set_1();
-	let mut changes = Vec::<(_, Option<Vec<u8>>)>::new();
-	let mut deleted_indexes = Vec::new();
-	let mut deleted_values = Vec::new();
-	let mut root_iter = RootIndexIterator2::new(
-		&mem_db,
-		&indexes,
-		&indexes_conf,
-		changes.into_iter(), // TODO change api to pass IntoIter as param!!!
-		&mut deleted_indexes,
-		&mut deleted_values,
-	);
-	while let Some(item) = root_iter.next() {
-		println!("{:?}", item);
+	type Expected = (Vec<u8>, usize, IndexOrValue2);
+	fn check_expected(expected: Option<Expected>, value: (NibbleVec, IndexOrValue2)) {
+		let expected = expected.expect("to many iterator values");
+		assert_eq!(LeftNibbleSlice::new_len(expected.0.as_slice(), expected.1), value.0.as_slice());
+		match (expected.2, value.1) {
+			(IndexOrValue2::Index(_), IndexOrValue2::Index(_)) => (),
+			(IndexOrValue2::Value(a), IndexOrValue2::Value(b)) => assert_eq!(a, b),
+			(IndexOrValue2::StoredValue(a), IndexOrValue2::StoredValue(b)) => assert_eq!(a, b),
+			_ => panic!("Mismatch item"),
+		}
 	}
-	panic!("disp");
+
+	fn check(set: crate::iter_build::IndexingSet, mut expected: Vec<Expected>) {
+		let (mem_db, indexes, indexes_conf) = set;
+		expected.reverse();
+		let mut changes = Vec::<(_, Option<Vec<u8>>)>::new();
+		let mut deleted_indexes = Vec::new();
+		let mut deleted_values = Vec::new();
+		let mut root_iter = RootIndexIterator2::new(
+			&mem_db,
+			&indexes,
+			&indexes_conf,
+			changes.into_iter(), // TODO change api to pass IntoIter as param!!!
+			&mut deleted_indexes,
+			&mut deleted_values,
+		);
+
+		while let Some(iter) = root_iter.next() {
+			check_expected(expected.pop(), iter);
+		}
+		assert!(expected.is_empty());
+/*		while let Some(item) = root_iter.next() {
+			println!("{:?}", item);
+		}
+		panic!("disp");*/
+	}
+
+	let set = crate::iter_build::indexing_set_1(Default::default());
+	let expected = vec![
+		(vec![97, 108, 102], 6, IndexOrValue2::Index(Default::default())),
+		(vec![98, 114, 97], 6, IndexOrValue2::Index(Default::default())),
+		(vec![100, 111, 103], 6, IndexOrValue2::Index(Default::default())),
+		(vec![104, 111, 114], 6, IndexOrValue2::Index(Default::default())),
+		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
+	];
+//	check(set, expected);
+
+	let set = crate::iter_build::indexing_set_1(vec![
+		(b"d".to_vec(), vec![2; 32]),
+		(b"er".to_vec(), vec![3; 32]),
+		(b"housf".to_vec(), vec![6; 32]),
+		(b"i".to_vec(), vec![6; 32]),
+	]);
+	let expected = vec![
+		(vec![97, 108, 102], 6, IndexOrValue2::Index(Default::default())),
+		(vec![98, 114, 97], 6, IndexOrValue2::Index(Default::default())),
+		(vec![100], 2, IndexOrValue2::StoredValue(vec![2; 32])),
+		(vec![100, 111, 103], 6, IndexOrValue2::Index(Default::default())),
+		(vec![101, 114], 4, IndexOrValue2::StoredValue(vec![3; 32])),
+		(vec![104, 111, 114], 6, IndexOrValue2::Index(Default::default())),
+		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
+		(vec![105], 2, IndexOrValue2::StoredValue(vec![6; 32])),
+	];
+	check(set, expected);
 }

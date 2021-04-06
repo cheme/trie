@@ -415,41 +415,49 @@ fn indexing_set_data() -> Vec<(Vec<u8>, Vec<u8>)> {
 	]
 }
 
-type IndexingSet = (
+pub(crate) type IndexingSet = (
 	std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
 //	MemoryDB<KeccakHasher, PrefixedKey<KeccakHasher>, DBValue>,
 	std::collections::BTreeMap<trie_db::BackingByteVec, trie_db::partial_db::Index>,
 	DepthIndexes,
 );
 
-fn indexing_set(indexes_conf: DepthIndexes) -> IndexingSet {
+fn indexing_set(indexes_conf: DepthIndexes, mut additional_data: Vec<(Vec<u8>, Vec<u8>)>) -> IndexingSet {
 	let data = indexing_set_data();
-	let ordered_data = data.iter().cloned().collect();
+	let mut ordered_data: std::collections::BTreeMap<Vec<u8>, Vec<u8>> = data.iter().cloned().collect();
+	let data = if additional_data.len() > 0 {
+		for data in additional_data.into_iter() {
+			ordered_data.insert(data.0, data.1);
+		}
+		ordered_data.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+	} else {
+		data
+	};
 	let mut memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	let mut indexes = std::collections::BTreeMap::new();
 	reference_trie::compare_indexing(data, &mut memdb, &mut indexes, &indexes_conf);
 	(ordered_data, indexes, indexes_conf)
 }
 
-pub(crate) fn indexing_set_1() -> IndexingSet {
+pub(crate) fn indexing_set_1(additional_data: Vec<(Vec<u8>, Vec<u8>)>) -> IndexingSet {
 	let indexes_conf = DepthIndexes::new(&[
 		6,
 	]);
-	indexing_set(indexes_conf)
+	indexing_set(indexes_conf, additional_data)
 }
 
-pub(crate) fn indexing_set_2() -> IndexingSet {
+pub(crate) fn indexing_set_2(additional_data: Vec<(Vec<u8>, Vec<u8>)>) -> IndexingSet {
 	let indexes_conf = DepthIndexes::new(&[
 		4, 8,
 	]);
-	indexing_set(indexes_conf)
+	indexing_set(indexes_conf, additional_data)
 }
 
-pub(crate) fn indexing_set_3() -> IndexingSet {
+pub(crate) fn indexing_set_3(additional_data: Vec<(Vec<u8>, Vec<u8>)>) -> IndexingSet {
 	let indexes_conf = DepthIndexes::new(&[
 		1, 2, 4, 6, 8,
 	]);
-	indexing_set(indexes_conf)
+	indexing_set(indexes_conf, additional_data)
 }
 
 #[test]
@@ -468,13 +476,13 @@ fn check_indexing() {
 		// hou
 		(vec![0, 0, 0, 6, 104, 111, 117], false),
 	];
-	let (mem_db, indexes, _) = indexing_set_1();
+	let (mem_db, indexes, _) = indexing_set_1(Default::default());
 	for index in indexes.into_iter().rev() {
 		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
 	}
 	assert!(expected.is_empty());
 
-	let (mem_db, indexes, _) = indexing_set_2();
+	let (mem_db, indexes, _) = indexing_set_2(Default::default());
 	let mut expected = vec![
 		// alf
 		(vec![0, 0, 0, 4, 97, 108], false),
@@ -498,7 +506,7 @@ fn check_indexing() {
 
 //	panic!("{:?}", indexes);
 
-	let (mem_db, indexes, _) = indexing_set_3();
+	let (mem_db, indexes, _) = indexing_set_3(Default::default());
 	let mut expected = vec![
 		(vec![0, 0, 0, 1, 6], true), // root on nibble 1
 		// 2, a

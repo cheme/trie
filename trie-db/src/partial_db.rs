@@ -238,6 +238,7 @@ impl IndexBackend for Box<dyn IndexBackend + Send + Sync> {
 	}
 }
 
+#[derive(Default)]
 #[derive(Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
 /// Content of an index.
@@ -1366,23 +1367,26 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			}*/
 
 			if matches!(new_next, IndexOrValue2::Index(_)) {
-/*				// iterate value over this next range of value from previous index
-				let previous_index_depth = if self.index_iter.len() > 1 {
-					self.index_iter.get(self.index_iter.len() - 2).map(|i| i.conf_index_depth)
-				} else {
-					None
-				};
-				let sibling_depth = previous_index_depth.unwrap_or(0) + 1;
-*/
-				if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				let sibling_depth = if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 					let common_depth = key_index1.as_slice().common_length(&next_index.0.as_slice());
-					let sibling_depth = common_depth + 1;
-					let mut key_index: NibbleVec = (&key_index1.as_slice().truncate(sibling_depth)).into();
-					if key_index.next_sibling() {
-						self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
+					common_depth + 1
+				} else {
+					// just skip after index: this could be default (not the pop), TODO check perf as default
+
+					self.index_iter.pop().map(|i| i.conf_index_depth)
+//					self.index_iter.get(self.index_iter.len() - 1)
+						.expect("Get a value from an iterator")
+					// TODO rem iter here or wait for a value that is bellow index??
+/* from parent ix: ko					let previous_index_depth = if self.index_iter.len() > 1 {
+						self.index_iter.get(self.index_iter.len() - 2).map(|i| i.conf_index_depth)
 					} else {
-						self.current_value_iter = None;
-					}
+						None
+					};
+					previous_index_depth.unwrap_or(0) + 1*/
+				};
+				let mut key_index: NibbleVec = (&key_index1.as_slice().truncate(sibling_depth)).into();
+				if key_index.next_sibling() {
+					self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
 				} else {
 					self.current_value_iter = None;
 				}
