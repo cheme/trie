@@ -966,7 +966,7 @@ pub fn compare_indexing<
 	IB: trie_db::partial_db::IndexBackend + fmt::Debug,
 > (
 	data: Vec<(Vec<u8>, Vec<u8>)>,
-	mut memdb: X,
+	memdb: &mut X,
 	indexes_backend: &mut IB,
 	indexes: &DepthIndexes,
 ) {
@@ -977,7 +977,7 @@ pub fn compare_indexing<
 	};
 	let root = {
 		let mut root = Default::default();
-		let mut t = RefTrieDBMutNoExt::new(&mut memdb, &mut root);
+		let mut t = RefTrieDBMutNoExt::new(memdb, &mut root);
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 		}
@@ -987,7 +987,7 @@ pub fn compare_indexing<
 	if root_new != root {
 		println!("{:?}", indexes_backend);
 		{
-			let db : &dyn hash_db::HashDB<_, _> = &memdb;
+			let db : &dyn hash_db::HashDB<_, _> = memdb;
 			let t = RefTrieDBNoExt::new(&db, &root).unwrap();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {

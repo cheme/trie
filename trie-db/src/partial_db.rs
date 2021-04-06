@@ -195,11 +195,11 @@ pub trait IndexBackend {
 	fn remove(&mut self, depth: usize, index: LeftNibbleSlice);
 	/// Iterate over the index from a key.
 	/// `group` is common key at depth.
-	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a>;
+	fn iter<'a>(&'a self, depth: usize, parent_depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a>;
 	/// Same as iterate but starting at a given index: in this case the `index` parameter
 	/// contains both the depth and the starting index.
 	/// TODO could be a single iter function only (if start_index len > depth it is from variant).
-	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a>;
+	fn iter_from<'a>(&'a self, depth: usize, parent_depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a>;
 }
 
 impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
@@ -212,11 +212,11 @@ impl IndexBackend for Arc<dyn IndexBackend + Send + Sync> {
 	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
 		unimplemented!("TODO split trait with mut and non mut");
 	}
-	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
-		IndexBackend::iter(self.as_ref(), depth, group)
+	fn iter<'a>(&'a self, depth: usize, parent_depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, parent_depth, group)
 	}
-	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
-		IndexBackend::iter_from(self.as_ref(), depth, start_index)
+	fn iter_from<'a>(&'a self, depth: usize, parent_depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter_from(self.as_ref(), depth, parent_depth, start_index)
 	}
 }
 
@@ -230,11 +230,11 @@ impl IndexBackend for Box<dyn IndexBackend + Send + Sync> {
 	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
 		IndexBackend::remove(self.as_mut(), depth, index)
 	}
-	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
-		IndexBackend::iter(self.as_ref(), depth, group)
+	fn iter<'a>(&'a self, depth: usize, parent_depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter(self.as_ref(), depth, parent_depth, group)
 	}
-	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
-		IndexBackend::iter_from(self.as_ref(), depth, start_index)
+	fn iter_from<'a>(&'a self, depth: usize, parent_depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		IndexBackend::iter_from(self.as_ref(), depth, parent_depth, start_index)
 	}
 }
 
@@ -338,10 +338,10 @@ fn end_prefix_index(prefix: &[u8], index: usize) -> Option<Vec<u8>> {
 
 /// Key for an index stored in a tree.
 /// Depth is use as a prefix to isolate iterators.
-pub fn index_tree_key(depth: usize, index: LeftNibbleSlice) -> IndexPosition {
+pub fn index_tree_key(depth: usize, index: &LeftNibbleSlice) -> IndexPosition {
 	// writing directly the bytes with 0 as padding as we cannot have a child (would be
 	// at a different indexing depth).
-	let owned: NibbleVec = (&index).into();
+	let owned: NibbleVec = index.into();
 	index_tree_key_owned(depth, owned)
 }
 
@@ -359,36 +359,38 @@ impl IndexBackend for BTreeMap<IndexPosition, Index> {
 	//fn read(&self, depth: usize, index: &[u8]) -> Option<Index> {
 		// api expect index so if key longer, need truncate first
 		debug_assert!(depth <= index.len());
-		self.get(&index_tree_key(depth, index.truncate(depth))[..]).cloned()
+		self.get(&index_tree_key(depth, &index.truncate(depth))[..]).cloned()
 	}
 	fn write(&mut self, depth: usize, index: LeftNibbleSlice, value: Index) {
 		debug_assert!(depth <= index.len());
 		// TODO audit if index should be owned???
 	//fn write(&mut self, depth: usize, mut position: IndexPosition, index: Index) {
-		self.insert(index_tree_key(depth, index.truncate(depth)), value);
+		self.insert(index_tree_key(depth, &index.truncate(depth)), value);
 	}
 	fn remove(&mut self, depth: usize, index: LeftNibbleSlice) {
 		// TODO audit if owned index possible
 		debug_assert!(depth <= index.len());
 	//fn remove(&mut self, depth: usize, index: IndexPosition) {
-		self.remove(&index_tree_key(depth, index.truncate(depth))[..]);
+		self.remove(&index_tree_key(depth, &index.truncate(depth))[..]);
 	}
-	fn iter<'a>(&'a self, depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
-		debug_assert!(depth <= group.len());
+	fn iter<'a>(&'a self, depth: usize, parent_depth: usize, group: LeftNibbleSlice) -> IndexBackendIter<'a> {
+		debug_assert!(parent_depth <= group.len());
 	//fn iter<'a>(&'a self, depth: usize, depth_base: usize, change: &[u8]) -> IndexBackendIter<'a> {
 		// TODO consider util function for it as this code will be duplicated in any ordered db.
-		self.iter_from(depth, group.truncate(depth))
+		self.iter_from(depth, parent_depth, group.truncate(parent_depth))
 	}
-	fn iter_from<'a>(&'a self, depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
+	fn iter_from<'a>(&'a self, depth: usize, parent_depth: usize, start_index: LeftNibbleSlice) -> IndexBackendIter<'a> {
 		let l_size = crate::rstd::mem::size_of::<u32>();
-		let depth_prefix = &(depth as u32).to_be_bytes()[..];
-		let base = depth_prefix.len();
-		let start = index_tree_key(depth, start_index);
-		let end = (depth as u32 + 1).to_be_bytes();
+		let start = index_tree_key(depth, &start_index);
+		let mut end = index_tree_key(depth, &start_index.truncate(parent_depth));
+		while end.last() == Some(&u8::max_value()) {
+			end.pop();
+		}
+		end.last_mut().map(|v| *v += 1);
 		
-		let range = self.range(start..end[..].into());
+		let range = self.range(start..end);
 		Box::new(range.into_iter().map(move |(k, ix)| {
-			let k = LeftNibbleSlice::new_len(k, depth);
+			let k = LeftNibbleSlice::new_len(&k[l_size..], depth);
 			((&k).into(), ix.clone())
 		}))
 	}
@@ -521,6 +523,7 @@ pub enum IndexOrValue<B> {
 
 /// Enum containing either a value or an index, mostly for internal use
 /// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
+#[cfg_attr(feature = "std", derive(Debug))]
 pub enum IndexOrValue2<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
 	/// Also an optional `Change of value is attached`.
@@ -589,13 +592,16 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	values: &'a KB,
 	indexes: &'a IB,
 	indexes_conf: &'a DepthIndexes,
-	deleted_indexes: Vec<(usize, NibbleVec)>,
 	changes_iter: Peekable<ID>,
 	index_iter: Vec<StackedIndex2<'a>>,
 	current_value_iter: Peekable<KVBackendIter<'a>>,
 	stack_branches: StackBranches,
 	state: Next2,
 	next_item: Option<(NibbleVec, IndexOrValue2<V>)>,
+	// TODO make deleted optional and directly delete
+	// in backend if no container
+	deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
+	deleted_values: &'a mut Vec<Vec<u8>>,
 }
 
 struct SubIterator<'a, V> {
@@ -630,7 +636,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		indexes: &'a IB,
 		indexes_conf: &'a DepthIndexes,
 		changes_iter: ID,
-		deleted_indexes: Vec<(usize, NibbleVec)>,
+		deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
+		deleted_values: &'a mut Vec<Vec<u8>>,
 	) -> Self {
 		let current_value_iter = Iterator::peekable(values.iter_from(&[]));
 		let mut iter = RootIndexIterator2 {
@@ -638,23 +645,21 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			indexes,
 			indexes_conf,
 			changes_iter: Iterator::peekable(changes_iter),
-			deleted_indexes,
 			current_value_iter,
 			index_iter: Vec::new(),
 			stack_branches: StackBranches(Default::default()),
 			state: Next2::None,
 			next_item: None,
+			deleted_indexes,
+			deleted_values,
 		};
 
 		// always stack first level of indexes.
 		iter.init_stack_index();
+
+		assert!(iter.feed_next_item().is_none());
 	
 		iter
-	}
-
-	/// Access registered indexes to delete.
-	pub fn indexes_to_delete(self) -> Vec<(usize, NibbleVec)> {
-		self.deleted_indexes
 	}
 }
 
@@ -841,7 +846,11 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 	type Item = (NibbleVec, IndexOrValue2<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
-		unimplemented!()
+		if self.next_item.is_some() {
+			self.feed_next_item()
+		} else {
+			None
+		}
 	}
 }
 
@@ -1194,6 +1203,7 @@ i*/
 	fn advance_value(&mut self) {
 		self.next_value = self.current_value_iter.next();
 	}
+
 }
 
 impl<'a, V> SubIterator<'a, V>
@@ -1305,14 +1315,221 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		V: AsRef<[u8]>,
 		ID: Iterator<Item = (Vec<u8>, Option<V>)>,
 {
+
+	/// calculate and store next item, return previous
+	/// value for next item (except on first call, returns
+	/// `None` when iteration is finished).
+	fn feed_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+		let mut new_next = self.get_next_item();
+	//	unimplemented!("branch update");
+	//					(Ordering::Less, _commons, _is_prefix) => {
+		crate::rstd::mem::replace(&mut self.next_item, new_next)
+	}
+
+	fn get_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+		let cmp_change_index = if let Some(next_change) = self.changes_iter.peek() {
+			let key_change = next_change.0.as_ref();
+			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				Some(LeftNibbleSlice::new(key_change).cmp_common_and_starts_with(&(&next_index.0).into()))
+			} else {
+				None
+			}
+		} else {
+			None
+		};
+		match cmp_change_index {
+			None => {
+				if self.changes_iter.peek().is_some() {
+					// change and value only
+					return self.change_or_value(None);
+				} else if self.index_iter.last_mut().and_then(|i| i.iter.peek()).is_some() {
+					// index and value only
+					return self.index_or_value();
+				} else {
+					// only value iterator in scope, just iterate it
+					return self.current_value_iter.next().map(|kv| (
+						// TODO have NibbleVec without copy (at least from backing))
+						(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
+						IndexOrValue2::StoredValue(kv.1),
+					));
+				}
+			},
+			Some((Ordering::Less, _commons, _is_prefix)) => {
+				// change less than index 
+				return self.change_or_value(None);
+			},
+			Some((_, _commons, false)) => {
+				// change more than index: return index
+				return self.index_or_value();
+			},
+			Some((_, _commons, true)) => {
+				// change bellow or equal index
+				// index skip
+				let _ = self.index_iter.last_mut().and_then(|i| i.iter.next());
+				// Stack index
+				self.stack_index();
+				// recurse
+				return self.get_next_item();
+			},
+		}
+	}
+
+	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+		let mut do_change = false;
+		let mut do_value = false;
+		loop {
+			if let Some(next_value) = self.current_value_iter.peek() {
+				if let Some(next_change) = self.changes_iter.peek() {
+					match next_change.0.as_slice().cmp(next_value.0.as_ref()) {
+						Ordering::Less => {
+							// could be <= but we already check against index and this bound is usually index.
+							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
+								.unwrap_or(false) {
+								return None;
+							}
+							if next_change.1.is_some() {
+								do_change = true;
+								break;
+							} else {
+								// delete nothing.
+								let _ = self.changes_iter.next();
+							}
+						},
+						Ordering::Greater => {
+							// could be <= but we already check against index and this bound is usually index.
+							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
+								.unwrap_or(false) {
+								return None;
+							}
+							do_value = true;
+							break;
+						},
+						Ordering::Equal => {
+							// could be <= but we already check against index and this bound is usually index.
+							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
+								.unwrap_or(false) {
+								return None;
+							}
+
+							let deleted_values = &mut self.deleted_values;
+							self.current_value_iter.next().map(|next_value|
+								deleted_values.push(next_value.0)
+							);
+							if next_change.1.is_some() {
+								do_change = true;
+								break;
+							} else {
+								// advance
+								let _ = self.changes_iter.next();
+							}
+						},
+					}
+				} else {
+					do_value = true;
+					break;
+				}
+			} else {
+				if let Some(next_change) = self.changes_iter.peek() {
+					if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
+						.unwrap_or(false) {
+						return None;
+					}
+					if next_change.1.is_some() {
+						do_change = true;
+						break;
+					} else {
+						// delete nothing.
+						let _ = self.changes_iter.next();
+					}
+				} else {
+					return None;
+				}
+			}
+		}
+
+		if do_change {
+			return self.changes_iter.next().map(|kv| (
+				// TODO have NibbleVec without copy from vec
+				(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
+				IndexOrValue2::Value(kv.1.expect("Checked above")),
+			));
+		}
+		if do_value {
+			return self.current_value_iter.next().map(|next_value| (
+				// TODO have NibbleVec without copy from vec
+				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
+				IndexOrValue2::StoredValue(next_value.1),
+			));
+		}
+
+		None
+	}
+
+	fn index_or_value(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+		let (do_value, do_index) = if let Some(next_value) = self.current_value_iter.peek() {
+			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				// TODO use simple cmp if no need for commons and prefix in the future
+				match LeftNibbleSlice::new(next_value.0.as_ref()).cmp_common_and_starts_with(&(&next_index.0).into()) {
+					(Ordering::Equal, _commons, _is_prefix)
+					| (Ordering::Less, _commons, _is_prefix) => {
+						// index
+						(false, true)
+						},
+					(Ordering::Greater, _commons, _is_prefix) => {
+						// value
+						(true, false)
+					},
+				}
+			} else {
+				// value
+				(true, false)
+			}
+		} else {
+			// index
+			(false, true) 
+		};
+		if do_value {
+			return self.current_value_iter.next().map(|next_value| (
+				// TODO have NibbleVec without copy from vec
+				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
+				IndexOrValue2::StoredValue(next_value.1),
+			));
+		}
+		if do_index {
+			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| (
+				next_index.0,
+				IndexOrValue2::Index(next_index.1),
+			));
+		}
+		None
+	}
+
 	fn init_stack_index(&mut self) {
 		// stack very first index
 		if let Some(conf_index_depth) = self.indexes_conf.next_depth2(None) {
-			let iter = self.indexes.iter(conf_index_depth, LeftNibbleSlice::new(&[]));
+			let iter = self.indexes.iter(conf_index_depth, 0, LeftNibbleSlice::new(&[]));
 			let iter = Iterator::peekable(iter);
 			self.index_iter.push(StackedIndex2{conf_index_depth, iter});
 		}
 		self.init_state();
+	}
+
+	// TODO remove result ??
+	fn stack_index(&mut self) -> bool {
+		if let Some(next_change) = self.changes_iter.peek() {
+			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
+			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
+				let iter = self.indexes.iter(
+					conf_index_depth,
+					current_index_depth.unwrap_or(0),
+					LeftNibbleSlice::new(next_change.0.as_slice()),
+				);
+				let iter = Iterator::peekable(iter);
+				self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+				return true;
+			}
+		}
+		false
 	}
 
 	// 
@@ -1354,7 +1571,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
 			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
 				if let Some(next_branch_depth) = self.stack_branches.current_branch_depth() {
-					let iter = self.indexes.iter(conf_index_depth, LeftNibbleSlice::new_len(next_change.0.as_slice(), next_branch_depth));
+					let iter = self.indexes.iter(
+						conf_index_depth,
+						current_index_depth.unwrap_or(0),
+						LeftNibbleSlice::new_len(next_change.0.as_slice(), next_branch_depth),
+					);
 					let iter = Iterator::peekable(iter);
 					self.index_iter.push(StackedIndex2{conf_index_depth, iter});
 					self.state = Next2::IterToBranch;

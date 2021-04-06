@@ -15,7 +15,7 @@
 //! Tests for trie_db partial_db mod.
 
 use trie_db::partial_db::{DepthIndexes, RootIndexIterator, Index,
-	KVBackendIter, KVBackend};
+	KVBackendIter, KVBackend, RootIndexIterator2};
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use trie_db::nibble_ops;
@@ -271,4 +271,24 @@ fn test_root_index(indexes: &'static [u32], nb_iter: usize, count: u32) {
 		let data: Vec<_> = data.into_iter().collect();
 		reference_trie::compare_index_calc(data, change, memdb, &mut indexes, &indexes_conf, None);
 	}
+}
+
+#[test]
+fn test_fix_set_root_iter() {
+	let (mem_db, indexes, indexes_conf) = crate::iter_build::indexing_set_1();
+	let mut changes = Vec::<(_, Option<Vec<u8>>)>::new();
+	let mut deleted_indexes = Vec::new();
+	let mut deleted_values = Vec::new();
+	let mut root_iter = RootIndexIterator2::new(
+		&mem_db,
+		&indexes,
+		&indexes_conf,
+		changes.into_iter(), // TODO change api to pass IntoIter as param!!!
+		&mut deleted_indexes,
+		&mut deleted_values,
+	);
+	while let Some(item) = root_iter.next() {
+		println!("{:?}", item);
+	}
+	panic!("disp");
 }

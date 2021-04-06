@@ -102,12 +102,12 @@ fn compare_implementations(data: Vec<(Vec<u8>, Vec<u8>)>) {
 }
 
 fn compare_indexing(data: Vec<(Vec<u8>, Vec<u8>)>) {
-	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
+	let mut memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	let mut indexes = std::collections::BTreeMap::new();
 	let indexes_conf = DepthIndexes::new(&[
 		1, 2, 4, 6, 9,
 	]);
-	reference_trie::compare_indexing(data, memdb, &mut indexes, &indexes_conf);
+	reference_trie::compare_indexing(data, &mut memdb, &mut indexes, &indexes_conf);
 }
 fn compare_implementations_prefixed(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
@@ -403,12 +403,8 @@ fn compare_index_calculations() {
 	}
 }
 
-#[test]
-fn check_indexing() {
-	use trie_db::BackingByteVec;
-	use trie_db::partial_db::Index;
-	let memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
-	let data = vec![
+fn indexing_set_data() -> Vec<(Vec<u8>, Vec<u8>)> {
+	vec![
 		(b"alfa".to_vec(), vec![0; 32]),
 		(b"bravo".to_vec(), vec![1; 32]),
 //		(b"do".to_vec(), vec![2; 32]),
@@ -416,12 +412,50 @@ fn check_indexing() {
 		(b"doge".to_vec(), vec![4; 32]),
 		(b"horse".to_vec(), vec![5; 32]),
 		(b"house".to_vec(), vec![6; 32]),
-	];
+	]
+}
 
+type IndexingSet = (
+	std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+//	MemoryDB<KeccakHasher, PrefixedKey<KeccakHasher>, DBValue>,
+	std::collections::BTreeMap<trie_db::BackingByteVec, trie_db::partial_db::Index>,
+	DepthIndexes,
+);
+
+fn indexing_set(indexes_conf: DepthIndexes) -> IndexingSet {
+	let data = indexing_set_data();
+	let ordered_data = data.iter().cloned().collect();
+	let mut memdb = MemoryDB::<_, PrefixedKey<_>, _>::default();
 	let mut indexes = std::collections::BTreeMap::new();
+	reference_trie::compare_indexing(data, &mut memdb, &mut indexes, &indexes_conf);
+	(ordered_data, indexes, indexes_conf)
+}
+
+pub(crate) fn indexing_set_1() -> IndexingSet {
 	let indexes_conf = DepthIndexes::new(&[
 		6,
 	]);
+	indexing_set(indexes_conf)
+}
+
+pub(crate) fn indexing_set_2() -> IndexingSet {
+	let indexes_conf = DepthIndexes::new(&[
+		4, 8,
+	]);
+	indexing_set(indexes_conf)
+}
+
+pub(crate) fn indexing_set_3() -> IndexingSet {
+	let indexes_conf = DepthIndexes::new(&[
+		1, 2, 4, 6, 8,
+	]);
+	indexing_set(indexes_conf)
+}
+
+#[test]
+fn check_indexing() {
+	use trie_db::BackingByteVec;
+	use trie_db::partial_db::Index;
 	let mut expected = vec![
 		// alf
 		(vec![0, 0, 0, 6, 97, 108, 102], false),
@@ -434,16 +468,13 @@ fn check_indexing() {
 		// hou
 		(vec![0, 0, 0, 6, 104, 111, 117], false),
 	];
-	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
+	let (mem_db, indexes, _) = indexing_set_1();
 	for index in indexes.into_iter().rev() {
 		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
 	}
 	assert!(expected.is_empty());
 
-	let mut indexes = std::collections::BTreeMap::new();
-	let indexes_conf = DepthIndexes::new(&[
-		4, 8,
-	]);
+	let (mem_db, indexes, _) = indexing_set_2();
 	let mut expected = vec![
 		// alf
 		(vec![0, 0, 0, 4, 97, 108], false),
@@ -459,7 +490,6 @@ fn check_indexing() {
 		(vec![0, 0, 0, 8, 104, 111, 114, 115], false),
 		(vec![0, 0, 0, 8, 104, 111, 117, 115], false),
 	];
-	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
 	for index in indexes.into_iter().rev() {
 		assert_eq!(expected.pop().unwrap(), (index.0.to_vec(), (index.1).on_index));
 	}
@@ -467,12 +497,8 @@ fn check_indexing() {
 
 
 //	panic!("{:?}", indexes);
-	let mut indexes = std::collections::BTreeMap::<BackingByteVec, Index>::new();
-	let indexes_conf = DepthIndexes::new(&[
-		1, 2, 4, 6, 8,
-	]);
-	reference_trie::compare_indexing(data.clone(), memdb.clone(), &mut indexes, &indexes_conf);
-	
+
+	let (mem_db, indexes, _) = indexing_set_3();
 	let mut expected = vec![
 		(vec![0, 0, 0, 1, 6], true), // root on nibble 1
 		// 2, a
