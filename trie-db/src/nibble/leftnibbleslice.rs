@@ -152,6 +152,28 @@ impl<'a> LeftNibbleSlice<'a> {
 		// If common nibble prefix is the same, finally compare lengths.
 		(self.len().cmp(&other.len()), common_len, true)
 	}
+
+	pub fn common_length(&self, other: &Self) -> usize {
+		let common_len = cmp::min(self.len(), other.len());
+		let common_byte_len = common_len / NIBBLE_PER_BYTE;
+
+		for a in 0 .. common_byte_len {
+			if self.bytes[a] != other.bytes[a] {
+				return a * NIBBLE_PER_BYTE + nibble_ops::left_common(self.bytes[a], other.bytes[a]);
+			}
+		}
+	
+		// Compare nibble-by-nibble (either 0 or 1 nibbles) any after the common byte prefix.
+		for i in (common_byte_len * NIBBLE_PER_BYTE)..common_len {
+			let a = self.at(i).expect("i < len; len == self.len() qed");
+			let b = other.at(i).expect("i < len; len == other.len(); qed");
+			if a != b {
+				return i;
+			}
+		}
+
+		common_len
+	}
 }
 
 impl<'a> PartialEq for LeftNibbleSlice<'a> {

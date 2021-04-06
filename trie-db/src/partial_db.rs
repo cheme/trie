@@ -440,6 +440,13 @@ impl crate::rstd::ops::Deref for StackBranches {
 	}
 }
 
+impl crate::rstd::ops::DerefMut for StackBranches {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.0
+	}
+}
+
+
 impl StackBranches {
 	fn current_branch_depth(&self) -> Option<usize> {
 		self.0.last().map(|i| i.depth)
@@ -594,7 +601,7 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	indexes_conf: &'a DepthIndexes,
 	changes_iter: Peekable<ID>,
 	index_iter: Vec<StackedIndex2<'a>>,
-	current_value_iter: Peekable<KVBackendIter<'a>>,
+	current_value_iter: Option<Peekable<KVBackendIter<'a>>>,
 	stack_branches: StackBranches,
 	state: Next2,
 	next_item: Option<(NibbleVec, IndexOrValue2<V>)>,
@@ -639,7 +646,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
 		deleted_values: &'a mut Vec<Vec<u8>>,
 	) -> Self {
-		let current_value_iter = Iterator::peekable(values.iter_from(&[]));
+		let current_value_iter = Some(Iterator::peekable(values.iter_from(&[])));
 		let mut iter = RootIndexIterator2 {
 			values,
 			indexes,
@@ -1094,6 +1101,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 			(None, None) => Element::None,
 		}
 	}
+
 	fn index_or_change(&self) -> Element {
 		match (self.buffed_next_index(), &self.next_change) {
 			(Some(next_index), Some(next_change)) => {
@@ -1321,6 +1329,65 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	/// `None` when iteration is finished).
 	fn feed_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
 		let mut new_next = self.get_next_item();
+		if let Some((key_index1, new_next)) = new_next.as_ref() {
+			if let Some((key_index2, _)) = self.next_item.as_ref() {
+				let common_depth = key_index1.as_slice().common_length(&key_index2.as_slice());
+				let mut do_stack = true;
+				loop {
+					if let Some(mut prev_branch) = self.stack_branches.last_mut() {
+						if common_depth == prev_branch.depth {
+							if prev_branch.processed_branch || prev_branch.has_value {
+								prev_branch.valid = true;
+							}
+							prev_branch.processed_branch = true;
+							do_stack = false;
+							break;
+						}
+						if common_depth > prev_branch.depth {
+							// stack over
+							break;
+						}
+					} else {
+						break;
+					}
+					let _ = self.stack_branches.pop();
+				}
+				if do_stack {
+					self.stack_branches.push(IndexBranch {
+						depth: common_depth,
+						has_value: false, // TODO from previous values
+						processed_branch: false,
+						valid: false,
+					});
+				}
+			}/* else {
+				// unstack index
+				self.index_iter.pop();
+			}*/
+
+			if matches!(new_next, IndexOrValue2::Index(_)) {
+/*				// iterate value over this next range of value from previous index
+				let previous_index_depth = if self.index_iter.len() > 1 {
+					self.index_iter.get(self.index_iter.len() - 2).map(|i| i.conf_index_depth)
+				} else {
+					None
+				};
+				let sibling_depth = previous_index_depth.unwrap_or(0) + 1;
+*/
+				if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+					let common_depth = key_index1.as_slice().common_length(&next_index.0.as_slice());
+					let sibling_depth = common_depth + 1;
+					let mut key_index: NibbleVec = (&key_index1.as_slice().truncate(sibling_depth)).into();
+					if key_index.next_sibling() {
+						self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
+					} else {
+						self.current_value_iter = None;
+					}
+				} else {
+					self.current_value_iter = None;
+				}
+			}
+		}
 	//	unimplemented!("branch update");
 	//					(Ordering::Less, _commons, _is_prefix) => {
 		crate::rstd::mem::replace(&mut self.next_item, new_next)
@@ -1347,7 +1414,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					return self.index_or_value();
 				} else {
 					// only value iterator in scope, just iterate it
-					return self.current_value_iter.next().map(|kv| (
+					return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|kv| (
 						// TODO have NibbleVec without copy (at least from backing))
 						(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
 						IndexOrValue2::StoredValue(kv.1),
@@ -1378,7 +1445,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		let mut do_change = false;
 		let mut do_value = false;
 		loop {
-			if let Some(next_value) = self.current_value_iter.peek() {
+			if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
 				if let Some(next_change) = self.changes_iter.peek() {
 					match next_change.0.as_slice().cmp(next_value.0.as_ref()) {
 						Ordering::Less => {
@@ -1412,7 +1479,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 							}
 
 							let deleted_values = &mut self.deleted_values;
-							self.current_value_iter.next().map(|next_value|
+							self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value|
 								deleted_values.push(next_value.0)
 							);
 							if next_change.1.is_some() {
@@ -1455,7 +1522,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			));
 		}
 		if do_value {
-			return self.current_value_iter.next().map(|next_value| (
+			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
 				IndexOrValue2::StoredValue(next_value.1),
@@ -1466,16 +1533,16 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	}
 
 	fn index_or_value(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
-		let (do_value, do_index) = if let Some(next_value) = self.current_value_iter.peek() {
+		let (do_value, do_index) = if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
 			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 				// TODO use simple cmp if no need for commons and prefix in the future
 				match LeftNibbleSlice::new(next_value.0.as_ref()).cmp_common_and_starts_with(&(&next_index.0).into()) {
 					(Ordering::Equal, _commons, _is_prefix)
-					| (Ordering::Less, _commons, _is_prefix) => {
+					| (Ordering::Greater, _commons, _is_prefix) => {
 						// index
 						(false, true)
 						},
-					(Ordering::Greater, _commons, _is_prefix) => {
+					(Ordering::Less, _commons, _is_prefix) => {
 						// value
 						(true, false)
 					},
@@ -1489,7 +1556,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			(false, true) 
 		};
 		if do_value {
-			return self.current_value_iter.next().map(|next_value| (
+			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
 				IndexOrValue2::StoredValue(next_value.1),
@@ -1511,7 +1578,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			let iter = Iterator::peekable(iter);
 			self.index_iter.push(StackedIndex2{conf_index_depth, iter});
 		}
-		self.init_state();
+		//self.init_state();
 	}
 
 	// TODO remove result ??
@@ -1549,7 +1616,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						let next_index = next_index.0.clone().padded_buffer();
 						// TODO setting to None should be more efficient or setting on state change.
 						// or TODO iter_from required to be lazy (only costy of first call to peek/next.
-						self.current_value_iter = Iterator::peekable(self.values.iter_from(next_index.as_slice()));
+						self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(next_index.as_slice())));
 						self.state = Next2::NextIndex;
 					},
 					(_, _commons, true) => {
@@ -1631,6 +1698,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	}
 
 	fn iter_value_skip_to(&mut self, key: &[u8]) {
-		self.current_value_iter = Iterator::peekable(self.values.iter_from(key));
+		self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key)));
 	}
 }

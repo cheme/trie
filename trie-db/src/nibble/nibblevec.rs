@@ -230,11 +230,15 @@ impl NibbleVec {
 			self.inner.truncate(self.len / NIBBLE_PER_BYTE);
 		} else {
 			self.inner.truncate((self.len / NIBBLE_PER_BYTE) + 1);
-			self.inner[self.len / NIBBLE_PER_BYTE] = nibble_ops::left_nibble_at(self.inner.as_slice(), self.len - 1);
+			self.inner[self.len / NIBBLE_PER_BYTE] = nibble_ops::pad_left(self.inner[self.len / NIBBLE_PER_BYTE]);
 		}
 		self.inner
 	}
 
+	/// `NibbleVec` as `LeftNibbleSlice`.
+	pub fn as_slice(&self) -> crate::nibble::LeftNibbleSlice {
+		self.into()
+	}
 /*	/// Get non inclusive end when using this nibble vec as a prefix range.
 	/// Return false if no end.
 	pub fn as_end_prefix(&mut self) -> bool {
@@ -244,6 +248,18 @@ impl NibbleVec {
 		if self.at
 		self.len -= 1;
 	}*/
+
+	pub fn next_sibling(&mut self) -> bool {
+		if let Some(v) = self.pop() {
+			let new_v = v + 1;
+			if (new_v as usize) < nibble_ops::NIBBLE_LENGTH {
+				self.push(new_v);
+				return true;
+			}
+			self.push(v);
+		}
+		false
+	}
 }
 
 impl<'a> From<&'a NibbleSlice<'a>> for NibbleVec {
@@ -258,9 +274,11 @@ impl<'a> From<&'a NibbleSlice<'a>> for NibbleVec {
 
 impl<'a> From<&'a LeftNibbleSlice<'a>> for NibbleVec {
 	fn from(s: &'a LeftNibbleSlice<'a>) -> Self {
+		let end = s.len / nibble_ops::NIBBLE_PER_BYTE;
+		let pad =  s.len % nibble_ops::NIBBLE_PER_BYTE;
 		// TODO truncate??
 		NibbleVec {
-			inner: s.bytes.into(),
+			inner: s.bytes[..end + pad].into(),
 			len: s.len,
 		}
 	}
