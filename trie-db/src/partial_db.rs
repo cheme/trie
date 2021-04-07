@@ -1330,6 +1330,16 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	/// `None` when iteration is finished).
 	fn feed_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
 		let mut new_next = self.get_next_item();
+		// TODO invalidate Index and sub iterate its value when:
+		// TODO add in next_item wether a Value did overwrite and existing StoredValue
+		// - check this index partial is not splitted:
+		//	- previous (last next_item) is a not overwrite StoredValue: assert common less than common ix - next ix,
+		//		feed next then subiterate
+		// - check deleted parent branch
+		//	- check previous is Value or Stored value that overwrite existing one, then not deleted
+		//	- check ix with previous less than ix with next index: then we are on a new branch and
+		//	should look ahead all deleted and value, up to next peekable then if common with next
+		//	peekable is less than branch common: branch is deleted -> feed next and subiterate.
 		if let Some((key_index1, new_next)) = new_next.as_ref() {
 			if let Some((key_index2, _)) = self.next_item.as_ref() {
 				let common_depth = key_index1.as_slice().common_length(&key_index2.as_slice());
