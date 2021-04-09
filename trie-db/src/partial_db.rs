@@ -404,6 +404,7 @@ impl IndexBackend for BTreeMap<IndexPosition, Index> {
 /// TODO consider switching to u64??
 /// TODO put behind trait to use with more complex definition (substrate uses
 /// prefixes and some indexes depth should only be define for those).
+#[derive(Clone)]
 pub struct DepthIndexes(smallvec::SmallVec<[u32; 16]>);
 
 impl crate::rstd::ops::Deref for DepthIndexes {
@@ -532,6 +533,7 @@ pub enum IndexOrValue<B> {
 /// Enum containing either a value or an index, mostly for internal use
 /// (see `RootIndexIterator` and `iter_build::trie_visit_with_indexes`).
 #[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone)]
 pub enum IndexOrValue2<B> {
 	/// Contains depth as number of bit and the encoded value of the node for this index.
 	/// Also an optional `Change of value is attached`.
@@ -1605,9 +1607,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					current_index_depth.unwrap_or(0),
 					LeftNibbleSlice::new(next_change.0.as_slice()),
 				);
-				let iter = Iterator::peekable(iter);
-				self.index_iter.push(StackedIndex2{conf_index_depth, iter});
-				return true;
+				let mut iter = Iterator::peekable(iter);
+				if iter.peek().is_some() {
+					self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+					return true;
+				}
 			}
 		}
 		false

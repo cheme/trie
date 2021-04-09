@@ -289,10 +289,13 @@ fn test_fix_set_root_iter() {
 		}
 	}
 
-	fn check(set: crate::iter_build::IndexingSet, mut expected: Vec<Expected>) {
+	fn check(
+		set: crate::iter_build::IndexingSet,
+		mut expected: Vec<Expected>,
+		mut changes: Vec::<(Vec<u8>, Option<Vec<u8>>)>,
+	) {
 		let (mem_db, indexes, indexes_conf) = set;
 		expected.reverse();
-		let mut changes = Vec::<(_, Option<Vec<u8>>)>::new();
 		let mut deleted_indexes = Vec::new();
 		let mut deleted_values = Vec::new();
 		let mut root_iter = RootIndexIterator2::new(
@@ -314,15 +317,17 @@ fn test_fix_set_root_iter() {
 		panic!("disp");*/
 	}
 
+	// Set1 : unique index
+
 	let set = crate::iter_build::indexing_set_1(Default::default());
-	let expected = vec![
+	let expected_set_1 = vec![
 		(vec![97, 108, 102], 6, IndexOrValue2::Index(Default::default())),
 		(vec![98, 114, 97], 6, IndexOrValue2::Index(Default::default())),
 		(vec![100, 111, 103], 6, IndexOrValue2::Index(Default::default())),
 		(vec![104, 111, 114], 6, IndexOrValue2::Index(Default::default())),
 		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
 	];
-//	check(set, expected);
+	check(set, expected_set_1.clone(), Default::default());
 
 	let set = crate::iter_build::indexing_set_1(vec![
 		(b"d".to_vec(), vec![2; 32]),
@@ -340,5 +345,84 @@ fn test_fix_set_root_iter() {
 		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
 		(vec![105], 2, IndexOrValue2::StoredValue(vec![6; 32])),
 	];
-	check(set, expected);
+	check(set, expected, Default::default());
+
+	let set = crate::iter_build::indexing_set_1(Default::default());
+	let changes = vec![
+		(b"alfa".to_vec(), Some(vec![1; 32])),
+	];
+	let mut expected = expected_set_1.clone();
+	// single value instead of index
+	expected[0] = (b"alfa".to_vec(), 8, IndexOrValue2::Value(vec![1; 32]));
+	check(set.clone(), expected, changes);
+
+	// insert before index
+	let changes = vec![
+		(b"do".to_vec(), Some(vec![1; 32])),
+	];
+	let mut expected = expected_set_1.clone();
+	expected.insert(2, (b"do".to_vec(), 4, IndexOrValue2::Value(vec![1; 32])));
+	check(set.clone(), expected, changes);
+
+	// insert at index
+	let changes = vec![
+		(b"dog".to_vec(), Some(vec![1; 32])),
+	];
+	let mut expected = expected_set_1.clone();
+	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::Value(vec![1; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::StoredValue(vec![4; 32])));
+	check(set.clone(), expected, changes);
+
+	// insert after index at child
+	let changes = vec![
+		(b"doge".to_vec(), Some(vec![1; 32])),
+	];
+	let mut expected = expected_set_1.clone();
+	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::StoredValue(vec![3; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::Value(vec![1; 32])));
+	check(set.clone(), expected, changes);
+
+
+	// insert after index with child
+	let changes = vec![
+		(b"hous".to_vec(), Some(vec![8; 32])),
+	];
+	let mut expected = expected_set_1.clone();
+	expected[4] = (b"hous".to_vec(), 8, IndexOrValue2::Value(vec![8; 32]));
+	expected.push((b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32])));
+	//panic!("{:?}", expected);
+	check(set.clone(), expected, changes);
+
+
+	// Set 2: Two indexes 
+
+	let set = crate::iter_build::indexing_set_2(Default::default());
+	let expected_set_2 = vec![
+		(vec![97, 108], 4, IndexOrValue2::Index(Default::default())),
+		(vec![98, 114], 4, IndexOrValue2::Index(Default::default())),
+		(vec![100, 111], 4, IndexOrValue2::Index(Default::default())),
+		(vec![104, 111], 4, IndexOrValue2::Index(Default::default())),
+	];
+	check(set.clone(), expected_set_2.clone(), Default::default());
+
+	// insert between indexes on empty second ix
+	let changes = vec![
+		(b"alf".to_vec(), Some(vec![9; 32])),
+	];
+	let mut expected = expected_set_2.clone();
+	expected[0] = (b"alf".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
+	expected.insert(1, (b"alfa".to_vec(), 8, IndexOrValue2::StoredValue(vec![0; 32])));
+	check(set.clone(), expected, changes);
+	
+	/*let mut expected = vec![
+		(vec![97, 108], 4, IndexOrValue2::Index(Default::default())),
+		(vec![98, 114], 4, IndexOrValue2::Index(Default::default())),
+		(vec![100, 111], 4, IndexOrValue2::Index(Default::default())),
+		(vec![104, 111], 4, IndexOrValue2::Index(Default::default())),
+	];
+	expected.insert(2, (b"do".to_vec(), 4, IndexOrValue2::Value(vec![1; 32])));
+	check(set.clone(), expected, changes);
+*/
+
+
 }
