@@ -400,19 +400,24 @@ fn test_fix_set_root_iter() {
 	expected.remove(1);
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
-/*
-	// remove value after ix parent merge (one single branch
+
+	// remove value after ix parent merge (removing a child from a two child branch without value).
 	let changes = vec![
 		(b"horse".to_vec(), None),
 	];
 	let mut expected = expected_set_1.clone();
 	expected.remove(3); // TODO this is incorrect: also will need iter on value for last, but with current code this should be it
+	expected[3] = (b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32]));
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
-*/
 
+	// TODO same test but removing house
 
+	// TODO test with insert in prefix of a value: aa (iter stored a), ba (iter stored b)
+	// and also in prefix post of a value: am, bs.
 
+	// TODO test removing doge then parent got value so no need to fuse branch: do  it on set 2!!
+	
 	// Set 2: Two indexes 
 
 	let set = crate::iter_build::indexing_set_2(Default::default());
