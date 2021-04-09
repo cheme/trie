@@ -1460,73 +1460,68 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, IndexOrValue2<V>)> {
 		let mut do_change = false;
 		let mut do_value = false;
-		loop {
-			if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
-				if let Some(next_change) = self.changes_iter.peek() {
-					match next_change.0.as_slice().cmp(next_value.0.as_ref()) {
-						Ordering::Less => {
-							// could be <= but we already check against index and this bound is usually index.
-							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
-								.unwrap_or(false) {
-								return None;
-							}
-							if next_change.1.is_some() {
-								do_change = true;
-								break;
-							} else {
-								// delete nothing.
-								let _ = self.changes_iter.next();
-							}
-						},
-						Ordering::Greater => {
-							// could be <= but we already check against index and this bound is usually index.
-							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
-								.unwrap_or(false) {
-								return None;
-							}
-							do_value = true;
-							break;
-						},
-						Ordering::Equal => {
-							// could be <= but we already check against index and this bound is usually index.
-							if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
-								.unwrap_or(false) {
-								return None;
-							}
+		if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
+			if let Some(next_change) = self.changes_iter.peek() {
+				match next_change.0.as_slice().cmp(next_value.0.as_ref()) {
+					Ordering::Less => {
+						// could be <= but we already check against index and this bound is usually index.
+						if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
+							.unwrap_or(false) {
+							return None;
+						}
+						if next_change.1.is_some() {
+							do_change = true;
+						} else {
+							// delete nothing.
+							let _ = self.changes_iter.next();
+						}
+					},
+					Ordering::Greater => {
+						// could be <= but we already check against index and this bound is usually index.
+						if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
+							.unwrap_or(false) {
+							return None;
+						}
+						do_value = true;
+					},
+					Ordering::Equal => {
+						// could be <= but we already check against index and this bound is usually index.
+						if limit.map(|limit| limit < &LeftNibbleSlice::new(next_value.0.as_slice()))
+							.unwrap_or(false) {
+							return None;
+						}
 
-							let deleted_values = &mut self.deleted_values;
-							self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value|
+						let deleted_values = &mut self.deleted_values;
+						self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value|
+							if next_change.1.is_none() {
 								deleted_values.push(next_value.0)
-							);
-							if next_change.1.is_some() {
-								do_change = true;
-								break;
-							} else {
-								// advance
-								let _ = self.changes_iter.next();
 							}
-						},
-					}
-				} else {
-					do_value = true;
-					break;
+						);
+						if next_change.1.is_some() {
+							do_change = true;
+						} else {
+							// advance
+							let _ = self.changes_iter.next();
+						}
+					},
 				}
 			} else {
-				if let Some(next_change) = self.changes_iter.peek() {
-					if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
-						.unwrap_or(false) {
-						return None;
-					}
-					if next_change.1.is_some() {
-						do_change = true;
-						break;
-					} else {
-						// delete nothing.
-						let _ = self.changes_iter.next();
-					}
-				} else {
+				do_value = true;
+			}
+		} else {
+			if let Some(next_change) = self.changes_iter.peek() {
+				if limit.map(|limit| limit < &LeftNibbleSlice::new(next_change.0.as_slice()))
+					.unwrap_or(false) {
 					return None;
 				}
+				if next_change.1.is_some() {
+					do_change = true;
+				} else {
+					// delete nothing.
+					let _ = self.changes_iter.next();
+				}
+			} else {
+				return None;
 			}
 		}
 
@@ -1545,7 +1540,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			));
 		}
 
-		None
+		self.get_next_item()
 	}
 
 	fn index_or_value(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {

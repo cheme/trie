@@ -390,8 +390,27 @@ fn test_fix_set_root_iter() {
 	let mut expected = expected_set_1.clone();
 	expected[4] = (b"hous".to_vec(), 8, IndexOrValue2::Value(vec![8; 32]));
 	expected.push((b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32])));
+	check(set.clone(), expected, changes);
+
+	// remove value after ix parent do not change
+	let changes = vec![
+		(b"bravo".to_vec(), None),
+	];
+	let mut expected = expected_set_1.clone();
+	expected.remove(1);
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
+/*
+	// remove value after ix parent merge (one single branch
+	let changes = vec![
+		(b"horse".to_vec(), None),
+	];
+	let mut expected = expected_set_1.clone();
+	expected.remove(3); // TODO this is incorrect: also will need iter on value for last, but with current code this should be it
+	//panic!("{:?}", expected);
+	check(set.clone(), expected, changes);
+*/
+
 
 
 	// Set 2: Two indexes 
@@ -405,7 +424,7 @@ fn test_fix_set_root_iter() {
 	];
 	check(set.clone(), expected_set_2.clone(), Default::default());
 
-	// insert between indexes on empty second ix
+	// insert between index and empty second ix
 	let changes = vec![
 		(b"alf".to_vec(), Some(vec![9; 32])),
 	];
@@ -413,16 +432,24 @@ fn test_fix_set_root_iter() {
 	expected[0] = (b"alf".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
 	expected.insert(1, (b"alfa".to_vec(), 8, IndexOrValue2::StoredValue(vec![0; 32])));
 	check(set.clone(), expected, changes);
-	
-	/*let mut expected = vec![
-		(vec![97, 108], 4, IndexOrValue2::Index(Default::default())),
-		(vec![98, 114], 4, IndexOrValue2::Index(Default::default())),
-		(vec![100, 111], 4, IndexOrValue2::Index(Default::default())),
-		(vec![104, 111], 4, IndexOrValue2::Index(Default::default())),
+
+	// insert at first index with senconcd
+	let changes = vec![
+		(b"dog".to_vec(), Some(vec![9; 32])),
 	];
-	expected.insert(2, (b"do".to_vec(), 4, IndexOrValue2::Value(vec![1; 32])));
+	let mut expected = expected_set_2.clone();
+	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::Index(Default::default())));
 	check(set.clone(), expected, changes);
-*/
 
-
+	// insert between first index and second
+	let changes = vec![
+		(b"hor".to_vec(), Some(vec![9; 32])),
+	];
+	let mut expected = expected_set_2.clone();
+	expected[3] = (b"hor".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
+	expected.insert(4, (b"hors".to_vec(), 8, IndexOrValue2::Index(Default::default())));
+	expected.insert(5, (b"hous".to_vec(), 8, IndexOrValue2::Index(Default::default())));
+	check(set.clone(), expected, changes);
+	
 }
