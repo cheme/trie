@@ -1363,6 +1363,24 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	/// `None` when iteration is finished).
 	fn feed_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
 		let new_next = self.get_next_item();
+
+		// Strat2: register latest common 'peek index' with 'value' or ' index' (in stack index item).
+		// Then on next index:
+		// check parent value: unchanged
+		// check latest common 'index' (same as peek index), 'peek value' or 'peek
+		// index'
+		// check common index - next value or index (do not care about del)
+		// -> got parent depth
+		// -> if previous is change with common > parent depth: need to go into index.
+		// (means insert in partial from current change)
+		// -> if next insert change (or delete that match next value) > parent depth : need to go into
+		// index (means insert in partial from next change)
+		// -> if previous common with and index == depth then second index, skip nexts checks.
+		// -> if previous common depth is none (first index after stack), then if no parent value, go
+		// through all delete. -> if next branch or value common < current common then do go in index:
+		// means that single branch not value.
+
+
 		// TODO invalidate Index and sub iterate its value when:
 		// TODO add in next_item wether a Value did overwrite and existing StoredValue
 		// - check this index partial is not splitted:
