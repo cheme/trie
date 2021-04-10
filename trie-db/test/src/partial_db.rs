@@ -406,8 +406,8 @@ fn test_fix_set_root_iter() {
 		(b"horse".to_vec(), None),
 	];
 	let mut expected = expected_set_1.clone();
-	expected.remove(3); // TODO this is incorrect: also will need iter on value for last, but with current code this should be it
-	expected[3] = (b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32]));
+	expected.remove(3);
+//	expected[3] = (b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32]));
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
 

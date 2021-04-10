@@ -544,6 +544,35 @@ pub enum IndexOrValue2<B> {
 	StoredValue(Vec<u8>),
 }
 
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone)]
+pub enum Item<B> {
+	/// Contains depth as number of bit and the encoded value of the node for this index.
+	/// Also an optional `Change of value is attached`.
+	Index {
+		index: Index,
+		parent_depth: usize,
+		parent_has_value: bool,
+	},
+	/// Value node value, from change set.
+	Value(B),
+	/// Value node value, from existing values.
+	StoredValue(Vec<u8>),
+	/// Existing value deleted.
+	StoredDeleted,
+}
+
+impl<B> From<Item<B>> for IndexOrValue2<B> {
+	fn from(item: Item<B>) -> Self {
+		match item {
+			Item::Index{ index, .. } => IndexOrValue2::Index(index),
+			Item::Value(v) => IndexOrValue2::Value(v),
+			Item::StoredValue(v) => IndexOrValue2::StoredValue(v),
+			Item::StoredDeleted => panic!("Unmanaged value removal"), // TODO send removeal to iter? (probably not as we would need to buff them, but a mut ptr on stacked deleteion could work though.
+		}
+	}
+}
+
 impl<B> IndexOrValue<B> {
 	/// Access the index branch depth (including the partial key).
 	pub fn exact_index(&self) -> Option<bool> {
@@ -607,7 +636,7 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	current_value_iter: Option<Peekable<KVBackendIter<'a>>>,
 	stack_branches: StackBranches,
 	state: Next2,
-	next_item: Option<(NibbleVec, IndexOrValue2<V>)>,
+	next_item: Option<(NibbleVec, Item<V>)>,
 	// TODO make deleted optional and directly delete
 	// in backend if no container
 	deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
@@ -1331,7 +1360,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	/// value for next item (except on first call, returns
 	/// `None` when iteration is finished).
 	fn feed_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
-		let mut new_next = self.get_next_item();
+		let new_next = self.get_next_item();
 		// TODO invalidate Index and sub iterate its value when:
 		// TODO add in next_item wether a Value did overwrite and existing StoredValue
 		// - check this index partial is not splitted:
@@ -1342,8 +1371,14 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		//	- check ix with previous less than ix with next index: then we are on a new branch and
 		//	should look ahead all deleted and value, up to next peekable then if common with next
 		//	peekable is less than branch common: branch is deleted -> feed next and subiterate.
+		if matches!(new_next, Some((_, Item::StoredDeleted))) {
+			let (key, _) = new_next.unwrap();
+			self.deleted_values.push(key.padded_buffer_vec());
+			return self.feed_next_item();
+		}
+
 		if let Some((key_index1, new_next)) = new_next.as_ref() {
-			if let Some((key_index2, _)) = self.next_item.as_ref() {
+/*			if let Some((key_index2, _)) = self.next_item.as_ref() {
 				let common_depth = key_index1.as_slice().common_length(&key_index2.as_slice());
 				let mut do_stack = true;
 				loop {
@@ -1377,8 +1412,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				// unstack index
 				self.index_iter.pop();
 			}*/
-
-			if matches!(new_next, IndexOrValue2::Index(_)) {
+*/
+			if matches!(new_next, Item::Index{ .. }) {
 				let sibling_depth = if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 					let common_depth = key_index1.as_slice().common_length(&next_index.0.as_slice());
 					common_depth + 1
@@ -1406,10 +1441,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 	//	unimplemented!("branch update");
 	//					(Ordering::Less, _commons, _is_prefix) => {
-		crate::rstd::mem::replace(&mut self.next_item, new_next)
+		crate::rstd::mem::replace(&mut self.next_item, new_next).map(|(k, v)| (k, v.into()))
 	}
 
-	fn get_next_item(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+	fn get_next_item(&mut self) -> Option<(NibbleVec, Item<V>)> {
 		let cmp_change_index = if let Some(next_change) = self.changes_iter.peek() {
 			let key_change = next_change.0.as_ref();
 			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
@@ -1433,7 +1468,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|kv| (
 						// TODO have NibbleVec without copy (at least from backing))
 						(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
-						IndexOrValue2::StoredValue(kv.1),
+						Item::StoredValue(kv.1),
 					));
 				}
 			},
@@ -1457,7 +1492,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 	}
 
-	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, Item<V>)> {
 		let mut do_change = false;
 		let mut do_value = false;
 		if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
@@ -1491,17 +1526,16 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 							return None;
 						}
 
-						let deleted_values = &mut self.deleted_values;
-						self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value|
-							if next_change.1.is_none() {
-								deleted_values.push(next_value.0)
-							}
-						);
-						if next_change.1.is_some() {
-							do_change = true;
-						} else {
+						do_change = next_change.1.is_some();
+						if !do_change {
 							// advance
 							let _ = self.changes_iter.next();
+						}
+						if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.next()) {
+							if !do_change {
+								let _ = self.changes_iter.next();
+								return Some((next_value.0.into(), Item::StoredDeleted));
+							}
 						}
 					},
 				}
@@ -1529,21 +1563,21 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			return self.changes_iter.next().map(|kv| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
-				IndexOrValue2::Value(kv.1.expect("Checked above")),
+				Item::Value(kv.1.expect("Checked above")),
 			));
 		}
 		if do_value {
 			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
-				IndexOrValue2::StoredValue(next_value.1),
+				Item::StoredValue(next_value.1),
 			));
 		}
 
 		self.get_next_item()
 	}
 
-	fn index_or_value(&mut self) -> Option<(NibbleVec, IndexOrValue2<V>)> {
+	fn index_or_value(&mut self) -> Option<(NibbleVec, Item<V>)> {
 		let (do_value, do_index) = if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
 			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 				// TODO use simple cmp if no need for commons and prefix in the future
@@ -1570,13 +1604,17 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
-				IndexOrValue2::StoredValue(next_value.1),
+				Item::StoredValue(next_value.1),
 			));
 		}
 		if do_index {
 			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| (
 				next_index.0,
-				IndexOrValue2::Index(next_index.1),
+				Item::Index {
+					index: next_index.1,
+					parent_depth: 0, // TODO
+					parent_has_value: false, // TODO
+				},
 			));
 		}
 		None
