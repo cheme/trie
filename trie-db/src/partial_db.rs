@@ -555,7 +555,8 @@ pub enum Item<B> {
 		parent_has_value: bool,
 	},
 	/// Value node value, from change set.
-	Value(B),
+	/// boolean indicate if a value did exist.
+	Value(B, bool),
 	/// Value node value, from existing values.
 	StoredValue(Vec<u8>),
 	/// Existing value deleted.
@@ -566,7 +567,7 @@ impl<B> From<Item<B>> for IndexOrValue2<B> {
 	fn from(item: Item<B>) -> Self {
 		match item {
 			Item::Index{ index, .. } => IndexOrValue2::Index(index),
-			Item::Value(v) => IndexOrValue2::Value(v),
+			Item::Value(v, _) => IndexOrValue2::Value(v),
 			Item::StoredValue(v) => IndexOrValue2::StoredValue(v),
 			Item::StoredDeleted => panic!("Unmanaged value removal"), // TODO send removeal to iter? (probably not as we would need to buff them, but a mut ptr on stacked deleteion could work though.
 		}
@@ -662,6 +663,7 @@ struct StackedIndex<'a> {
 struct StackedIndex2<'a> {
 	iter: Peekable<IndexBackendIter<'a>>,
 	conf_index_depth: usize,
+	depth_with_previous: usize,
 }
 
 impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
@@ -1497,7 +1499,21 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			},
 			Some((Ordering::Less, _commons, _is_prefix)) => {
 				// change less than index 
-				return self.change_or_value(None);
+				let result = self.change_or_value(None);
+
+				match &result {
+					Some((k, Item::Value(_, true)))
+					| Some((k, Item::StoredValue(_))) => {
+						self.index_iter.last_mut().map(|i| {
+							if let Some((index, _)) = i.iter.peek() {
+								let common = index.as_slice().common_length(&k.as_slice());
+								i.depth_with_previous = common;
+							}
+						});
+					},
+					_ => (),
+				}
+				result
 			},
 			Some((_, _commons, false)) => {
 				// change more than index: return index
@@ -1517,6 +1533,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, Item<V>)> {
 		let mut do_change = false;
+		let mut change_eq = false;
 		let mut do_value = false;
 		if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
 			if let Some(next_change) = self.changes_iter.peek() {
@@ -1550,6 +1567,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						}
 
 						do_change = next_change.1.is_some();
+						change_eq = true;
 						if !do_change {
 							// advance
 							let _ = self.changes_iter.next();
@@ -1586,7 +1604,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			return self.changes_iter.next().map(|kv| (
 				// TODO have NibbleVec without copy from vec
 				(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
-				Item::Value(kv.1.expect("Checked above")),
+				Item::Value(kv.1.expect("Checked above"), change_eq),
 			));
 		}
 		if do_value {
@@ -1610,7 +1628,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						// index
 						(false, true)
 						},
-					(Ordering::Less, _commons, _is_prefix) => {
+					(Ordering::Less, commons, _is_prefix) => {
+						self.index_iter.last_mut().map(|i| {
+							i.depth_with_previous = commons;
+						});
 						// value
 						(true, false)
 					},
@@ -1632,7 +1653,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 		if do_index {
 			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
-				let parent_has_value = if let Some((k, Item::Value(_))) = self.next_item.as_ref() {
+				let parent_has_value = if let Some((k, Item::Value(..))) = self.next_item.as_ref() {
 					// warn this skip deleted (currently next_item is never deleted). TODO consider next_item
 					// not Item type
 					next_index.0.as_slice().starts_with(&k.as_slice().into())
@@ -1662,7 +1683,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		if let Some(conf_index_depth) = self.indexes_conf.next_depth2(None) {
 			let iter = self.indexes.iter(conf_index_depth, 0, LeftNibbleSlice::new(&[]));
 			let iter = Iterator::peekable(iter);
-			self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+			let depth_with_previous = 0;
+			self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
 		}
 		//self.init_state();
 	}
@@ -1670,6 +1692,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	// TODO remove result ??
 	fn stack_index(&mut self) -> bool {
 		if let Some(next_change) = self.changes_iter.peek() {
+			let depth_with_previous = self.index_iter.last().map(|i| i.depth_with_previous).unwrap_or(0);
 			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
 			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
 				let iter = self.indexes.iter(
@@ -1679,7 +1702,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				);
 				let mut iter = Iterator::peekable(iter);
 				if iter.peek().is_some() {
-					self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+					self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
 					return true;
 				}
 			}
@@ -1723,6 +1746,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 	fn stack_next_index(&mut self, next_change: &[u8]) {
 		if let Some(next_change) = self.changes_iter.peek() {
+			let depth_with_previous = self.index_iter.last().map(|i| i.depth_with_previous).unwrap_or(0);
 			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
 			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
 				if let Some(next_branch_depth) = self.stack_branches.current_branch_depth() {
@@ -1732,7 +1756,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						LeftNibbleSlice::new_len(next_change.0.as_slice(), next_branch_depth),
 					);
 					let iter = Iterator::peekable(iter);
-					self.index_iter.push(StackedIndex2{conf_index_depth, iter});
+					self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
 					self.state = Next2::IterToBranch;
 				}
 			}
