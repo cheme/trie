@@ -551,7 +551,7 @@ pub enum Item<B> {
 	/// Also an optional `Change of value is attached`.
 	Index {
 		index: Index,
-		parent_depth: usize,
+		common_depth_from_previous: usize,
 		parent_has_value: bool,
 	},
 	/// Value node value, from change set.
@@ -637,6 +637,7 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	stack_branches: StackBranches,
 	state: Next2,
 	next_item: Option<(NibbleVec, Item<V>)>,
+	last_deleted: bool,
 	// TODO make deleted optional and directly delete
 	// in backend if no container
 	deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
@@ -689,6 +690,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			stack_branches: StackBranches(Default::default()),
 			state: Next2::None,
 			next_item: None,
+			last_deleted: false,
 			deleted_indexes,
 			deleted_values,
 		};
@@ -1374,7 +1376,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		if matches!(new_next, Some((_, Item::StoredDeleted))) {
 			let (key, _) = new_next.unwrap();
 			self.deleted_values.push(key.padded_buffer_vec());
+			self.last_deleted = true;
 			return self.feed_next_item();
+		} else {
+			self.last_deleted = false;
 		}
 
 		if let Some((key_index1, new_next)) = new_next.as_ref() {
@@ -1608,14 +1613,28 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			));
 		}
 		if do_index {
-			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| (
-				next_index.0,
-				Item::Index {
+			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
+				let parent_has_value = if let Some((k, Item::Value(_))) = self.next_item.as_ref() {
+					// warn this skip deleted (currently next_item is never deleted). TODO consider next_item
+					// not Item type
+					next_index.0.as_slice().starts_with(&k.as_slice().into())
+				} else {
+					false
+				};
+				let common_depth_from_previous = if self.last_deleted {
+					self.deleted_values.last().map(|k| next_index.0.as_slice().common_length(&k.as_slice().into()))
+						.unwrap_or(0)
+				} else {
+					self.next_item.as_ref().map(|(k, _)| next_index.0.as_slice().common_length(&k.as_slice().into()))
+						.unwrap_or(0)
+				};
+
+				(next_index.0, Item::Index {
 					index: next_index.1,
-					parent_depth: 0, // TODO
-					parent_has_value: false, // TODO
-				},
-			));
+					common_depth_from_previous,
+					parent_has_value,
+				})
+			});
 		}
 		None
 	}

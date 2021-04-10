@@ -255,6 +255,16 @@ impl<'a> From<&'a crate::nibble::NibbleVec> for LeftNibbleSlice<'a> {
 	}
 }
 
+impl<'a> From<&'a [u8]> for LeftNibbleSlice<'a> {
+	fn from(s: &'a [u8]) -> Self {
+		LeftNibbleSlice {
+			bytes: s,
+			len: s.len() * nibble_ops::NIBBLE_PER_BYTE,
+		}
+	}
+}
+
+
 #[cfg(test)]
 mod tests {
 	use super::*;
