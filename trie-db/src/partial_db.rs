@@ -559,7 +559,7 @@ pub enum Item<B> {
 	Value(B, bool),
 	/// Value node value, from existing values.
 	StoredValue(Vec<u8>),
-	/// Existing value deleted.
+	/// Existing value deleted. TODO delete (the whole enum in fact)
 	StoredDeleted,
 }
 
@@ -618,6 +618,25 @@ pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	sub_iterator: Option<SubIterator<'a, V>>,
 }
 
+enum NextCommonUnchanged {
+	Index {
+		depth: usize,
+		prev_index: bool,
+	},
+	// Note can be change value as long as same location.
+	Value {
+		depth: usize,
+		prev_index: bool,
+	},
+	None,
+}
+
+impl Default for NextCommonUnchanged {
+	fn default() -> Self {
+		NextCommonUnchanged::None
+	}
+}
+
 /// Iterator over index and value for root calculation
 /// and index update.
 /// TODO remove V as type param?? (already Vec<u8> in
@@ -639,6 +658,7 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	state: Next2,
 	next_item: Option<(NibbleVec, Item<V>)>,
 	last_deleted: bool,
+	next_common_unchanged: NextCommonUnchanged,
 	// TODO make deleted optional and directly delete
 	// in backend if no container
 	deleted_indexes: &'a mut Vec<(usize, NibbleVec)>,
@@ -693,6 +713,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			state: Next2::None,
 			next_item: None,
 			last_deleted: false,
+			next_common_unchanged: NextCommonUnchanged::None,
 			deleted_indexes,
 			deleted_values,
 		};
@@ -1438,6 +1459,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				self.index_iter.pop();
 			}*/
 */
+	/*
 			if matches!(new_next, Item::Index{ .. }) {
 				let sibling_depth = if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 					let common_depth = key_index1.as_slice().common_length(&next_index.0.as_slice());
@@ -1458,15 +1480,163 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				};
 				let mut key_index: NibbleVec = (&key_index1.as_slice().truncate(sibling_depth)).into();
 				if key_index.next_sibling() {
-					self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
+					self.current_value_iter = Some(Iterator::peekaable(self.values.iter_from(key_index.padded_buffer().as_slice())));
 				} else {
 					self.current_value_iter = None;
 				}
 			}
+	*/
 		}
 	//	unimplemented!("branch update");
 	//					(Ordering::Less, _commons, _is_prefix) => {
 		crate::rstd::mem::replace(&mut self.next_item, new_next).map(|(k, v)| (k, v.into()))
+	}
+
+	// consume all following delete of value
+	fn consume_next_deletes(&mut self) {
+		// TODO avoid calling this twice (in get_next and here).
+		let cmp_change_index = if let Some(next_change) = self.changes_iter.peek() {
+			let key_change = next_change.0.as_ref();
+			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				Some(LeftNibbleSlice::new(key_change).cmp_common_and_starts_with(&(&next_index.0).into()))
+			} else {
+				None
+			}
+		} else {
+			None
+		};
+		match cmp_change_index {
+			None => (),
+			Some((Ordering::Less, _commons, _is_prefix)) => (),
+			Some((_, _commons, false)) => {
+				// change more than index.
+				return;
+			},
+			Some((_, _commons, true)) => {
+				// change bellow or equal index
+				// index skip
+				self.skip_index();
+				// Stack index
+				self.stack_index();
+				// recurse
+				return self.consume_next_deletes();
+			},
+		}
+
+		// TODO update next_common_unchanged calls
+		if self.consume_changed_value() {
+			return self.consume_next_deletes();
+		}
+	}
+
+	fn update_next_common_unchanged(&mut self, current_key: &LeftNibbleSlice, prev_index: bool) {
+		// TODO this need to be reuse in get_next_item to avoid some key comparison. (actually probably
+		// the other way).
+		// + TODO maybe we already got peek index against peek value -> do memoize it
+		// until next is call
+		
+		// against index
+		let index_diff = self.index_iter.last_mut().and_then(|i| i.iter.peek()).map(|next_index| {
+			current_key.cmp_common_and_starts_with(&(&next_index.0).into()).1
+		});
+
+		// against value
+		let value_diff = self.current_value_iter.as_mut().and_then(|iter| iter.peek()).map(|next_value| {
+			current_key.cmp_common_and_starts_with(&LeftNibbleSlice::new(next_value.0.as_slice()).into()).1
+		});
+
+		self.next_common_unchanged = match (value_diff, index_diff) {
+			(Some(val), Some(index)) if val > index => {
+				NextCommonUnchanged::Index { depth: index, prev_index }
+			},
+			(_, Some(depth)) => {
+				NextCommonUnchanged::Index { depth, prev_index }
+			},
+			(Some(depth), _) => {
+				NextCommonUnchanged::Value { depth, prev_index }
+			},
+			(None, None) => {
+				NextCommonUnchanged::None
+			},
+		};
+	}
+
+	fn advance_value(&mut self) -> Option<(NibbleVec, Item<V>)> {
+		self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|kv| {
+			let key = LeftNibbleSlice::new(kv.0.as_slice());
+			self.update_next_common_unchanged(&key, false);
+			self.consume_next_deletes();
+			// TODO have NibbleVec without copy (at least from backing))
+			((&key).into(), Item::StoredValue(kv.1))
+		})
+	}
+
+	fn advance_index(&mut self) -> Option<(NibbleVec, Item<V>)> {
+		let result = self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
+			let previous_common = crate::rstd::mem::take(&mut self.next_common_unchanged);
+			self.update_next_common_unchanged(&next_index.0.as_slice(), true);
+			self.consume_next_deletes();
+			let parent_has_value = if let Some((k, Item::Value(..))) = self.next_item.as_ref() {
+				// warn this skip deleted (currently next_item is never deleted). TODO consider next_item
+				// not Item type
+				next_index.0.as_slice().starts_with(&k.as_slice().into())
+			} else {
+				false
+			};
+			let common_depth_from_previous = if self.last_deleted {
+				self.deleted_values.last().map(|k| next_index.0.as_slice().common_length(&k.as_slice().into()))
+					.unwrap_or(0)
+			} else {
+				self.next_item.as_ref().map(|(k, _)| next_index.0.as_slice().common_length(&k.as_slice().into()))
+					.unwrap_or(0)
+			};
+			let sibling_depth = if let Some(next_next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
+				let common_depth = next_next_index.0.as_slice().common_length(&next_index.0.as_slice());
+				common_depth + 1
+			} else {
+				// just skip after index: this could be default (not the pop), TODO check perf as default
+				self.index_iter.pop().map(|i| i.conf_index_depth)
+					.expect("Get a value from an iterator")
+			};
+
+			// advance value iter. TODO try to remove this instanciation.
+			let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
+			if key_index.next_sibling() {
+				self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
+			} else {
+				self.current_value_iter = None;
+			};
+
+			(next_index.0, Item::Index {
+				index: next_index.1,
+				common_depth_from_previous,
+				parent_has_value,
+			})
+		});
+		if result.is_some() && self.index_iter.last_mut().and_then(|i| i.iter.peek()).is_none() {
+			let _ = self.index_iter.pop();
+		}
+		result
+	}
+
+	fn skip_change(&mut self) {
+		if self.changes_iter.next().is_some() {
+			self.consume_next_deletes();
+		}
+	}
+
+	fn advance_change(&mut self, change_eq: bool) -> Option<(NibbleVec, Item<V>)> {
+		self.changes_iter.next().map(|kv| {
+			self.consume_next_deletes();
+			// TODO have NibbleVec without copy from vec
+			((&LeftNibbleSlice::new(kv.0.as_slice())).into(),
+				Item::Value(kv.1.expect("Checked above"), change_eq))
+		})
+	}
+
+	// TODO merge with stack
+	fn skip_index(&mut self) {
+		let _ = self.index_iter.last_mut().and_then(|i| i.iter.next());
 	}
 
 	fn get_next_item(&mut self) -> Option<(NibbleVec, Item<V>)> {
@@ -1490,11 +1660,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					return self.index_or_value();
 				} else {
 					// only value iterator in scope, just iterate it
-					return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|kv| (
-						// TODO have NibbleVec without copy (at least from backing))
-						(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
-						Item::StoredValue(kv.1),
-					));
+					return self.advance_value();
 				}
 			},
 			Some((Ordering::Less, _commons, _is_prefix)) => {
@@ -1522,13 +1688,48 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			Some((_, _commons, true)) => {
 				// change bellow or equal index
 				// index skip
-				let _ = self.index_iter.last_mut().and_then(|i| i.iter.next());
+				self.skip_index();
 				// Stack index
 				self.stack_index();
 				// recurse
 				return self.get_next_item();
 			},
 		}
+	}
+
+	// TODO fact with changed_or_value?
+	fn consume_changed_value(&mut self) -> bool {
+		if let Some(next_change) = self.changes_iter.peek() {
+			if next_change.1.is_none() {
+				if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.peek()) {
+					match next_change.0.as_slice().cmp(next_value.0.as_ref()) {
+						Ordering::Less => {
+							// delete nothing.
+							self.skip_change();
+							return true;
+						},
+						Ordering::Greater => {
+							// got value
+							return false;
+						},
+						Ordering::Equal => {
+							// advance
+							self.skip_change();
+							let _ = self.advance_value();
+							if let Some(next_value) = self.advance_value() {
+								self.deleted_values.push(next_value.0.padded_buffer_vec());
+							}
+							return true;
+						},
+					}
+				} else {
+					self.skip_change();
+					// no next value, consume following delete.
+					return true;
+				}
+			}
+		}
+		false
 	}
 
 	fn change_or_value(&mut self, limit: Option<&LeftNibbleSlice>) -> Option<(NibbleVec, Item<V>)> {
@@ -1548,7 +1749,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 							do_change = true;
 						} else {
 							// delete nothing.
-							let _ = self.changes_iter.next();
+							self.skip_change();
 						}
 					},
 					Ordering::Greater => {
@@ -1570,11 +1771,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 						change_eq = true;
 						if !do_change {
 							// advance
-							let _ = self.changes_iter.next();
+							self.skip_change();
 						}
-						if let Some(next_value) = self.current_value_iter.as_mut().and_then(|iter| iter.next()) {
+						if let Some(next_value) = self.advance_value() {
 							if !do_change {
-								let _ = self.changes_iter.next();
+								self.skip_change();
 								return Some((next_value.0.into(), Item::StoredDeleted));
 							}
 						}
@@ -1593,7 +1794,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 					do_change = true;
 				} else {
 					// delete nothing.
-					let _ = self.changes_iter.next();
+					self.skip_change();
 				}
 			} else {
 				return None;
@@ -1601,18 +1802,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 
 		if do_change {
-			return self.changes_iter.next().map(|kv| (
-				// TODO have NibbleVec without copy from vec
-				(&LeftNibbleSlice::new(kv.0.as_slice())).into(),
-				Item::Value(kv.1.expect("Checked above"), change_eq),
-			));
+			return self.advance_change(change_eq);
 		}
 		if do_value {
-			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
-				// TODO have NibbleVec without copy from vec
-				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
-				Item::StoredValue(next_value.1),
-			));
+			return self.advance_value();
 		}
 
 		self.get_next_item()
@@ -1645,35 +1838,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			(false, true) 
 		};
 		if do_value {
-			return self.current_value_iter.as_mut().and_then(|iter| iter.next()).map(|next_value| (
-				// TODO have NibbleVec without copy from vec
-				(&LeftNibbleSlice::new(next_value.0.as_slice())).into(),
-				Item::StoredValue(next_value.1),
-			));
+			return self.advance_value();
 		}
 		if do_index {
-			return self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
-				let parent_has_value = if let Some((k, Item::Value(..))) = self.next_item.as_ref() {
-					// warn this skip deleted (currently next_item is never deleted). TODO consider next_item
-					// not Item type
-					next_index.0.as_slice().starts_with(&k.as_slice().into())
-				} else {
-					false
-				};
-				let common_depth_from_previous = if self.last_deleted {
-					self.deleted_values.last().map(|k| next_index.0.as_slice().common_length(&k.as_slice().into()))
-						.unwrap_or(0)
-				} else {
-					self.next_item.as_ref().map(|(k, _)| next_index.0.as_slice().common_length(&k.as_slice().into()))
-						.unwrap_or(0)
-				};
-
-				(next_index.0, Item::Index {
-					index: next_index.1,
-					common_depth_from_previous,
-					parent_has_value,
-				})
-			});
+			return self.advance_index();
 		}
 		None
 	}
