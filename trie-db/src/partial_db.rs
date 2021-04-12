@@ -624,10 +624,6 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	changes_iter: Peekable<ID>,
 	index_iter: Vec<StackedIndex2<'a>>,
 	current_value_iter: Option<Peekable<KVBackendIter<'a>>>,
-	stack_branches: StackBranches,
-	state: Next2,
-	next_item: Option<(NibbleVec, Item<V>)>,
-	last_deleted: bool,
 	next_common_unchanged: NextCommonUnchanged,
 	// TODO make deleted optional and directly delete
 	// in backend if no container
@@ -679,10 +675,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			changes_iter: Iterator::peekable(changes_iter),
 			current_value_iter,
 			index_iter: Vec::new(),
-			stack_branches: StackBranches(Default::default()),
-			state: Next2::None,
-			next_item: None,
-			last_deleted: false,
 			next_common_unchanged: NextCommonUnchanged::None,
 			deleted_indexes,
 			deleted_values,
@@ -691,7 +683,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		// always stack first level of indexes.
 		iter.init_stack_index();
 
-		assert!(iter.feed_next_item().is_none());
+//		assert!(iter.feed_next_item().is_none());
 	
 		iter
 	}
@@ -880,11 +872,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 	type Item = (NibbleVec, Item<V>);
 
 	fn next(&mut self) -> Option<Self::Item> {
-		if self.next_item.is_some() {
-			self.feed_next_item()
-		} else {
-			None
-		}
+		self.get_next_item()
 	}
 }
 
@@ -1451,7 +1439,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		}
 	//	unimplemented!("branch update");
 	//					(Ordering::Less, _commons, _is_prefix) => {
-		crate::rstd::mem::replace(&mut self.next_item, new_next).map(|(k, v)| (k, v.into()))
+//		crate::rstd::mem::replace(&mut self.next_item, new_next).map(|(k, v)| (k, v.into()))
+		unimplemented!()
 	}
 
 	// consume all following delete of value
@@ -1536,13 +1525,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	fn advance_index(&mut self) -> Option<(NibbleVec, Item<V>)> {
 		let result = self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
 			let previous_common = crate::rstd::mem::take(&mut self.next_common_unchanged);
-			let parent_has_value = if let Some((k, Item::Value(..))) = self.next_item.as_ref() {
-				// warn this skip deleted (currently next_item is never deleted). TODO consider next_item
-				// not Item type
-				next_index.0.as_slice().starts_with(&k.as_slice().into())
-			} else {
-				false
-			};
 			let sibling_depth = if let Some(next_next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 				let common_depth = next_next_index.0.as_slice().common_length(&next_index.0.as_slice());
 				common_depth + 1
@@ -1787,7 +1769,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			let depth_with_previous = 0;
 			self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
 		}
-		//self.init_state();
 	}
 
 	// TODO remove result ??
@@ -1809,59 +1790,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			}
 		}
 		false
-	}
-
-	// 
-	fn init_state(&mut self) {
-		if let Some(next_change) = self.changes_iter.peek() {
-			let key_change = next_change.0.as_ref();
-			if let Some(next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
-				match LeftNibbleSlice::new(key_change).cmp_common_and_starts_with(&(&next_index.0).into()) {
-					(Ordering::Less, _commons, _is_prefix) => {
-						// iterate until index (even if not a prefix this will branch to prefix of index and
-						// require change).
-						self.state = Next2::IterToChange;
-					},
-					(_, _commons, false) => {
-						// iterate until index without values.
-						// TODO paded buffer on &mut that return slice.
-						let next_index = next_index.0.clone().padded_buffer();
-						// TODO setting to None should be more efficient or setting on state change.
-						// or TODO iter_from required to be lazy (only costy of first call to peek/next.
-						self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(next_index.as_slice())));
-						self.state = Next2::NextIndex;
-					},
-					(_, _commons, true) => {
-						// iterate then stack index.
-						self.state = Next2::IterToStackIndex;
-					},
-				}
-			}
-
-			unimplemented!("TODO feed next_item and then feed first branch");
-
-/*			assert!(self.value_or_change().is_none());
-			debug_assert!(self.next_item.is_some());*/
-		}
-	}
-
-	fn stack_next_index(&mut self, next_change: &[u8]) {
-		if let Some(next_change) = self.changes_iter.peek() {
-			let depth_with_previous = self.index_iter.last().map(|i| i.depth_with_previous).unwrap_or(0);
-			let current_index_depth = self.index_iter.last().map(|i| i.conf_index_depth);
-			if let Some(conf_index_depth) = self.indexes_conf.next_depth2(current_index_depth) {
-				if let Some(next_branch_depth) = self.stack_branches.current_branch_depth() {
-					let iter = self.indexes.iter(
-						conf_index_depth,
-						current_index_depth.unwrap_or(0),
-						LeftNibbleSlice::new_len(next_change.0.as_slice(), next_branch_depth),
-					);
-					let iter = Iterator::peekable(iter);
-					self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
-					self.state = Next2::IterToBranch;
-				}
-			}
-		}
 	}
 
 	// When reading value we skip the deleted ones.
