@@ -273,18 +273,18 @@ fn test_root_index(indexes: &'static [u32], nb_iter: usize, count: u32) {
 	}
 }
 
-type IndexOrValue2 = trie_db::partial_db::IndexOrValue2<Vec<u8>>;
+type Item = trie_db::partial_db::Item<Vec<u8>>;
 
 #[test]
 fn test_fix_set_root_iter() {
-	type Expected = (Vec<u8>, usize, IndexOrValue2);
-	fn check_expected(expected: Option<Expected>, value: (NibbleVec, IndexOrValue2)) {
+	type Expected = (Vec<u8>, usize, Item);
+	fn check_expected(expected: Option<Expected>, value: (NibbleVec, Item)) {
 		let expected = expected.expect("to many iterator values");
 		assert_eq!(LeftNibbleSlice::new_len(expected.0.as_slice(), expected.1), value.0.as_slice());
 		match (expected.2, value.1) {
-			(IndexOrValue2::Index(_), IndexOrValue2::Index(_)) => (),
-			(IndexOrValue2::Value(a), IndexOrValue2::Value(b)) => assert_eq!(a, b),
-			(IndexOrValue2::StoredValue(a), IndexOrValue2::StoredValue(b)) => assert_eq!(a, b),
+			(Item::Index(_), Item::Index(_)) => (),
+			(Item::Value(a), Item::Value(b)) => assert_eq!(a, b),
+			(Item::StoredValue(a), Item::StoredValue(b)) => assert_eq!(a, b),
 			_ => panic!("Mismatch item"),
 		}
 	}
@@ -321,11 +321,11 @@ fn test_fix_set_root_iter() {
 
 	let set = crate::iter_build::indexing_set_1(Default::default());
 	let expected_set_1 = vec![
-		(vec![97, 108, 102], 6, IndexOrValue2::Index(Default::default())),
-		(vec![98, 114, 97], 6, IndexOrValue2::Index(Default::default())),
-		(vec![100, 111, 103], 6, IndexOrValue2::Index(Default::default())),
-		(vec![104, 111, 114], 6, IndexOrValue2::Index(Default::default())),
-		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
+		(vec![97, 108, 102], 6, Item::Index(Default::default())),
+		(vec![98, 114, 97], 6, Item::Index(Default::default())),
+		(vec![100, 111, 103], 6, Item::Index(Default::default())),
+		(vec![104, 111, 114], 6, Item::Index(Default::default())),
+		(vec![104, 111, 117], 6, Item::Index(Default::default())),
 	];
 	check(set, expected_set_1.clone(), Default::default());
 
@@ -336,14 +336,14 @@ fn test_fix_set_root_iter() {
 		(b"i".to_vec(), vec![6; 32]),
 	]);
 	let expected = vec![
-		(vec![97, 108, 102], 6, IndexOrValue2::Index(Default::default())),
-		(vec![98, 114, 97], 6, IndexOrValue2::Index(Default::default())),
-		(vec![100], 2, IndexOrValue2::StoredValue(vec![2; 32])),
-		(vec![100, 111, 103], 6, IndexOrValue2::Index(Default::default())),
-		(vec![101, 114], 4, IndexOrValue2::StoredValue(vec![3; 32])),
-		(vec![104, 111, 114], 6, IndexOrValue2::Index(Default::default())),
-		(vec![104, 111, 117], 6, IndexOrValue2::Index(Default::default())),
-		(vec![105], 2, IndexOrValue2::StoredValue(vec![6; 32])),
+		(vec![97, 108, 102], 6, Item::Index(Default::default())),
+		(vec![98, 114, 97], 6, Item::Index(Default::default())),
+		(vec![100], 2, Item::StoredValue(vec![2; 32])),
+		(vec![100, 111, 103], 6, Item::Index(Default::default())),
+		(vec![101, 114], 4, Item::StoredValue(vec![3; 32])),
+		(vec![104, 111, 114], 6, Item::Index(Default::default())),
+		(vec![104, 111, 117], 6, Item::Index(Default::default())),
+		(vec![105], 2, Item::StoredValue(vec![6; 32])),
 	];
 	check(set, expected, Default::default());
 
@@ -353,7 +353,7 @@ fn test_fix_set_root_iter() {
 	];
 	let mut expected = expected_set_1.clone();
 	// single value instead of index
-	expected[0] = (b"alfa".to_vec(), 8, IndexOrValue2::Value(vec![1; 32]));
+	expected[0] = (b"alfa".to_vec(), 8, Item::Value(vec![1; 32]));
 	check(set.clone(), expected, changes);
 
 	// insert before index
@@ -361,7 +361,7 @@ fn test_fix_set_root_iter() {
 		(b"do".to_vec(), Some(vec![1; 32])),
 	];
 	let mut expected = expected_set_1.clone();
-	expected.insert(2, (b"do".to_vec(), 4, IndexOrValue2::Value(vec![1; 32])));
+	expected.insert(2, (b"do".to_vec(), 4, Item::Value(vec![1; 32])));
 	check(set.clone(), expected, changes);
 
 	// insert at index
@@ -369,8 +369,8 @@ fn test_fix_set_root_iter() {
 		(b"dog".to_vec(), Some(vec![1; 32])),
 	];
 	let mut expected = expected_set_1.clone();
-	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::Value(vec![1; 32]));
-	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::StoredValue(vec![4; 32])));
+	expected[2] = (b"dog".to_vec(), 6, Item::Value(vec![1; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, Item::StoredValue(vec![4; 32])));
 	check(set.clone(), expected, changes);
 
 	// insert after index at child
@@ -378,8 +378,8 @@ fn test_fix_set_root_iter() {
 		(b"doge".to_vec(), Some(vec![1; 32])),
 	];
 	let mut expected = expected_set_1.clone();
-	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::StoredValue(vec![3; 32]));
-	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::Value(vec![1; 32])));
+	expected[2] = (b"dog".to_vec(), 6, Item::StoredValue(vec![3; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, Item::Value(vec![1; 32])));
 	check(set.clone(), expected, changes);
 
 
@@ -388,8 +388,8 @@ fn test_fix_set_root_iter() {
 		(b"hous".to_vec(), Some(vec![8; 32])),
 	];
 	let mut expected = expected_set_1.clone();
-	expected[4] = (b"hous".to_vec(), 8, IndexOrValue2::Value(vec![8; 32]));
-	expected.push((b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32])));
+	expected[4] = (b"hous".to_vec(), 8, Item::Value(vec![8; 32]));
+	expected.push((b"house".to_vec(), 10, Item::StoredValue(vec![6; 32])));
 	check(set.clone(), expected, changes);
 
 	// remove value after ix parent do not change
@@ -407,7 +407,7 @@ fn test_fix_set_root_iter() {
 	];
 	let mut expected = expected_set_1.clone();
 	expected.remove(3);
-//	expected[3] = (b"house".to_vec(), 10, IndexOrValue2::StoredValue(vec![6; 32]));
+//	expected[3] = (b"house".to_vec(), 10, Item::StoredValue(vec![6; 32]));
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
 
@@ -422,10 +422,10 @@ fn test_fix_set_root_iter() {
 
 	let set = crate::iter_build::indexing_set_2(Default::default());
 	let expected_set_2 = vec![
-		(vec![97, 108], 4, IndexOrValue2::Index(Default::default())),
-		(vec![98, 114], 4, IndexOrValue2::Index(Default::default())),
-		(vec![100, 111], 4, IndexOrValue2::Index(Default::default())),
-		(vec![104, 111], 4, IndexOrValue2::Index(Default::default())),
+		(vec![97, 108], 4, Item::Index(Default::default())),
+		(vec![98, 114], 4, Item::Index(Default::default())),
+		(vec![100, 111], 4, Item::Index(Default::default())),
+		(vec![104, 111], 4, Item::Index(Default::default())),
 	];
 	check(set.clone(), expected_set_2.clone(), Default::default());
 
@@ -434,8 +434,8 @@ fn test_fix_set_root_iter() {
 		(b"alf".to_vec(), Some(vec![9; 32])),
 	];
 	let mut expected = expected_set_2.clone();
-	expected[0] = (b"alf".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
-	expected.insert(1, (b"alfa".to_vec(), 8, IndexOrValue2::StoredValue(vec![0; 32])));
+	expected[0] = (b"alf".to_vec(), 6, Item::Value(vec![9; 32]));
+	expected.insert(1, (b"alfa".to_vec(), 8, Item::StoredValue(vec![0; 32])));
 	check(set.clone(), expected, changes);
 
 	// insert at first index with senconcd
@@ -443,8 +443,8 @@ fn test_fix_set_root_iter() {
 		(b"dog".to_vec(), Some(vec![9; 32])),
 	];
 	let mut expected = expected_set_2.clone();
-	expected[2] = (b"dog".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
-	expected.insert(3, (b"doge".to_vec(), 8, IndexOrValue2::Index(Default::default())));
+	expected[2] = (b"dog".to_vec(), 6, Item::Value(vec![9; 32]));
+	expected.insert(3, (b"doge".to_vec(), 8, Item::Index(Default::default())));
 	check(set.clone(), expected, changes);
 
 	// insert between first index and second
@@ -452,9 +452,8 @@ fn test_fix_set_root_iter() {
 		(b"hor".to_vec(), Some(vec![9; 32])),
 	];
 	let mut expected = expected_set_2.clone();
-	expected[3] = (b"hor".to_vec(), 6, IndexOrValue2::Value(vec![9; 32]));
-	expected.insert(4, (b"hors".to_vec(), 8, IndexOrValue2::Index(Default::default())));
-	expected.insert(5, (b"hous".to_vec(), 8, IndexOrValue2::Index(Default::default())));
+	expected[3] = (b"hor".to_vec(), 6, Item::Value(vec![9; 32]));
+	expected.insert(4, (b"hors".to_vec(), 8, Item::Index(Default::default())));
+	expected.insert(5, (b"hous".to_vec(), 8, Item::Index(Default::default())));
 	check(set.clone(), expected, changes);
-	
 }
