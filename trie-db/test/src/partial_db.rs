@@ -407,7 +407,7 @@ fn test_fix_set_root_iter() {
 	];
 	let mut expected = expected_set_1.clone();
 	expected.remove(3);
-//	expected[3] = (b"house".to_vec(), 10, Item::StoredValue(vec![6; 32]));
+	expected[3] = (b"house".to_vec(), 10, Item::StoredValue(vec![6; 32]));
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
 
