@@ -611,6 +611,16 @@ impl Default for NextCommonUnchanged {
 	}
 }
 
+impl NextCommonUnchanged {
+	fn depth(&self) -> Option<usize> {
+		match self {
+			NextCommonUnchanged::Index { depth, .. }
+			| NextCommonUnchanged::Value { depth, .. } => Some(*depth),
+			NextCommonUnchanged::None => None,
+		}
+	}
+}
+
 /// Iterator over index and value for root calculation
 /// and index update.
 /// TODO remove V as type param?? (already Vec<u8> in
@@ -1494,6 +1504,10 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	}
 
 	fn update_next_common_unchanged(&mut self, current_key: &LeftNibbleSlice, prev_index: bool, is_delete: bool) {
+		self.next_common_unchanged = self.next_common_unchanged(current_key, prev_index, is_delete);
+	}
+
+	fn next_common_unchanged(&mut self, current_key: &LeftNibbleSlice, prev_index: bool, is_delete: bool) -> NextCommonUnchanged {
 		// TODO this need to be reuse in get_next_item to avoid some key comparison. (actually probably
 		// the other way).
 		// + TODO maybe we already got peek index against peek value -> do memoize it
@@ -1509,7 +1523,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			current_key.cmp_common_and_starts_with(&LeftNibbleSlice::new(next_value.0.as_slice()).into()).1
 		});
 
-		self.next_common_unchanged = match (value_diff, index_diff) {
+		match (value_diff, index_diff) {
 			(Some(val), Some(index)) if val > index => {
 				NextCommonUnchanged::Index { depth: index, prev_index }
 			},
@@ -1533,8 +1547,9 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			(None, None) => {
 				NextCommonUnchanged::None
 			},
-		};
+		}
 	}
+
 
 	fn update_next_commmon_insert_index(&mut self, current_key: &LeftNibbleSlice) {
 		// TODO from memoize previously peeked change and peeked index
@@ -1563,10 +1578,47 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		})
 	}
 
-	fn advance_index(&mut self) -> Option<(NibbleVec, Item<V>)> {
-		self.next_commmon_insert_index = None;
-		let result = self.index_iter.last_mut().and_then(|i| i.iter.next()).map(|next_index| {
-			let previous_common = crate::rstd::mem::take(&mut self.next_common_unchanged);
+	fn advance_index(&mut self) -> Option<Option<(NibbleVec, Item<V>)>> {
+		let depth_ix = self.index_iter.last().map(|i| i.conf_index_depth).unwrap_or(0);
+		let result = if let Some(next_index) = self.index_iter.last_mut()
+			.and_then(|i| i.iter.next()) {
+			// TODO check if we skip instead
+			// TODO lighter method?? (only need depth)
+			let next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false);
+			let parent_branch_depth = match (self.next_common_unchanged.depth(), next_common.depth()) {
+				(Some(a), Some(b)) => Some(crate::rstd::cmp::max(a, b)),
+				(Some(a), None)
+				| (None, Some(a)) => Some(a),
+				_ => None,
+			};
+			let mut do_skip = false;
+			// check if change is inserted into prefix
+			if let Some(ix) = self.next_commmon_insert_index.as_ref() {
+				debug_assert!(ix <= &depth_ix); // TODO can remove from below condition??
+				if parent_branch_depth.as_ref().map(|parent| ix > parent).unwrap_or(true)
+					&& ix <= &depth_ix {
+					do_skip = true;
+				}
+			}
+			if !do_skip {
+				self.consume_next_deletes();
+				if let Some(next_change) = self.changes_iter.peek() {
+					let ix = next_change.0.len() * nibble_ops::NIBBLE_PER_BYTE;
+					if parent_branch_depth.as_ref().map(|parent| &ix > parent).unwrap_or(true)
+						&& ix <= depth_ix {
+						do_skip = true;
+					}
+				}
+			}
+			if !do_skip {
+				// TODO check previous allow skip
+				// TODO check parent without value
+				// TODO check no next in branch (we did consume deletes above).
+			}
+			if do_skip {
+				self.stack_index();
+				return None;
+			}
 			let sibling_depth = if let Some(next_next_index) = self.index_iter.last_mut().and_then(|i| i.iter.peek()) {
 				let common_depth = next_next_index.0.as_slice().common_length(&next_index.0.as_slice());
 				common_depth + 1
@@ -1587,12 +1639,15 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			self.update_next_common_unchanged(&next_index.0.as_slice(), true, false);
 			self.consume_next_deletes();
 
-			(next_index.0, Item::Index(next_index.1))
-		});
+			Some((next_index.0, Item::Index(next_index.1)))
+		} else {
+			None
+		};
+		self.next_commmon_insert_index = None;
 		if result.is_some() && self.index_iter.last_mut().and_then(|i| i.iter.peek()).is_none() {
 			let _ = self.index_iter.pop();
 		}
-		result
+		Some(result)
 	}
 
 	// TODO rename to delete_change?
@@ -1804,17 +1859,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			return self.advance_value();
 		}
 		if do_index {
-			// TODO check if stacking index due to index change condt
-			// and then:
-/*
-			// index skip
-			self.skip_index();
-			// Stack index
-			self.stack_index();
-			// recurse
+			if let Some(advance) = self.advance_index() {
+				return advance;
+			}
+			// stack index: recurse
 			return self.get_next_item();
-*/
-			return self.advance_index();
 		}
 		None
 	}
