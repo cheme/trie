@@ -1607,27 +1607,31 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		let depth_ix = self.index_iter.last().map(|i| i.conf_index_depth).unwrap_or(0);
 		let result = if let Some(next_index) = self.index_iter.last_mut()
 			.and_then(|i| i.iter.next()) {
+
+
+			let sibling_depth = depth_ix;
+			// advance value iter. TODO try to remove this instanciation.
+			let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
+			let mut next_value_iter = if key_index.next_sibling() {
+				Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())))
+			} else {
+				None
+			};
+
+
 			// TODO check if we skip instead
 			// TODO lighter method?? (only need depth)
-			let mut next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false);
-			if next_common.depth() == Some(depth_ix) { // TODO do next value without this test.
 
-				// TODO factor with late value iter set (actually just restore when skip)
-				let correct_value_iter = self.current_value_iter.take();
-				// was calculated against a child value: do again with values after next index
+			// TODO factor with late value iter set (actually just restore when skip)
+			let previous_value_iter = self.current_value_iter.take();
+			// was calculated against a child value: do again with values after next index
 
-				let sibling_depth = depth_ix;
-				// advance value iter. TODO try to remove this instanciation.
-				let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
-				if key_index.next_sibling() {
-					self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
-				} else {
-					self.current_value_iter = None;
-				};
-				next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false);
-				self.current_value_iter = correct_value_iter;
-				// TODO reuse this iterator at the end of this function.
-			}
+			self.current_value_iter = next_value_iter;
+			let next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false);
+			next_value_iter = self.current_value_iter.take();
+			self.current_value_iter = previous_value_iter;
+			// TODO reuse this iterator at the end of this function.
+
 			let parent_branch_depth = match (self.next_common_unchanged.depth(), next_common.depth()) {
 				(Some(a), Some(b)) => Some(crate::rstd::cmp::max(a, b)),
 				(Some(a), None)
@@ -1663,19 +1667,11 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 							.unwrap_or(false)
 					{
 						// check no next in branch (we did consume deletes above).
-						// TODO factor with late value iter set (actually just restore when skip)
-						let correct_value_iter = self.current_value_iter.take();
-						let sibling_depth = depth_ix;
-				
-						// advance value iter. TODO try to remove this instanciation.
-						let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
-						if key_index.next_sibling() {
-							self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
-						} else {
-							self.current_value_iter = None;
-						};
+						let previous_value_iter = self.current_value_iter.take();
+						self.current_value_iter = next_value_iter;
 						let next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false); // TODO replace with lightert
-						self.current_value_iter = correct_value_iter;
+						next_value_iter = self.current_value_iter.take();
+						self.current_value_iter = previous_value_iter;
 						if let Some(depth) = next_common.depth() {
 							// next is under branch (no next)
 							do_skip = depth < parent_branch;
@@ -1695,13 +1691,8 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			}
 			let sibling_depth = depth_ix;
 
-			// advance value iter. TODO try to remove this instanciation.
-			let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
-			if key_index.next_sibling() {
-				self.current_value_iter = Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())));
-			} else {
-				self.current_value_iter = None;
-			};
+			// advance value iter.
+			self.current_value_iter = next_value_iter;
 
 			self.update_next_common_unchanged(&next_index.0.as_slice(), true, false);
 			self.consume_next_deletes();
