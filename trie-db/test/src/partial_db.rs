@@ -14,7 +14,7 @@
 
 //! Tests for trie_db partial_db mod.
 
-use trie_db::partial_db::{DepthIndexes, Index,
+use trie_db::partial_db::{DepthIndexes, Index, IndexBackend,
 	KVBackendIter, KVBackend, RootIndexIterator2};
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
@@ -22,7 +22,6 @@ use trie_db::nibble_ops;
 use trie_db::BackingByteVec;
 use trie_db::LeftNibbleSlice;
 use trie_db::NibbleVec;
-use trie_db::partial_db::{SubIter, IndexOrValue, IndexBackend};
 
 /// A filled (up to a maximum non include size key) key value backend.
 /// Second usize is a width (255 for all keys).

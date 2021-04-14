@@ -26,7 +26,8 @@ use crate::nibble::nibble_ops;
 use crate::nibble::LeftNibbleSlice;
 use crate::node_codec::NodeCodec;
 use crate::{TrieLayout, TrieHash};
-use crate::partial_db::{IndexBackend, IndexOrValue, Index as PartialIndex, Item};
+use crate::partial_db::{IndexBackend, Index as PartialIndex,
+	Item, DepthIndexes};
 
 
 macro_rules! exponential_out {
@@ -449,30 +450,11 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
 	}
 }
 
-/// Get iterator on value and index only, past a given index (used to recalculate
-/// unchanged index child when we fuse the index).
-/// This is needed when fusing an index with parent, and the only child
-/// was not modified, then we need to use another
-/// iteration that goes into this modified child entries (only index and value there).
-/// Note that the subiteration will get an unordered key (but only unordered with a
-/// delete that do not trigger a callback, this is only relevant when extracting 
-/// proof).
-pub trait SubIter<A, B> {
-	/// Sub iterate on value and index. 
-	fn sub_iterate(
-		&mut self,
-		key: &[u8],
-		depth: usize,
-		child_index: usize,
-		buffed: Option<(A, IndexOrValue<B>)>,
-	);
-}
-
 /// Same as `trie_visit` but allows to use some indexes node to skip part of the processing.
 /// The function assumes that index and value from the input iterator do not overlap.
 /// TODO rewrite to be same as `trie_visit`, just changing index to be put on parent child
 /// on stack
-pub fn trie_visit_with_indexes<T, I, F>(input: I, callback: &mut F)
+pub fn trie_visit_with_indexes<T, I, F>(_input: I, _callback: &mut F)
 	where
 		T: TrieLayout,
 		I: Iterator<Item = (NibbleVec, Item<Vec<u8>>)>,
@@ -612,7 +594,7 @@ impl<T> CacheAccumIndex<T, Vec<u8>>
 	fn stack_item(
 		&mut self,
 		key: &[u8],
-		item: IndexOrValue<Vec<u8>>,
+		item: Item<Vec<u8>>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>
 	) {
 		// TODO reimplement
@@ -1056,14 +1038,14 @@ impl<'a, H: Hasher, V, DB: HashDB<H, V>> ProcessEncodedNode<<H as Hasher>::Out>
 pub struct TrieRootIndexes<'a, H, HO, DB> {
 	db: &'a mut DB,
 	pub root: Option<HO>,
-	indexes: &'a crate::partial_db::DepthIndexes,
+	indexes: &'a DepthIndexes,
 	// TODO of any use
 	last_index: NibbleVec,
 	_ph: PhantomData<H>,
 }
 
 impl<'a, H, HO, DB> TrieRootIndexes<'a, H, HO, DB> {
-	pub fn new(db: &'a mut DB, indexes: &'a crate::partial_db::DepthIndexes) -> Self {
+	pub fn new(db: &'a mut DB, indexes: &'a DepthIndexes) -> Self {
 		TrieRootIndexes { db, indexes, root: None, last_index: Default::default(), _ph: PhantomData }
 	}
 }

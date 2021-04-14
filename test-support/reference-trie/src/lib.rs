@@ -31,7 +31,6 @@ use trie_db::{
 	TrieRoot,
 	TrieRootIndexes,
 	Partial,
-	partial_db::IndexOrValue,
 	partial_db::Item,
 };
 use std::borrow::Borrow;
