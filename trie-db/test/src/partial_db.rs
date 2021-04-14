@@ -455,7 +455,7 @@ fn test_fix_set_root_iter() {
 	];
 	let mut expected = expected_set_2.clone();
 	expected[3] = (b"hor".to_vec(), 6, Item::Value(vec![9; 32]));
-	expected.insert(4, (b"hors".to_vec(), 8, Item::Index(Default::default())));
+	expected.insert(4, (b"horse".to_vec(), 10, Item::StoredValue(vec![5; 32])));
 	expected.insert(5, (b"hous".to_vec(), 8, Item::Index(Default::default())));
 	check(set.clone(), expected, changes);
 }

@@ -1605,6 +1605,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 
 	fn advance_index(&mut self) -> Option<Option<(NibbleVec, Item<V>)>> {
 		let depth_ix = self.index_iter.last().map(|i| i.conf_index_depth).unwrap_or(0);
+		let next_commmon_insert_index = self.next_commmon_insert_index.take();
 		let result = if let Some(next_index) = self.index_iter.last_mut()
 			.and_then(|i| i.iter.next()) {
 
@@ -1634,7 +1635,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			};
 			let mut do_skip = false;
 			// check if change is inserted into prefix
-			if let Some(ix) = self.next_commmon_insert_index.as_ref() {
+			if let Some(ix) = next_commmon_insert_index.as_ref() {
 				debug_assert!(ix <= &depth_ix); // TODO can remove from below condition??
 				if parent_branch_depth.as_ref().map(|parent| ix > parent).unwrap_or(true)
 					&& ix <= &depth_ix {
@@ -1687,7 +1688,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		} else {
 			None
 		};
-		self.next_commmon_insert_index = None;
 		if result.is_some() && self.index_iter.last_mut().and_then(|i| i.iter.peek()).is_none() {
 			let _ = self.index_iter.pop();
 		}

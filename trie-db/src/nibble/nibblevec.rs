@@ -255,14 +255,14 @@ impl NibbleVec {
 		self.len -= 1;
 	}*/
 
+	// TODO rewrite efficient version
 	pub fn next_sibling(&mut self) -> bool {
-		if let Some(v) = self.pop() {
+		while let Some(v) = self.pop() {
 			let new_v = v + 1;
 			if (new_v as usize) < nibble_ops::NIBBLE_LENGTH {
 				self.push(new_v);
 				return true;
 			}
-			self.push(v);
 		}
 		false
 	}
