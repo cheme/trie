@@ -14,7 +14,7 @@
 
 //! Tests for trie_db partial_db mod.
 
-use trie_db::partial_db::{DepthIndexes, RootIndexIterator, Index,
+use trie_db::partial_db::{DepthIndexes, Index,
 	KVBackendIter, KVBackend, RootIndexIterator2};
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
@@ -105,12 +105,15 @@ fn test_root_iter() {
 	let mut index_backend: BTreeMap<BackingByteVec, Index> = Default::default();
 	let idepth1: usize = 2;
 	let depth_index = DepthIndexes::new(&[idepth1 as u32]);
-	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
+	let mut index_deleted = Vec::new(); 
+	let mut value_deleted = Vec::new(); 
+	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
 		std::iter::empty(),
-		Default::default(),
+		&mut index_deleted,
+		&mut value_deleted,
 	);
 	let mut nb2 = 0;
 	for (k, v) in root_iter {
@@ -122,24 +125,27 @@ fn test_root_iter() {
 	let index2 = vec![5];
 	index_backend.write(idepth1, LeftNibbleSlice::new_len(index1.as_slice(), idepth1), Index{hash: Default::default(), on_index: false});
 	index_backend.write(idepth1, LeftNibbleSlice::new_len(index2.as_slice(), idepth1), Index{hash: Default::default(), on_index: true});
-	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
+	let mut index_deleted = Vec::new(); 
+	let mut value_deleted = Vec::new(); 
+	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
 		std::iter::empty(),
-		Default::default(),
+		&mut index_deleted,
+		&mut value_deleted,
 	);
 	let mut nb3 = 0;
 	for (k, v) in root_iter {
-		if let IndexOrValue::Index(..) = v {
+		if let Item::Index(..) = v {
 		} else {
 			let common_depth = nibble_ops::biggest_depth(
-				&k[..],
+				&k.inner()[..],
 				index1.as_slice(),
 			);
 			assert!(common_depth < 2);
 			let common_depth = nibble_ops::biggest_depth(
-				&k[..],
+				&k.inner()[..],
 				index2.as_slice(),
 			);
 			assert!(common_depth < 2);
@@ -155,19 +161,22 @@ fn test_root_iter() {
 	index_backend.write(3, LeftNibbleSlice::new_len(index1.as_slice(), 3), Index{ hash: Default::default(), on_index: true});
 	index_backend.write(6, LeftNibbleSlice::new_len(index11.as_slice(), 6), Index{ hash: Default::default(), on_index: false});
 	index_backend.write(6, LeftNibbleSlice::new_len(index12.as_slice(), 6), Index{ hash: Default::default(), on_index: true});
-	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
+	let mut index_deleted = Vec::new(); 
+	let mut value_deleted = Vec::new(); 
+	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
 		std::iter::empty(),
-		Default::default(),
+		&mut index_deleted,
+		&mut value_deleted,
 	);
 	let mut nb3 = 0;
 	for (k, v) in root_iter {
-		if let IndexOrValue::Index(..) = v {
+		if let Item::Index(..) = v {
 		} else {
 			let common_depth = nibble_ops::biggest_depth(
-				&k[..],
+				&k.inner()[..],
 				index1.as_slice(),
 			);
 			assert!(common_depth < 3);
@@ -175,26 +184,29 @@ fn test_root_iter() {
 		nb3 += 1;
 	}
 	assert_ne!(nb2, nb3);
-	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
+	let mut index_deleted = Vec::new(); 
+	let mut value_deleted = Vec::new(); 
+	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
 		// change to stack second layer iter
 		vec![(index1.clone(), None)].into_iter(),
-		Default::default(),
+		&mut index_deleted,
+		&mut value_deleted,
 	);
 	let mut nb3 = 0;
 	let mut nb4 = 0;
 	for (k, v) in root_iter {
-		if let IndexOrValue::Index(..) = v {
+		if let Item::Index(..) = v {
 		} else {
 			let common_depth = nibble_ops::biggest_depth(
-				&k[..],
+				&k.inner()[..],
 				index11.as_slice(),
 			);
 			assert!(common_depth < 6);
 			let common_depth = nibble_ops::biggest_depth(
-				&k[..],
+				&k.inner()[..],
 				index12.as_slice(),
 			);
 			assert!(common_depth < 6);

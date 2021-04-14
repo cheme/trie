@@ -32,6 +32,7 @@ use trie_db::{
 	TrieRootIndexes,
 	Partial,
 	partial_db::IndexOrValue,
+	partial_db::Item,
 };
 use std::borrow::Borrow;
 use keccak_hasher::KeccakHasher;
@@ -40,7 +41,7 @@ use trie_db::{
 	nibble_ops, NodeCodec,
 	Trie, TrieConfiguration,
 	TrieLayout, TrieMut,
-	partial_db::{DepthIndexes, RootIndexIterator, CountCheck},
+	partial_db::{DepthIndexes, RootIndexIterator2, CountCheck},
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -1059,14 +1060,17 @@ pub fn compare_index_calc<
 	};
 	let root_new: <KeccakHasher as Hasher>::Out = {
 		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
-		let iter = RootIndexIterator::new(
+		let mut deleted_indexes = Vec::new();
+		let mut deleted_values = Vec::new();
+		let iter = RootIndexIterator2::new(
 			&reference_memdb,
 			&reference_indexes,
 			&indexes,
 			changes.into_iter(),
-			Vec::new(),
+			&mut deleted_indexes,
+			&mut deleted_values,
 		);
-		trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(iter, &mut cb);
+		trie_visit_with_indexes::<NoExtensionLayout, _, _>(iter, &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
 
@@ -1095,14 +1099,17 @@ pub fn compare_index_calc<
 			let root_new: <KeccakHasher as Hasher>::Out = {
 				let mut cb = TrieBuilder::new(&mut debug_display);
 
-				let iter = RootIndexIterator::new(
+				let mut deleted_indexes = Vec::new();
+				let mut deleted_values = Vec::new();
+				let iter = RootIndexIterator2::new(
 					&reference_memdb,
 					&reference_indexes,
 					&indexes,
 					debug_changes.into_iter(),
-					Vec::new(),
+					&mut deleted_indexes,
+					&mut deleted_values,
 				);
-				trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(iter, &mut cb);
+				trie_visit_with_indexes::<NoExtensionLayout, _, _>(iter, &mut cb);
 				cb.root.unwrap_or(Default::default())
 			};
 			let db : &dyn hash_db::HashDB<_, _> = &debug_display;
@@ -1209,33 +1216,11 @@ pub fn calc_root_no_extension2<I, A>(
 		A: AsRef<[u8]> + Ord + fmt::Debug,
 {
 	let mut cb = TrieRoot::<KeccakHasher, _>::default();
-	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
-		IterNoSub(data.into_iter().map(|(k, v)| (k, IndexOrValue::StoredValue(v)))),
+	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _>(
+		data.into_iter().map(|(k, v)| (k.as_ref().to_vec().into(), Item::StoredValue(v))),
 		&mut cb,
 	);
 	cb.root.unwrap_or(Default::default())
-}
-
-pub struct IterNoSub<I>(I);
-
-impl<A, I> Iterator for IterNoSub<I>
-	where I: Iterator<Item = (A, IndexOrValue<Vec<u8>>)> {
-		type Item = (A, IndexOrValue<Vec<u8>>);
-	fn next(&mut self) -> Option<Self::Item> {
-		self.0.next()
-	}
-}
-
-impl<A, I> trie_db::partial_db::SubIter<A, Vec<u8>> for IterNoSub<I> {
-	fn sub_iterate(
-		&mut self,
-		_key: &[u8],
-		_depth: usize,
-		_child_index: usize,
-		_buffed: Option<(A, IndexOrValue<Vec<u8>>)>,
-	) {
-		unreachable!("IterNoSub should not be use with change");
-	}
 }
 
 /// Trie builder trie building utility.
@@ -1283,11 +1268,11 @@ pub fn calc_root_build_no_extension2<I, A, DB>(
 		DB: hash_db::HashDB<KeccakHasher, DBValue>
 {
 	let mut cb = TrieBuilder::new(hashdb);
-	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _, _>(
-		IterNoSub(data.into_iter().map(|(k, mut v)| {
+	trie_db::trie_visit_with_indexes::<NoExtensionLayout, _, _>(
+		data.into_iter().map(|(k, mut v)| {
 			v.resize(32, v[0]);
-			(k, IndexOrValue::StoredValue(v))
-		})),
+			(k.as_ref().to_vec().into(), Item::StoredValue(v))
+		}),
 		&mut cb,
 	);
 	cb.root.unwrap_or(Default::default())

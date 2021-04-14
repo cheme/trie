@@ -26,7 +26,7 @@ use crate::nibble::nibble_ops;
 use crate::nibble::LeftNibbleSlice;
 use crate::node_codec::NodeCodec;
 use crate::{TrieLayout, TrieHash};
-use crate::partial_db::{IndexBackend, IndexOrValue, Index as PartialIndex};
+use crate::partial_db::{IndexBackend, IndexOrValue, Index as PartialIndex, Item};
 
 
 macro_rules! exponential_out {
@@ -472,14 +472,15 @@ pub trait SubIter<A, B> {
 /// The function assumes that index and value from the input iterator do not overlap.
 /// TODO rewrite to be same as `trie_visit`, just changing index to be put on parent child
 /// on stack
-pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
+pub fn trie_visit_with_indexes<T, I, F>(input: I, callback: &mut F)
 	where
 		T: TrieLayout,
-		I: Iterator<Item = (A, IndexOrValue<Vec<u8>>)> + SubIter<A, Vec<u8>>,
-		A: AsRef<[u8]> + Ord,
+		I: Iterator<Item = (NibbleVec, Item<Vec<u8>>)>,
 		F: ProcessEncodedNode<TrieHash<T>>,
 {
 	assert!(!T::USE_EXTENSION, "No extension not implemented");
+	unimplemented!("TODO reimplement");
+	/*
 	let mut depth_queue = CacheAccumIndex::<T, Vec<u8>>::default();
 	// compare iter ordering
 	let mut iter_input = input;
@@ -489,8 +490,6 @@ pub fn trie_visit_with_indexes<T, I, A, F>(input: I, callback: &mut F)
 		// above an index).
 		first = iter_input.next();
 	};
-	unimplemented!("TODO reimplement");
-	/*
 	// root index cannot be written in stack (we write the index in their direct parent branch).
 	debug_assert!(if let Some((_k, IndexOrValue::Index(PartialIndex { actual_depth, .. }))) = &first {
 		if *actual_depth == 0 {
