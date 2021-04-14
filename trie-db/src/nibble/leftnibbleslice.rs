@@ -153,6 +153,7 @@ impl<'a> LeftNibbleSlice<'a> {
 		(self.len().cmp(&other.len()), common_len, true)
 	}
 
+	// TODO consider renaming to common_depth
 	pub fn common_length(&self, other: &Self) -> usize {
 		let common_len = cmp::min(self.len(), other.len());
 		let common_byte_len = common_len / NIBBLE_PER_BYTE;

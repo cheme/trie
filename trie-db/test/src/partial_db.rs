@@ -356,12 +356,14 @@ fn test_fix_set_root_iter() {
 	expected[0] = (b"alfa".to_vec(), 8, Item::Value(vec![1; 32]));
 	check(set.clone(), expected, changes);
 
-	// insert before index
+	// insert before index, break partial.
 	let changes = vec![
 		(b"do".to_vec(), Some(vec![1; 32])),
 	];
 	let mut expected = expected_set_1.clone();
-	expected.insert(2, (b"do".to_vec(), 4, Item::Value(vec![1; 32])));
+	expected[2] = (b"do".to_vec(), 4, Item::Value(vec![1; 32]));
+	expected.insert(3, (b"dog".to_vec(), 6, Item::StoredValue(vec![3; 32])));
+	expected.insert(4, (b"doge".to_vec(), 8, Item::StoredValue(vec![4; 32])));
 	check(set.clone(), expected, changes);
 
 	// insert at index
@@ -407,7 +409,7 @@ fn test_fix_set_root_iter() {
 	];
 	let mut expected = expected_set_1.clone();
 	expected.remove(3);
-//	expected[3] = (b"house".to_vec(), 10, Item::StoredValue(vec![6; 32]));
+	expected[3] = (b"house".to_vec(), 10, Item::StoredValue(vec![6; 32]));
 	//panic!("{:?}", expected);
 	check(set.clone(), expected, changes);
 
