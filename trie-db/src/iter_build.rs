@@ -1089,7 +1089,7 @@ impl<'a, H: Hasher, DB: IndexBackend> ProcessEncodedNode<<H as Hasher>::Out>
 		if let Some(save_index) = self.indexes.next_depth(prefix.len(), node_key.len()) {
 			debug_assert!(node_key.len() >= save_index);
 			let on_index = node_key.len() == save_index;
-				self.last_index = (&node_key).into();
+			self.last_index = (&node_key).into();
 			let partial_index = PartialIndex {
 				hash: hash.as_ref().to_vec(),
 				on_index,

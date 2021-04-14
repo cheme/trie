@@ -508,7 +508,7 @@ fn check_indexing() {
 
 	let (mem_db, indexes, _) = indexing_set_3(Default::default());
 	let mut expected = vec![
-		(vec![0, 0, 0, 1, 6], true), // root on nibble 1
+		(vec![0, 0, 0, 1, 96], true), // root on nibble 1
 		// 2, a
 		(vec![0, 0, 0, 2, 97], false),
 		(vec![0, 0, 0, 2, 98], false),
