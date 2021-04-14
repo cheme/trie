@@ -1609,30 +1609,24 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			.and_then(|i| i.iter.next()) {
 
 
+			// Done in order to ensure next change follow index.
+			self.consume_next_deletes(); // TODO is it noops? (we only advance index)
+
 			let sibling_depth = depth_ix;
 			// advance value iter. TODO try to remove this instanciation.
 			let mut key_index: NibbleVec = (&next_index.0.as_slice().truncate(sibling_depth)).into();
-			let mut next_value_iter = if key_index.next_sibling() {
+			let previous_value_iter = self.current_value_iter.take();
+			self.current_value_iter = if key_index.next_sibling() {
 				Some(Iterator::peekable(self.values.iter_from(key_index.padded_buffer().as_slice())))
 			} else {
 				None
 			};
 
-
-			// TODO check if we skip instead
 			// TODO lighter method?? (only need depth)
+			let next_common_depth = self.next_common_unchanged(&next_index.0.as_slice(), true, false).depth(); // TODO factor
 
-			// TODO factor with late value iter set (actually just restore when skip)
-			let previous_value_iter = self.current_value_iter.take();
-			// was calculated against a child value: do again with values after next index
 
-			self.current_value_iter = next_value_iter;
-			let next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false);
-			next_value_iter = self.current_value_iter.take();
-			self.current_value_iter = previous_value_iter;
-			// TODO reuse this iterator at the end of this function.
-
-			let parent_branch_depth = match (self.next_common_unchanged.depth(), next_common.depth()) {
+			let parent_branch_depth = match (self.next_common_unchanged.depth(), next_common_depth) {
 				(Some(a), Some(b)) => Some(crate::rstd::cmp::max(a, b)),
 				(Some(a), None)
 				| (None, Some(a)) => Some(a),
@@ -1648,7 +1642,6 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				}
 			}
 			if !do_skip {
-				self.consume_next_deletes();
 				if let Some(next_change) = self.changes_iter.peek() {
 					let ix = next_index.0.as_slice().common_length(&LeftNibbleSlice::new(next_change.0.as_slice()));
 					if parent_branch_depth.as_ref().map(|parent| &ix > parent).unwrap_or(true)
@@ -1667,12 +1660,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 							.unwrap_or(false)
 					{
 						// check no next in branch (we did consume deletes above).
-						let previous_value_iter = self.current_value_iter.take();
-						self.current_value_iter = next_value_iter;
-						let next_common = self.next_common_unchanged(&next_index.0.as_slice(), true, false); // TODO replace with lightert
-						next_value_iter = self.current_value_iter.take();
-						self.current_value_iter = previous_value_iter;
-						if let Some(depth) = next_common.depth() {
+						if let Some(depth) = next_common_depth {
 							// next is under branch (no next)
 							do_skip = depth < parent_branch;
 						} else {
@@ -1686,14 +1674,12 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				}
 			}
 			if do_skip {
+				self.current_value_iter = previous_value_iter;
 				self.stack_index();
 				return None;
 			}
-			let sibling_depth = depth_ix;
 
 			// advance value iter.
-			self.current_value_iter = next_value_iter;
-
 			self.update_next_common_unchanged(&next_index.0.as_slice(), true, false);
 			self.consume_next_deletes();
 
