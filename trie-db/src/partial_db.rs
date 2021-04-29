@@ -18,8 +18,6 @@
 //! a given depth.
 
 
-// TODO when stacking index, value iter can be reuse if following change is bellow index.
-
 use crate::rstd::btree_map::BTreeMap;
 use crate::rstd::cmp::Ordering;
 use crate::nibble::nibble_ops;
@@ -514,7 +512,7 @@ impl NextCommonUnchanged {
 /// and index update.
 /// TODO remove V as type param?? (already Vec<u8> in
 /// StoredValue), or put V in kvbackend.
-pub struct RootIndexIterator2<'a, KB, IB, V, ID>
+pub struct RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
 		IB: IndexBackend,
@@ -525,7 +523,7 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	indexes: &'a IB,
 	indexes_conf: &'a DepthIndexes,
 	changes_iter: Peekable<ID>,
-	index_iter: Vec<StackedIndex2<'a>>,
+	index_iter: Vec<StackedIndex<'a>>,
 	current_value_iter: Option<Peekable<KVBackendIter<'a>>>,
 	// Common with next item prior to change.
 	// Needs update on value iteration (including skipped value)
@@ -542,13 +540,13 @@ pub struct RootIndexIterator2<'a, KB, IB, V, ID>
 	deleted_values: &'a mut Vec<Vec<u8>>,
 }
 
-struct StackedIndex2<'a> {
+struct StackedIndex<'a> {
 	iter: Peekable<IndexBackendIter<'a>>,
 	conf_index_depth: usize,
 	depth_with_previous: usize,
 }
 
-impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
+impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
 		IB: IndexBackend,
@@ -564,7 +562,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 		deleted_values: &'a mut Vec<Vec<u8>>,
 	) -> Self {
 		let current_value_iter = Some(Iterator::peekable(values.iter_from(&[])));
-		let mut iter = RootIndexIterator2 {
+		let mut iter = RootIndexIterator {
 			values,
 			indexes,
 			indexes_conf,
@@ -584,7 +582,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 	}
 }
 
-impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
+impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
 		IB: IndexBackend,
@@ -598,7 +596,7 @@ impl<'a, KB, IB, V, ID> Iterator for RootIndexIterator2<'a, KB, IB, V, ID>
 	}
 }
 
-impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
+impl<'a, KB, IB, V, ID> RootIndexIterator<'a, KB, IB, V, ID>
 	where
 		KB: KVBackend,
 		IB: IndexBackend,
@@ -1055,7 +1053,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 			let iter = self.indexes.iter(conf_index_depth, 0, LeftNibbleSlice::new(&[]));
 			let iter = Iterator::peekable(iter);
 			let depth_with_previous = 0;
-			self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
+			self.index_iter.push(StackedIndex{conf_index_depth, iter, depth_with_previous});
 		}
 	}
 
@@ -1071,7 +1069,7 @@ impl<'a, KB, IB, V, ID> RootIndexIterator2<'a, KB, IB, V, ID>
 				);
 				let mut iter = Iterator::peekable(iter);
 				if iter.peek().is_some() {
-					self.index_iter.push(StackedIndex2{conf_index_depth, iter, depth_with_previous});
+					self.index_iter.push(StackedIndex{conf_index_depth, iter, depth_with_previous});
 					return;
 				}
 			}

@@ -15,7 +15,7 @@
 //! Tests for trie_db partial_db mod.
 
 use trie_db::partial_db::{DepthIndexes, Index, IndexBackend,
-	KVBackendIter, KVBackend, RootIndexIterator2};
+	KVBackendIter, KVBackend, RootIndexIterator};
 use std::collections::BTreeMap;
 use std::cmp::Ordering;
 use trie_db::nibble_ops;
@@ -106,7 +106,7 @@ fn test_root_iter() {
 	let depth_index = DepthIndexes::new(&[idepth1 as u32]);
 	let mut index_deleted = Vec::new(); 
 	let mut value_deleted = Vec::new(); 
-	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
+	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
@@ -126,7 +126,7 @@ fn test_root_iter() {
 	index_backend.write(idepth1, LeftNibbleSlice::new_len(index2.as_slice(), idepth1), Index{hash: Default::default(), on_index: true});
 	let mut index_deleted = Vec::new(); 
 	let mut value_deleted = Vec::new(); 
-	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
+	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
@@ -162,7 +162,7 @@ fn test_root_iter() {
 	index_backend.write(6, LeftNibbleSlice::new_len(index12.as_slice(), 6), Index{ hash: Default::default(), on_index: true});
 	let mut index_deleted = Vec::new(); 
 	let mut value_deleted = Vec::new(); 
-	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
+	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
@@ -185,7 +185,7 @@ fn test_root_iter() {
 	assert_ne!(nb2, nb3);
 	let mut index_deleted = Vec::new(); 
 	let mut value_deleted = Vec::new(); 
-	let mut root_iter = RootIndexIterator2::<_, _, Vec<u8>, _>::new(
+	let mut root_iter = RootIndexIterator::<_, _, Vec<u8>, _>::new(
 		&kvbackend,
 		&index_backend,
 		&depth_index,
@@ -309,7 +309,7 @@ fn test_fix_set_root_iter() {
 		expected.reverse();
 		let mut deleted_indexes = Vec::new();
 		let mut deleted_values = Vec::new();
-		let mut root_iter = RootIndexIterator2::new(
+		let mut root_iter = RootIndexIterator::new(
 			&mem_db,
 			&indexes,
 			&indexes_conf,

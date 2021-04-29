@@ -40,7 +40,7 @@ use trie_db::{
 	nibble_ops, NodeCodec,
 	Trie, TrieConfiguration,
 	TrieLayout, TrieMut,
-	partial_db::{DepthIndexes, RootIndexIterator2, CountCheck},
+	partial_db::{DepthIndexes, RootIndexIterator, CountCheck},
 };
 pub use trie_root::TrieStream;
 pub mod node {
@@ -1061,7 +1061,7 @@ pub fn compare_index_calc<
 		let mut cb = TrieRootIndexes::<KeccakHasher, _, _>::new(indexes_backend, indexes);
 		let mut deleted_indexes = Vec::new();
 		let mut deleted_values = Vec::new();
-		let iter = RootIndexIterator2::new(
+		let iter = RootIndexIterator::new(
 			&reference_memdb,
 			&reference_indexes,
 			&indexes,
@@ -1100,7 +1100,7 @@ pub fn compare_index_calc<
 
 				let mut deleted_indexes = Vec::new();
 				let mut deleted_values = Vec::new();
-				let iter = RootIndexIterator2::new(
+				let iter = RootIndexIterator::new(
 					&reference_memdb,
 					&reference_indexes,
 					&indexes,

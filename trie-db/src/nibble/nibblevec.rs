@@ -237,7 +237,7 @@ impl NibbleVec {
 
 	/// Returns padded vec buffer. TODO consider using Vec in nibblevec (sometime it doesn't get
 	/// instantiated from something else than vec and got counterproductive with smallvec).
-	pub fn padded_buffer_vec(mut self) -> Vec<u8> {
+	pub fn padded_buffer_vec(self) -> Vec<u8> {
 		self.padded_buffer().into_vec()
 	}
 
@@ -282,7 +282,6 @@ impl<'a> From<&'a LeftNibbleSlice<'a>> for NibbleVec {
 	fn from(s: &'a LeftNibbleSlice<'a>) -> Self {
 		let end = s.len / nibble_ops::NIBBLE_PER_BYTE;
 		let pad =  s.len % nibble_ops::NIBBLE_PER_BYTE;
-		// TODO truncate??
 		NibbleVec {
 			inner: s.bytes[..end + pad].into(),
 			len: s.len,
