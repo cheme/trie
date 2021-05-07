@@ -571,8 +571,9 @@ fn register_proof_without_value() {
 		trie.insert(b"test12", &[2u8;36][..]).unwrap();
 		// remove 1234
 		trie.remove(b"test1234").unwrap();
+		trie.get(b"te").unwrap();
 	}
-
+/*
 	type MemoryDBProof = memory_db::MemoryDB<
 		KeccakHasher,
 		memory_db::HashKey<KeccakHasher>,
@@ -598,4 +599,5 @@ fn register_proof_without_value() {
 		trie.remove(b"test1234").unwrap();
 		trie.get(b"te").unwrap();
 	}
+*/
 }
