@@ -109,9 +109,9 @@ impl Bitmap {
 	}
 }
 
-pub type RefTrieDB<'a> = trie_db::TrieDB<'a, ExtensionLayout>;
+pub type RefTrieDB<'a> = trie_db::TrieDB<'a, NoExtensionLayout>;
 pub type RefTrieDBNoExt<'a> = trie_db::TrieDB<'a, NoExtensionLayout>;
-pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, ExtensionLayout>;
+pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout>;
 pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout>;
 pub type RefTrieDBMutAllowEmpty<'a> = trie_db::TrieDBMut<'a, AllowEmptyLayout>;
 pub type RefFatDB<'a> = trie_db::FatDB<'a, ExtensionLayout>;

@@ -20,6 +20,7 @@ use memory_db::{MemoryDB, PrefixedKey};
 use hash_db::{Hasher, HashDB};
 use keccak_hasher::KeccakHasher;
 use reference_trie::{RefTrieDBMutNoExt, RefTrieDBMutAllowEmpty, RefTrieDBMut,
+RefTrieDB,
 	ReferenceNodeCodec, reference_trie_root, reference_trie_root_no_extension};
 
 fn populate_trie<'db>(
@@ -483,5 +484,118 @@ fn return_old_values() {
 	for (key, value) in x {
 		assert_eq!(t.remove(&key).unwrap(), Some(value));
 		assert!(t.remove(&key).unwrap().is_none());
+	}
+}
+
+#[test]
+fn register_proof_without_value() {
+	use std::collections::HashMap;
+	use std::cell::RefCell;
+	use hash_db::{Prefix, AsHashDB};
+
+	type MemoryDB = memory_db::MemoryDB<
+		KeccakHasher,
+		PrefixedKey<KeccakHasher>,
+		DBValue,
+	>;
+	let x = [
+		(b"test1".to_vec(), vec![1;32]), // inline
+		(b"test1234".to_vec(), vec![2;36]),
+		(b"te".to_vec(), vec![3;32]),
+	];
+
+	let mut memdb = MemoryDB::default();
+	let mut root = Default::default();
+	let _ = populate_trie(&mut memdb, &mut root, &x);
+	{
+		let trie = RefTrieDB::new(&memdb, &root).unwrap();
+		println!("{:?}", trie);
+	}
+
+	struct ProofRecorder {
+		db: MemoryDB,
+		record: RefCell<HashMap<Vec<u8>, Vec<u8>>>,
+	}
+	// Only to test without threads.
+	unsafe impl Send for ProofRecorder { }
+	unsafe impl Sync for ProofRecorder { }
+
+	impl HashDB<KeccakHasher, DBValue> for ProofRecorder {
+		fn get(&self, key: &<KeccakHasher as Hasher>::Out, prefix: Prefix) -> Option<DBValue> {
+			let v = self.db.get(key, prefix);
+			if let Some(v) = v.as_ref() {
+				let mut v = v.clone();
+				self.record.borrow_mut().insert(key[..].to_vec(), v);
+			}
+			v
+		}
+
+		fn contains(&self, key: &<KeccakHasher as Hasher>::Out, prefix: Prefix) -> bool {
+			self.get(key, prefix).is_some()
+		}
+
+		fn emplace(&mut self, key: <KeccakHasher as Hasher>::Out, prefix: Prefix, value: DBValue) {
+			self.db.emplace(key, prefix, value)
+		}
+
+		fn insert(&mut self, prefix: Prefix, value: &[u8]) -> <KeccakHasher as Hasher>::Out {
+			self.db.insert(prefix, value)
+		}
+
+		fn remove(&mut self, key: &<KeccakHasher as Hasher>::Out, prefix: Prefix) {
+			self.db.remove(key, prefix)
+		}
+	}
+
+	impl AsHashDB<KeccakHasher, DBValue> for ProofRecorder {
+		fn as_hash_db(&self) -> &dyn HashDB<KeccakHasher, DBValue> {
+			self
+		}
+		fn as_hash_db_mut<'a>(&'a mut self) -> &'a mut (dyn HashDB<KeccakHasher, DBValue> + 'a) {
+			self
+		}
+	}
+
+	let mut memdb = ProofRecorder {
+		db: memdb,
+		record: Default::default(),
+	};
+
+	let root_proof = root.clone();
+	{
+		let mut trie = RefTrieDBMut::from_existing(&mut memdb, &mut root)
+			.unwrap();
+		// touch te value (test1 remains untouch).
+		trie.get(b"te").unwrap();
+		// cut test_1234 prefix
+		trie.insert(b"test12", &[2u8;36][..]).unwrap();
+		// remove 1234
+		trie.remove(b"test1234").unwrap();
+	}
+
+	type MemoryDBProof = memory_db::MemoryDB<
+		KeccakHasher,
+		memory_db::HashKey<KeccakHasher>,
+		DBValue,
+	>;
+	let mut memdb_from_proof = MemoryDBProof::default();
+	for (_key, value) in memdb.record.into_inner().into_iter() {
+		memdb_from_proof.insert(
+			hash_db::EMPTY_PREFIX,
+			value.as_slice(),
+		);
+	}
+
+	let db_unpacked = memdb_from_proof.clone();
+	let root_unpacked = root_proof.clone();
+
+	let mut memdb_from_proof = db_unpacked.clone();
+	let mut root_proof = root_unpacked.clone();
+	{
+		let mut trie = RefTrieDBMut::from_existing(&mut memdb_from_proof, &mut root_proof)
+			.unwrap();
+		trie.insert(b"test12", &[2u8;36][..]).unwrap();
+		trie.remove(b"test1234").unwrap();
+		trie.get(b"te").unwrap();
 	}
 }
