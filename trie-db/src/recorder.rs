@@ -1,4 +1,4 @@
-// Copyright 2017, 2020 Parity Technologies
+// Copyright 2017, 2021 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ use crate::rstd::vec::Vec;
 /// A record of a visited node.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(PartialEq, Eq, Clone)]
-pub struct Record<HO, M> {
+pub struct Record<HO, Meta> {
 	/// The depth of this node.
 	pub depth: u32,
 
@@ -30,7 +30,7 @@ pub struct Record<HO, M> {
 	pub hash: HO,
 
 	/// The associated meta.
-	pub meta: M,
+	pub meta: Meta,
 }
 
 /// Records trie nodes as they pass it.
@@ -40,13 +40,13 @@ pub struct Recorder<HO, M> {
 	min_depth: u32,
 }
 
-impl<HO: Copy, M> Default for Recorder<HO, M> {
+impl<HO: Copy, M: Clone> Default for Recorder<HO, M> {
 	fn default() -> Self {
 		Recorder::new()
 	}
 }
 
-impl<HO: Copy, M> Recorder<HO, M> {
+impl<HO: Copy, Meta: Clone> Recorder<HO, Meta> {
 	/// Create a new `Recorder` which records all given nodes.
 	#[inline]
 	pub fn new() -> Self {
@@ -61,15 +61,8 @@ impl<HO: Copy, M> Recorder<HO, M> {
 		}
 	}
 
-	/// Drain all visited records.
-	pub fn drain(&mut self) -> Vec<Record<HO, M>> {
-		crate::rstd::mem::replace(&mut self.nodes, Vec::new())
-	}
-}
-
-impl<HO: Copy, M: Clone> Recorder<HO, M> {
 	/// Record a visited node, given its hash, data, and depth.
-	pub fn record(&mut self, hash: &HO, data: &[u8], depth: u32, meta: &M) {
+	pub fn record(&mut self, hash: &HO, data: &[u8], depth: u32, meta: &Meta) {
 		if depth >= self.min_depth {
 			self.nodes.push(Record {
 				depth,
@@ -78,5 +71,10 @@ impl<HO: Copy, M: Clone> Recorder<HO, M> {
 				meta: meta.clone(),
 			})
 		}
+	}
+
+	/// Drain all visited records.
+	pub fn drain(&mut self) -> Vec<Record<HO, Meta>> {
+		crate::rstd::mem::replace(&mut self.nodes, Vec::new())
 	}
 }

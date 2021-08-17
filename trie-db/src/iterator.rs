@@ -1,4 +1,4 @@
-// Copyright 2017, 2020 Parity Technologies
+// Copyright 2017, 2021 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout, GlobalMeta};
-use hash_db::{Hasher, EMPTY_PREFIX};
+use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
+use hash_db::EMPTY_PREFIX;
 use crate::triedb::TrieDB;
 use crate::node::{NodePlan, NodeHandle, OwnedNode};
 use crate::nibble::{NibbleSlice, NibbleVec, nibble_ops};
@@ -31,14 +31,14 @@ enum Status {
 
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Eq, PartialEq)]
-struct Crumb<H: Hasher, M> {
-	hash: Option<H::Out>,
-	meta: M,
+struct Crumb<L: TrieLayout> {
+	hash: Option<TrieHash<L>>,
+	meta: L::Meta,
 	node: Rc<OwnedNode<DBValue>>,
 	status: Status,
 }
 
-impl<H: Hasher, M> Crumb<H, M> {
+impl<L: TrieLayout> Crumb<L> {
 	/// Move on to next status in the node's sequence.
 	fn increment(&mut self) {
 		self.status = match (self.status, self.node.node_plan()) {
@@ -58,7 +58,7 @@ impl<H: Hasher, M> Crumb<H, M> {
 /// Iterator for going through all nodes in the trie in pre-order traversal order.
 pub struct TrieDBNodeIterator<'a, L: TrieLayout> {
 	db: &'a TrieDB<'a, L>,
-	trail: Vec<Crumb<L::Hash, L::Meta>>,
+	trail: Vec<Crumb<L>>,
 	key_nibbles: NibbleVec,
 }
 
@@ -114,7 +114,7 @@ impl<'a, L: TrieLayout> TrieDBNodeIterator<'a, L> {
 		let mut full_key_nibbles = 0;
 		loop {
 			let (next_node, next_node_hash, next_node_meta) = {
-				self.descend(node, node_hash.clone(), meta.clone());
+				self.descend(node, node_hash, meta);
 				let crumb = self.trail.last_mut()
 					.expect(
 						"descend_into_node pushes a crumb onto the trial; \
@@ -283,7 +283,7 @@ impl<'a, L: TrieLayout> TrieDBNodeIterator<'a, L> {
 	}
 
 	/// Access inner hash db.
-	pub fn db(&self) -> &dyn hash_db::HashDBRef<L::Hash, DBValue, L::Meta, GlobalMeta<L>> {
+	pub fn db(&self) -> &dyn hash_db::HashDBRef<L::Hash, DBValue> {
 		self.db.db()
 	}
 }

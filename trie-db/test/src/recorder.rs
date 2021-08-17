@@ -17,48 +17,47 @@
 use memory_db::{MemoryDB, HashKey};
 use hash_db::Hasher;
 use reference_trie::{RefHasher, RefTrieDBMut, RefTrieDB};
-use trie_db::{Trie, TrieMut, Recorder, Record};
+use trie_db::{Trie, TrieMut, Recorder, Record, NoMeta};
 
 #[test]
 fn basic_recorder() {
-	let mut basic = Recorder::new();
+	let mut basic = Recorder::<_, NoMeta>::new();
 
 	let node1 = vec![1, 2, 3, 4];
 	let node2 = vec![4, 5, 6, 7, 8, 9, 10];
 
 	let (hash1, hash2) = (RefHasher::hash(&node1), RefHasher::hash(&node2));
-	basic.record(&hash1, &node1, 0, &());
-	basic.record(&hash2, &node2, 456, &());
+	basic.record(&hash1, &node1, 0, &Default::default());
+	basic.record(&hash2, &node2, 456, &Default::default());
 
 	let record1 = Record {
 		data: node1,
 		hash: hash1,
 		depth: 0,
-		meta: (),
+		meta: Default::default(),
 	};
 
 	let record2 = Record {
 		data: node2,
 		hash: hash2,
 		depth: 456,
-		meta: (),
+		meta: Default::default(),
 	};
-
 
 	assert_eq!(basic.drain(), vec![record1, record2]);
 }
 
 #[test]
 fn basic_recorder_min_depth() {
-	let mut basic = Recorder::with_depth(400);
+	let mut basic = Recorder::<_, NoMeta>::with_depth(400);
 
 	let node1 = vec![1, 2, 3, 4];
 	let node2 = vec![4, 5, 6, 7, 8, 9, 10];
 
 	let hash1 = RefHasher::hash(&node1);
 	let hash2 = RefHasher::hash(&node2);
-	basic.record(&hash1, &node1, 0, &());
-	basic.record(&hash2, &node2, 456, &());
+	basic.record(&hash1, &node1, 0, &Default::default());
+	basic.record(&hash2, &node2, 456, &Default::default());
 
 	let records = basic.drain();
 
@@ -68,7 +67,7 @@ fn basic_recorder_min_depth() {
 		data: node2,
 		hash: hash2,
 		depth: 456,
-		meta: (),
+		meta: Default::default(),
 	});
 }
 

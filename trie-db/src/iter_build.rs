@@ -17,13 +17,13 @@
 //! implementation.
 //! See `trie_visit` function.
 
-use hash_db::{Hasher, HashDB, Prefix, MetaHasher};
+use hash_db::{Hasher, HashDB, Prefix};
 use crate::rstd::{cmp::max, vec::Vec};
 use crate::triedbmut::{ChildReference};
 use crate::nibble::NibbleSlice;
 use crate::nibble::nibble_ops;
 use crate::node_codec::NodeCodec;
-use crate::{TrieLayout, TrieHash, DBValue, GlobalMeta};
+use crate::{TrieLayout, TrieHash, DBValue, Meta};
 use crate::node::Value;
 
 macro_rules! exponential_out {
@@ -117,11 +117,11 @@ impl<T, V> CacheAccum<T, V>
 
 	fn flush_value(
 		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>, T::Meta>,
+		callback: &mut impl ProcessEncodedNode<T>,
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
-		let mut meta = self.1.meta_for_new_node();
+		let mut meta = self.1.new_meta();
 		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
 		// is it a branch value (two candidate same ix)
 		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
@@ -138,14 +138,14 @@ impl<T, V> CacheAccum<T, V>
 
 	fn flush_branch(
 		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>, T::Meta>,
+		callback: &mut impl ProcessEncodedNode<T>,
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize,
 		is_last: bool,
 	) {
 
 		while self.last_depth() > new_depth || is_last && !self.is_empty() {
-			let extension_meta = T::USE_EXTENSION.then(|| self.1.meta_for_new_node());
+			let extension_meta = T::USE_EXTENSION.then(|| self.1.new_meta());
 
 			let lix = self.last_depth();
 			let llix = max(self.last_last_depth(), new_depth);
@@ -181,7 +181,7 @@ impl<T, V> CacheAccum<T, V>
 	fn standard_extension(
 		&mut self,
 		key_branch: &[u8],
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>, T::Meta>,
+		callback: &mut impl ProcessEncodedNode<T>,
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
@@ -192,11 +192,7 @@ impl<T, V> CacheAccum<T, V>
 
 		let (children, v, depth) = self.0.pop().expect("checked");
 
-		let mut meta = self.1.meta_for_new_node();
-
-		if T::READ_ROOT_STATE_META && is_root {
-			T::set_root_meta(&mut meta, self.1.layout_meta());
-		}
+		let mut meta = self.1.new_meta();
 
 		debug_assert!(branch_d == depth);
 		// encode branch
@@ -222,17 +218,13 @@ impl<T, V> CacheAccum<T, V>
 	fn no_extension(
 		&mut self,
 		key_branch: &[u8],
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>, T::Meta>,
+		callback: &mut impl ProcessEncodedNode<T>,
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
 	) -> ChildReference<TrieHash<T>> {
 		let (children, v, depth) = self.0.pop().expect("checked");
-		let mut meta = self.1.meta_for_new_node();
-
-		if T::READ_ROOT_STATE_META && is_root {
-			T::set_root_meta(&mut meta, self.1.layout_meta());
-		}
+		let mut meta = self.1.new_meta();
 
 		debug_assert!(branch_d == depth);
 		// encode branch
@@ -260,7 +252,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F, layout: &T)
 		I: IntoIterator<Item = (A, B)>,
 		A: AsRef<[u8]> + Ord,
 		B: AsRef<[u8]>,
-		F: ProcessEncodedNode<TrieHash<T>, T::Meta>,
+		F: ProcessEncodedNode<T>,
 {
 	let mut depth_queue = CacheAccum::<T, B>::new(layout.clone());
 	// compare iter ordering
@@ -297,7 +289,7 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F, layout: &T)
 			// one single element corner case
 			let (k2, v2) = previous_value;
 			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
-			let mut meta = layout.meta_for_new_node();
+			let mut meta = layout.new_meta();
 			let encoded = T::Codec::leaf_node(nkey.right(), Value::Value(&v2.as_ref()[..]), &mut meta);
 			let pr = NibbleSlice::new_offset(
 				&k2.as_ref()[..],
@@ -311,13 +303,13 @@ pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F, layout: &T)
 		}
 	} else {
 		// nothing null root corner case
-		let mut empty_meta = <T::Meta as crate::Meta>::meta_for_empty(layout.layout_meta());
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node(&mut empty_meta).to_vec(), true, empty_meta);
+		let empty_meta = layout.new_meta();
+		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true, empty_meta);
 	}
 }
 
 /// Visitor trait to implement when using `trie_visit`.
-pub trait ProcessEncodedNode<HO, M> {
+pub trait ProcessEncodedNode<T: TrieLayout> {
 	/// Function call with prefix, encoded value and a boolean indicating if the
 	/// node is the root for each node of the trie.
 	///
@@ -330,8 +322,8 @@ pub trait ProcessEncodedNode<HO, M> {
 		prefix: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-		meta: M,
-	) -> ChildReference<HO>;
+		meta: T::Meta,
+	) -> ChildReference<TrieHash<T>>;
 }
 
 /// Get trie root and insert visited node in a hash_db.
@@ -348,10 +340,10 @@ impl<'a, T: TrieLayout, DB> TrieBuilder<'a, T, DB> {
 	}
 }
 
-impl<'a, T, DB> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieBuilder<'a, T, DB>
+impl<'a, T, DB> ProcessEncodedNode<T> for TrieBuilder<'a, T, DB>
 	where
 		T: TrieLayout,
-		DB: HashDB<T::Hash, DBValue, T::Meta, GlobalMeta<T>>,
+		DB: HashDB<T::Hash, DBValue>,
 {
 	fn process(
 		&mut self,
@@ -367,10 +359,10 @@ impl<'a, T, DB> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieBuilder<'a, T, 
 
 			return ChildReference::Inline(h, len);
 		}
-		let hash = if !T::USE_META {
+		let hash = if !T::Meta::ACTIVE {
 			self.db.insert(prefix, &encoded_node[..])
 		} else {
-			self.db.insert_with_meta(prefix, &encoded_node[..], meta)
+			self.db.alt_insert(prefix, &encoded_node[..], meta.resolve_alt_hashing::<T::Codec>())
 		};
 		if is_root {
 			self.root = Some(hash);
@@ -393,7 +385,7 @@ impl<T: TrieLayout> Default for TrieRoot<T> {
 	}
 }
 
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRoot<T> {
+impl<T: TrieLayout> ProcessEncodedNode<T> for TrieRoot<T> {
 	fn process(
 		&mut self,
 		_: Prefix,
@@ -408,13 +400,10 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRoot<T> {
 
 			return ChildReference::Inline(h, len);
 		}
-		let hash = if !T::USE_META {
+		let hash = if !T::Meta::ACTIVE {
 			<T::Hash as Hasher>::hash(encoded_node.as_slice())
 		} else {
-			<T::MetaHasher as MetaHasher<_, _>>::hash(
-				&encoded_node[..],
-				&meta,
-			)
+			meta.resolve_alt_hashing::<T::Codec>().alt_hash::<T::Hash>(&encoded_node[..])
 		};
 		if is_root {
 			self.root = Some(hash);
@@ -455,7 +444,7 @@ impl<T: TrieLayout> Default for TrieRootPrint<T> {
 }
 
 #[cfg(feature = "std")]
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRootPrint<T> {
+impl<T: TrieLayout> ProcessEncodedNode<T> for TrieRootPrint<T> {
 	fn process(
 		&mut self,
 		p: Prefix,
@@ -473,13 +462,10 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRootPrint<T
 			println!("	inline len {}", len);
 			return ChildReference::Inline(h, len);
 		}
-		let hash = if !T::USE_META {
+		let hash = if !T::Meta::ACTIVE {
 			<T::Hash as Hasher>::hash(encoded_node.as_slice())
 		} else {
-			<T::MetaHasher as MetaHasher<_, _>>::hash(
-				&encoded_node[..],
-				&meta,
-			)
+			meta.resolve_alt_hashing::<T::Codec>().alt_hash::<T::Hash>(&encoded_node[..])
 		};
 		if is_root {
 			self.root = Some(hash);
@@ -489,7 +475,7 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRootPrint<T
 	}
 }
 
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRootUnhashed<T> {
+impl<T: TrieLayout> ProcessEncodedNode<T> for TrieRootUnhashed<T> {
 	fn process(
 		&mut self,
 		_: Prefix,
@@ -504,13 +490,10 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>, T::Meta> for TrieRootUnhashe
 
 			return ChildReference::Inline(h, len);
 		}
-		let hash = if !T::USE_META {
+		let hash = if !T::Meta::ACTIVE {
 			<T::Hash as Hasher>::hash(encoded_node.as_slice())
 		} else {
-			<T::MetaHasher as MetaHasher<_, _>>::hash(
-				&encoded_node[..],
-				&meta,
-			)
+			meta.resolve_alt_hashing::<T::Codec>().alt_hash::<T::Hash>(&encoded_node[..])
 		};
 
 		if is_root {
