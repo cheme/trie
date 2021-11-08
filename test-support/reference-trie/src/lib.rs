@@ -51,8 +51,8 @@ macro_rules! test_layouts {
 		fn $test() {
 			$test_internal::<reference_trie::HashedValueNoExtThreshold>();
 			$test_internal::<reference_trie::HashedValueNoExt>();
-			$test_internal::<reference_trie::NoExtensionLayout>();
-			$test_internal::<reference_trie::ExtensionLayout>();
+//			$test_internal::<reference_trie::NoExtensionLayout>();
+//			$test_internal::<reference_trie::ExtensionLayout>();
 		}
 	};
 }

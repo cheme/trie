@@ -90,7 +90,7 @@ fn test_decode_compact<L: TrieLayout>(
 
 test_layouts!(trie_compact_encoding_works, trie_compact_encoding_works_internal);
 fn trie_compact_encoding_works_internal<T: TrieLayout>() {
-	let (root, mut encoded, items) = test_encode_compact::<T>(
+	let (root, mut encoded, items) = test_encode_compact::<reference_trie::HashedValueNoExt>(
 		vec![
 			// "alfa" is at a hash-referenced leaf node.
 			(b"alfa", &[0; 32]),
@@ -114,8 +114,10 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 		],
 	);
 
+	let mut root2 = trie_db::TrieHash::<T>::default();
+	root2.as_mut().copy_from_slice(root.as_ref());
 	encoded.push(Vec::new()); // Add an extra item to ensure it is not read.
-	test_decode_compact::<T>(&encoded, items, root, encoded.len() - 1);
+	test_decode_compact::<T>(&encoded, items, root2, encoded.len() - 1);
 }
 
 test_layouts!(
