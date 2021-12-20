@@ -49,7 +49,7 @@ pub enum Value<'a> {
 	Inline(&'a [u8]),
 	/// Hash byte slice as stored in a trie node,
 	/// and the actual value when accessed.
-	Node(&'a [u8], Option<DBValue>),
+	Node(&'a [u8], usize, Option<DBValue>),
 }
 
 impl<'a> Value<'a> {
@@ -142,7 +142,7 @@ pub enum ValuePlan {
 	Inline(Range<usize>),
 	/// Range for hash in encoded node and original
 	/// value size.
-	Node(Range<usize>),
+	Node(Range<usize>, usize),
 }
 
 impl ValuePlan {
@@ -150,7 +150,7 @@ impl ValuePlan {
 	pub fn build<'a, 'b>(&'a self, data: &'b [u8]) -> Value<'b> {
 		match self {
 			ValuePlan::Inline(range) => Value::Inline(&data[range.clone()]),
-			ValuePlan::Node(range) => Value::Node(&data[range.clone()], None),
+			ValuePlan::Node(range, size) => Value::Node(&data[range.clone()], *size, None),
 		}
 	}
 }

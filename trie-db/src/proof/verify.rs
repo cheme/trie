@@ -109,7 +109,7 @@ struct StackEntry<'a, L: TrieLayout> {
 	/// The child references to use in reconstructing the trie nodes.
 	children: Vec<Option<ChildReference<TrieHash<L>>>>,
 	/// Technical to attach lifetime to entry.
-	next_value_hash: Option<TrieHash<L>>,
+	next_value_hash: Option<(TrieHash<L>, usize)>,
 	_marker: PhantomData<L>,
 }
 
@@ -142,8 +142,8 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	}
 
 	fn value(&self) -> Option<Value> {
-		if let Some(hash) = self.next_value_hash.as_ref() {
-			Some(Value::Node(hash.as_ref(), None))
+		if let Some((hash, size)) = self.next_value_hash.as_ref() {
+			Some(Value::Node(hash.as_ref(), *size, None))
 		} else {
 			self.value.clone()
 		}
@@ -282,7 +282,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 			Some(Value::Inline(value))
 		} else {
 			let hash = L::Hash::hash(value);
-			self.next_value_hash = Some(hash);
+			self.next_value_hash = Some((hash, value.len()));
 			// will be replace on encode
 			None	
 		};

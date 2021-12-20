@@ -192,7 +192,7 @@ fn detached_value<L: TrieLayout>(
 ) -> Option<Vec<u8>> {
 	let fetched;
 	match value {
-		ValuePlan::Node(hash_plan) => {
+		ValuePlan::Node(hash_plan, _size) => {
 			if let Some(value) = val_fetcher.fetch_value(&node_data[hash_plan.clone()], node_prefix) {
 				fetched = value;
 			} else {
@@ -404,8 +404,8 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 	///
 	/// Preconditions:
 	/// - if node is an extension node, then `children[0]` is Some.
-	fn encode_node(self, attached_hash: Option<&[u8]>) -> Vec<u8> {
-		let attached_hash = attached_hash.map(|h| crate::node::Value::Node(h, None));
+	fn encode_node(self, attached_hash: Option<(&[u8], usize)>) -> Vec<u8> {
+		let attached_hash = attached_hash.map(|(h, size)| crate::node::Value::Node(h, size, None));
 		match self.node {
 			Node::Empty =>
 				C::empty_node().to_vec(),
@@ -521,9 +521,9 @@ pub fn decode_compact_from_iter<'a, L, DB, I>(db: &mut DB, encoded: I)
 			// Since `advance_child_index` returned true, the preconditions for `encode_node` are
 			// satisfied.
 			let hash = last_entry.attached_value.as_ref().map(|value| {
-				db.insert(prefix.as_prefix(), value)
+				(value.len(), db.insert(prefix.as_prefix(), value))
 			});
-			let node_data = last_entry.encode_node(hash.as_ref().map(|h| h.as_ref()));
+			let node_data = last_entry.encode_node(hash.as_ref().map(|(size, h)| (h.as_ref(), *size)));
 			let node_hash = db.insert(
 				prefix.as_prefix(),
 				node_data.as_ref(),

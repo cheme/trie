@@ -39,8 +39,8 @@ where
 	fn decode(mut self, v: Value, prefix: Prefix, depth: u32) -> Result<Q::Item, TrieHash<L>, CError<L>> {
 		match v {
 			Value::Inline(value) => Ok(self.query.decode(value)),
-			Value::Node(_, Some(value)) =>	Ok(self.query.decode(value.as_slice())),
-			Value::Node(hash, None) => {
+			Value::Node(_, _, Some(value)) =>	Ok(self.query.decode(value.as_slice())),
+			Value::Node(hash, _, None) => {
 				let mut res = TrieHash::<L>::default();
 				res.as_mut().copy_from_slice(hash);
 				if let Some(value) = self.db.get(&res, prefix) {

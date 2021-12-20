@@ -73,7 +73,7 @@ pub enum Value<L: TrieLayout> {
 	/// Value bytes inlined in a trie node.
 	Inline(DBValue),
 	/// Hash of value bytes and value bytes when accessed.
-	Node(TrieHash<L>, Option<DBValue>),
+	Node(TrieHash<L>, usize, Option<DBValue>),
 	/// Hash of value bytes if calculated and value bytes.
 	/// The hash may be undefined until it node is added
 	/// to the db.
@@ -84,7 +84,7 @@ impl<L: TrieLayout> PartialEq<Self> for Value<L> {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Value::Inline(v), Value::Inline(ov)) => v == ov,
-			(Value::Node(h, _), Value::Node(oh, _)) => h == oh,
+			(Value::Node(h, _, _), Value::Node(oh, _, _)) => h == oh,
 			(Value::NewNode(Some(h), _), Value::NewNode(Some(oh), _)) => h == oh,
 			(Value::NewNode(_, v), Value::NewNode(_, ov)) => v == ov,
 			// Note that for uncalculated hash we do not calculate it and default to true.
@@ -98,10 +98,10 @@ impl<'a, L: TrieLayout> From<EncodedValue<'a>> for Value<L> {
 	fn from(v: EncodedValue<'a>) -> Self {
 		match v {
 			EncodedValue::Inline(value) => Value::Inline(value.to_vec()),
-			EncodedValue::Node(hash, value) => {
+			EncodedValue::Node(hash, size, value) => {
 				let mut h = TrieHash::<L>::default();
 				h.as_mut().copy_from_slice(hash);
-				Value::Node(h, value)
+				Value::Node(h, size, value)
 			},
 		}
 	}
@@ -151,8 +151,8 @@ impl<L: TrieLayout> Value<L> {
 		}
 		let value = match &*self {
 			Value::Inline(value) => EncodedValue::Inline(value.as_slice()),
-			Value::Node(hash, _value) => EncodedValue::Node(hash.as_ref(), None),
-			Value::NewNode(Some(hash), _value) => EncodedValue::Node(hash.as_ref(), None),
+			Value::Node(hash, size, _value) => EncodedValue::Node(hash.as_ref(), *size, None),
+			Value::NewNode(Some(hash), value) => EncodedValue::Node(hash.as_ref(), value.len(), None),
 			Value::NewNode(None, _value) => unreachable!("New external value are always added before encoding anode"),
 		};
 		value
@@ -166,8 +166,8 @@ impl<L: TrieLayout> Value<L> {
 		Ok(Some(match self {
 			Value::Inline(value) => value.clone(),
 			Value::NewNode(_, value) => value.clone(),
-			Value::Node(_, Some(value)) => value.clone(),
-			Value::Node(hash, None) => {
+			Value::Node(_, _, Some(value)) => value.clone(),
+			Value::Node(hash, _, None) => {
 				if let Some(value) = db.get(hash, prefix) {
 					value
 				} else {
@@ -215,7 +215,7 @@ impl<L: TrieLayout> Debug for Value<L> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			Self::Inline(value) => write!(fmt, "Some({:?})", ToHex(value)),
-			Self::Node(hash, _) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
+			Self::Node(hash, _, _) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
 			Self::NewNode(Some(hash), _) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
 			Self::NewNode(_hash, value) => write!(fmt, "Some({:?})", ToHex(value)),
 		}
@@ -745,7 +745,7 @@ where
 	fn replace_old_value(&mut self, old_value: &mut Option<Value<L>>, stored_value: Option<Value<L>>, prefix: Prefix) {
 		match &stored_value {
 			Some(Value::NewNode(Some(hash), _)) // also removing new node in case commit is called multiple times
-			| Some(Value::Node(hash, _)) => {
+			| Some(Value::Node(hash, _, _)) => {
 				self.death_row.insert((
 					hash.clone(),
 					(prefix.0.into(), prefix.1),

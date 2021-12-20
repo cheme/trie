@@ -95,7 +95,8 @@ impl<H: Hasher> NodeCodec<H> {
 				let bitmap = Bitmap::decode(&data[bitmap_range])?;
 				let value = if branch_has_value {
 					Some(if contains_hash {
-						ValuePlan::Node(input.take(H::LENGTH)?)
+						let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						ValuePlan::Node(input.take(H::LENGTH)?, size)
 					} else {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						ValuePlan::Inline(input.take(count)?)
@@ -136,7 +137,8 @@ impl<H: Hasher> NodeCodec<H> {
 				)?;
 				let partial_padding = nibble_ops::number_padding(nibble_count);
 				let value = if contains_hash {
-					ValuePlan::Node(input.take(H::LENGTH)?)
+					let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
+					ValuePlan::Node(input.take(H::LENGTH)?, size)
 				} else {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 					ValuePlan::Inline(input.take(count)?)
@@ -187,8 +189,9 @@ impl<H> NodeCodecT for NodeCodec<H>
 				Compact(value.len() as u32).encode_to(&mut output);
 				output.extend_from_slice(value);
 			},
-			Value::Node(hash, _) => {
+			Value::Node(hash, size, _) => {
 				debug_assert!(hash.len() == H::LENGTH);
+				Compact(size as u32).encode_to(&mut output);
 				output.extend_from_slice(hash);
 			},
 		}
@@ -237,8 +240,9 @@ impl<H> NodeCodecT for NodeCodec<H>
 				Compact(value.len() as u32).encode_to(&mut output);
 				output.extend_from_slice(value);
 			},
-			Some(Value::Node(hash, _)) => {
+			Some(Value::Node(hash, size, _)) => {
 				debug_assert!(hash.len() == H::LENGTH);
+				Compact(size as u32).encode_to(&mut output);
 				output.extend_from_slice(hash);
 			},
 			None => (),
