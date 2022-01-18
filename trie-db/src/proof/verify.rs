@@ -207,6 +207,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 		match self.node {
 			Node::Extension(_, child) if self.child_index == 0 => {
 				let child_ref = child.try_into().map_err(Error::InvalidChildReference)?;
+				// TODO here check eq stored hash if hash exists
 				self.children[self.child_index] = Some(child_ref);
 				self.child_index += 1;
 			},
@@ -214,6 +215,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 				while self.child_index < NIBBLE_LENGTH {
 					if let Some(child) = children[self.child_index] {
 						let child_ref = child.try_into().map_err(Error::InvalidChildReference)?;
+						// TODO here check eq stored hash if hash exists
 						self.children[self.child_index] = Some(child_ref);
 					}
 					self.child_index += 1;
@@ -234,30 +236,36 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	{
 		match child {
 			NodeHandle::Inline(data) =>
-				if data.is_empty() {
+					StackEntry::new(data, prefix, true),
+				/*if data.is_empty() {
 					let node_data = proof_iter.next().ok_or(Error::IncompleteProof)?;
 					StackEntry::new(node_data, prefix, false)
 				} else {
 					StackEntry::new(data, prefix, true)
-				},
+				},*/
 			NodeHandle::Hash(data) => {
 				let mut hash = TrieHash::<L>::default();
 				if data.len() != hash.as_ref().len() {
 					return Err(Error::InvalidChildReference(data.to_vec()))
 				}
 				hash.as_mut().copy_from_slice(data);
-				Err(Error::ExtraneousHashReference(hash))
+					let node_data = proof_iter.next().ok_or(Error::IncompleteProof)?;
+					// TODO check this stack entry hash is eq to read hash -> during complete children
+					StackEntry::new(node_data, prefix, false)
+//				Err(Error::ExtraneousHashReference(hash))
 			},
 		}
 	}
 
 	fn set_value(&mut self, value: &'a [u8]) {
 		self.value = if L::MAX_INLINE_VALUE.map(|max| value.len() < max as usize).unwrap_or(true) {
+			// TODO check value is same as the one we read
 			Some(Value::Inline(value))
 		} else {
 			let hash = L::Hash::hash(value);
 			self.next_value_hash = Some(hash);
 			// will be replace on encode
+			// TODO check next node in proof eq to value (and consume it)
 			None
 		};
 	}
@@ -282,6 +290,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 							},
 						ValueMatch::MatchesBranch =>
 							if let Some(value) = value {
+								// TODO value eq value instead of set. -> see todo in fn and do a check_value
 								self.set_value(value);
 							} else {
 								self.value = None;
@@ -372,7 +381,8 @@ fn match_key_to_branch_node<'a>(
 		if value.is_none() {
 			ValueMatch::MatchesBranch
 		} else {
-			ValueMatch::NotOmitted
+			ValueMatch::MatchesBranch
+			//ValueMatch::NotOmitted
 		}
 	} else {
 		let index =
