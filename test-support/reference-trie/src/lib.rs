@@ -36,8 +36,8 @@ pub mod node {
 }
 
 pub use substrate_like::{
-	trie_constants, HashedValueNoExt, HashedValueNoExtThreshold,
-	NodeCodec as ReferenceNodeCodecNoExtMeta, ReferenceTrieStreamNoExt,
+	trie_constants, HashedValueNoExt, HashedValueNoExtThreshold, HashedValueNoExtThresholdWithSize,
+	NodeCodec as ReferenceNodeCodecNoExtMeta, NodeCodecWithLen as ReferenceNodeCodecNoExtMetaWithLen, ReferenceTrieStreamNoExt,
 };
 
 /// Reference hasher is a keccak hasher.
@@ -49,6 +49,7 @@ macro_rules! test_layouts {
 	($test:ident, $test_internal:ident) => {
 		#[test]
 		fn $test() {
+			$test_internal::<reference_trie::HashedValueNoExtThresholdWithSize>();
 			$test_internal::<reference_trie::HashedValueNoExtThreshold>();
 			$test_internal::<reference_trie::HashedValueNoExt>();
 			$test_internal::<reference_trie::NoExtensionLayout>();

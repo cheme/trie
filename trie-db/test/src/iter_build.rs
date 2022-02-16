@@ -14,7 +14,7 @@
 
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	test_layouts, ExtensionLayout, HashedValueNoExt, HashedValueNoExtThreshold, NoExtensionLayout,
+	test_layouts, ExtensionLayout, HashedValueNoExt, HashedValueNoExtThreshold, HashedValueNoExtThresholdWithSize, NoExtensionLayout,
 	RefHasher,
 };
 use trie_db::{DBValue, TrieLayout};
@@ -64,6 +64,7 @@ fn test_iter<T: TrieLayout>(data: Vec<(Vec<u8>, Vec<u8>)>) {
 }
 
 fn compare_implementations(data: Vec<(Vec<u8>, Vec<u8>)>) {
+	test_iter::<HashedValueNoExtThresholdWithSize>(data.clone());
 	test_iter::<HashedValueNoExtThreshold>(data.clone());
 	test_iter::<HashedValueNoExt>(data.clone());
 	test_iter::<ExtensionLayout>(data.clone());
@@ -73,6 +74,7 @@ fn compare_implementations(data: Vec<(Vec<u8>, Vec<u8>)>) {
 }
 
 fn compare_implementations_prefixed(data: Vec<(Vec<u8>, Vec<u8>)>) {
+	compare_implementations_prefixed_internal::<HashedValueNoExtThresholdWithSize>(data.clone());
 	compare_implementations_prefixed_internal::<HashedValueNoExtThreshold>(data.clone());
 	compare_implementations_prefixed_internal::<HashedValueNoExt>(data.clone());
 	compare_implementations_prefixed_internal::<NoExtensionLayout>(data.clone());
@@ -84,6 +86,7 @@ fn compare_implementations_prefixed_internal<T: TrieLayout>(data: Vec<(Vec<u8>, 
 	reference_trie::compare_implementations::<T, _>(data, memdb, hashdb);
 }
 fn compare_implementations_h(data: Vec<(Vec<u8>, Vec<u8>)>) {
+	compare_implementations_prefixed_internal::<HashedValueNoExtThresholdWithSize>(data.clone());
 	compare_implementations_h_internal::<HashedValueNoExtThreshold>(data.clone());
 	compare_implementations_h_internal::<HashedValueNoExt>(data.clone());
 	compare_implementations_h_internal::<NoExtensionLayout>(data.clone());

@@ -24,6 +24,10 @@ pub struct HashedValueNoExt;
 /// as external node.
 pub struct HashedValueNoExtThreshold;
 
+/// No extension trie which stores value above a static size
+/// as external node. Store size of value in the parent node.
+pub struct HashedValueNoExtThresholdWithSize;
+
 impl TrieLayout for HashedValueNoExt {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
@@ -40,6 +44,15 @@ impl TrieLayout for HashedValueNoExtThreshold {
 
 	type Hash = RefHasher;
 	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher>;
+}
+
+impl TrieLayout for HashedValueNoExtThresholdWithSize {
+	const USE_EXTENSION: bool = false;
+	const ALLOW_EMPTY: bool = false;
+	const MAX_INLINE_VALUE: Option<u32> = Some(1);
+
+	type Hash = RefHasher;
+	type Codec = ReferenceNodeCodecNoExtMetaWithLen<RefHasher>;
 }
 
 /// Constants specific to encoding with external value node support.
@@ -89,8 +102,7 @@ impl<H: Hasher> NodeCodec<H> {
 				let bitmap = Bitmap::decode(&data[bitmap_range])?;
 				let value = if branch_has_value {
 					Some(if contains_hash {
-						let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
-						ValuePlan::Node(input.take(H::LENGTH)?, size)
+						ValuePlan::Node(input.take(H::LENGTH)?, None)
 					} else {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						ValuePlan::Inline(input.take(count)?)
@@ -131,8 +143,7 @@ impl<H: Hasher> NodeCodec<H> {
 				)?;
 				let partial_padding = nibble_ops::number_padding(nibble_count);
 				let value = if contains_hash {
-					let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
-					ValuePlan::Node(input.take(H::LENGTH)?, size)
+					ValuePlan::Node(input.take(H::LENGTH)?, None)
 				} else {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 					ValuePlan::Inline(input.take(count)?)
@@ -183,7 +194,209 @@ where
 				Compact(value.len() as u32).encode_to(&mut output);
 				output.extend_from_slice(value);
 			},
-			Value::Node(hash, size, _) => {
+			Value::Node(hash, _, _) => {
+				debug_assert!(hash.len() == H::LENGTH);
+				output.extend_from_slice(hash);
+			},
+		}
+		output
+	}
+
+	fn extension_node(
+		_partial: impl Iterator<Item = u8>,
+		_nbnibble: usize,
+		_child: ChildReference<<H as Hasher>::Out>,
+	) -> Vec<u8> {
+		unreachable!("Codec without extension.")
+	}
+
+	fn branch_node(
+		_children: impl Iterator<Item = impl Borrow<Option<ChildReference<<H as Hasher>::Out>>>>,
+		_maybe_value: Option<Value>,
+	) -> Vec<u8> {
+		unreachable!("Codec without extension.")
+	}
+
+	fn branch_node_nibbled(
+		partial: impl Iterator<Item = u8>,
+		number_nibble: usize,
+		children: impl Iterator<Item = impl Borrow<Option<ChildReference<<H as Hasher>::Out>>>>,
+		value: Option<Value>,
+	) -> Vec<u8> {
+		let contains_hash = matches!(&value, Some(Value::Node(..)));
+		let mut output = match (&value, contains_hash) {
+			(&None, _) =>
+				partial_from_iterator_encode(partial, number_nibble, NodeKind::BranchNoValue),
+			(_, false) =>
+				partial_from_iterator_encode(partial, number_nibble, NodeKind::BranchWithValue),
+			(_, true) =>
+				partial_from_iterator_encode(partial, number_nibble, NodeKind::HashedValueBranch),
+		};
+
+		let bitmap_index = output.len();
+		let mut bitmap: [u8; BITMAP_LENGTH] = [0; BITMAP_LENGTH];
+		(0..BITMAP_LENGTH).for_each(|_| output.push(0));
+		match value {
+			Some(Value::Inline(value)) => {
+				Compact(value.len() as u32).encode_to(&mut output);
+				output.extend_from_slice(value);
+			},
+			Some(Value::Node(hash, _, _)) => {
+				debug_assert!(hash.len() == H::LENGTH);
+				output.extend_from_slice(hash);
+			},
+			None => (),
+		}
+		Bitmap::encode(
+			children.map(|maybe_child| match maybe_child.borrow() {
+				Some(ChildReference::Hash(h)) => {
+					h.as_ref().encode_to(&mut output);
+					true
+				},
+				&Some(ChildReference::Inline(inline_data, len)) => {
+					inline_data.as_ref()[..len].encode_to(&mut output);
+					true
+				},
+				None => false,
+			}),
+			bitmap.as_mut(),
+		);
+		output[bitmap_index..bitmap_index + BITMAP_LENGTH]
+			.copy_from_slice(&bitmap[..BITMAP_LENGTH]);
+		output
+	}
+}
+
+#[derive(Default, Clone)]
+pub struct NodeCodecWithLen<H>(PhantomData<H>);
+
+impl<H: Hasher> NodeCodecWithLen<H> {
+	fn decode_plan_inner_hashed(data: &[u8]) -> Result<NodePlan, Error> {
+		let mut input = ByteSliceInput::new(data);
+
+		let header = NodeHeader::decode(&mut input)?;
+		let contains_hash = header.contains_hash_of_value();
+
+		let branch_has_value = if let NodeHeader::Branch(has_value, _) = &header {
+			*has_value
+		} else {
+			// alt_hash_branch
+			true
+		};
+
+		match header {
+			NodeHeader::Null => Ok(NodePlan::Empty),
+			NodeHeader::HashedValueBranch(nibble_count) | NodeHeader::Branch(_, nibble_count) => {
+				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
+				// check that the padding is valid (if any)
+				if padding && nibble_ops::pad_left(data[input.offset]) != 0 {
+					return Err(CodecError::from("Bad format"))
+				}
+				let partial = input.take(
+					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) /
+						nibble_ops::NIBBLE_PER_BYTE,
+				)?;
+				let partial_padding = nibble_ops::number_padding(nibble_count);
+				let bitmap_range = input.take(BITMAP_LENGTH)?;
+				let bitmap = Bitmap::decode(&data[bitmap_range])?;
+				let value = if branch_has_value {
+					Some(if contains_hash {
+						let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						ValuePlan::Node(input.take(H::LENGTH)?, Some(size))
+					} else {
+						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						ValuePlan::Inline(input.take(count)?)
+					})
+				} else {
+					None
+				};
+				let mut children = [
+					None, None, None, None, None, None, None, None, None, None, None, None, None,
+					None, None, None,
+				];
+				for i in 0..nibble_ops::NIBBLE_LENGTH {
+					if bitmap.value_at(i) {
+						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						let range = input.take(count)?;
+						children[i] = Some(if count == H::LENGTH {
+							NodeHandlePlan::Hash(range)
+						} else {
+							NodeHandlePlan::Inline(range)
+						});
+					}
+				}
+				Ok(NodePlan::NibbledBranch {
+					partial: NibbleSlicePlan::new(partial, partial_padding),
+					value,
+					children,
+				})
+			},
+			NodeHeader::HashedValueLeaf(nibble_count) | NodeHeader::Leaf(nibble_count) => {
+				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
+				// check that the padding is valid (if any)
+				if padding && nibble_ops::pad_left(data[input.offset]) != 0 {
+					return Err(CodecError::from("Bad format"))
+				}
+				let partial = input.take(
+					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) /
+						nibble_ops::NIBBLE_PER_BYTE,
+				)?;
+				let partial_padding = nibble_ops::number_padding(nibble_count);
+				let value = if contains_hash {
+					let size = <Compact<u32>>::decode(&mut input)?.0 as usize;
+					ValuePlan::Node(input.take(H::LENGTH)?, Some(size))
+				} else {
+					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+					ValuePlan::Inline(input.take(count)?)
+				};
+
+				Ok(NodePlan::Leaf {
+					partial: NibbleSlicePlan::new(partial, partial_padding),
+					value,
+				})
+			},
+		}
+	}
+}
+
+impl<H> NodeCodecT for NodeCodecWithLen<H>
+where
+	H: Hasher,
+{
+	const ESCAPE_HEADER: Option<u8> = Some(trie_constants::ESCAPE_COMPACT_HEADER);
+	type Error = Error;
+	type HashOut = H::Out;
+
+	fn hashed_null_node() -> <H as Hasher>::Out {
+		H::hash(<Self as NodeCodecT>::empty_node())
+	}
+
+	fn decode_plan(data: &[u8]) -> Result<NodePlan, Self::Error> {
+		Self::decode_plan_inner_hashed(data)
+	}
+
+	fn is_empty_node(data: &[u8]) -> bool {
+		data == <Self as NodeCodecT>::empty_node()
+	}
+
+	fn empty_node() -> &'static [u8] {
+		&[trie_constants::EMPTY_TRIE]
+	}
+
+	fn leaf_node(partial: Partial, value: Value) -> Vec<u8> {
+		let contains_hash = matches!(&value, Value::Node(..));
+		let mut output = if contains_hash {
+			partial_encode(partial, NodeKind::HashedValueLeaf)
+		} else {
+			partial_encode(partial, NodeKind::Leaf)
+		};
+		match value {
+			Value::Inline(value) => {
+				Compact(value.len() as u32).encode_to(&mut output);
+				output.extend_from_slice(value);
+			},
+			Value::Node(_, None, _) => unreachable!(),
+			Value::Node(hash, Some(size), _) => {
 				debug_assert!(hash.len() == H::LENGTH);
 				Compact(size as u32).encode_to(&mut output);
 				output.extend_from_slice(hash);
@@ -231,7 +444,8 @@ where
 				Compact(value.len() as u32).encode_to(&mut output);
 				output.extend_from_slice(value);
 			},
-			Some(Value::Node(hash, size, _)) => {
+			Some(Value::Node(_, None, _)) => unreachable!(),
+			Some(Value::Node(hash, Some(size), _)) => {
 				debug_assert!(hash.len() == H::LENGTH);
 				Compact(size as u32).encode_to(&mut output);
 				output.extend_from_slice(hash);

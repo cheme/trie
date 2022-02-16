@@ -306,7 +306,7 @@ impl Default for TrieSpec {
 #[derive(Default, Clone)]
 pub struct TrieFactory<L: TrieLayout> {
 	spec: TrieSpec,
-	layout: L,
+	_ph: core::marker::PhantomData<L>,
 }
 
 /// All different kinds of tries.
@@ -381,8 +381,8 @@ where
 	L: TrieLayout + 'db,
 {
 	/// Creates new factory.
-	pub fn new(spec: TrieSpec, layout: L) -> Self {
-		TrieFactory { spec, layout }
+	pub fn new(spec: TrieSpec, _layout: L) -> Self {
+		TrieFactory { spec, _ph: core::marker::PhantomData }
 	}
 
 	/// Create new immutable instance of Trie.

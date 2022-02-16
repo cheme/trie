@@ -397,7 +397,7 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 	/// Preconditions:
 	/// - if node is an extension node, then `children[0]` is Some.
 	fn encode_node(self, attached_hash: Option<(&[u8], usize)>) -> Vec<u8> {
-		let attached_hash = attached_hash.map(|(h, size)| crate::node::Value::Node(h, size, None));
+		let attached_hash = attached_hash.map(|(h, size)| crate::node::Value::Node(h, Some(size), None));
 		match self.node {
 			Node::Empty => C::empty_node().to_vec(),
 			Node::Leaf(partial, value) =>

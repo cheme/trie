@@ -75,7 +75,7 @@ pub enum Value<L: TrieLayout> {
 	/// Value bytes inlined in a trie node.
 	Inline(DBValue),
 	/// Hash of value bytes and value bytes when accessed.
-	Node(TrieHash<L>, usize, Option<DBValue>),
+	Node(TrieHash<L>, Option<usize>, Option<DBValue>),
 	/// Hash of value bytes if calculated and value bytes.
 	/// The hash may be undefined until it node is added
 	/// to the db.
@@ -162,7 +162,7 @@ impl<L: TrieLayout> Value<L> {
 			Value::Inline(value) => EncodedValue::Inline(value.as_slice()),
 			Value::Node(hash, size, _value) => EncodedValue::Node(hash.as_ref(), *size, None),
 			Value::NewNode(Some(hash), value) =>
-				EncodedValue::Node(hash.as_ref(), value.len(), None),
+				EncodedValue::Node(hash.as_ref(), Some(value.len()), None),
 			Value::NewNode(None, _value) =>
 				unreachable!("New external value are always added before encoding a node"),
 		};

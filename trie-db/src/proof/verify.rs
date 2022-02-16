@@ -134,7 +134,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 
 	fn value(&self) -> Option<Value> {
 		if let Some((hash, size)) = self.next_value_hash.as_ref() {
-			Some(Value::Node(hash.as_ref(), *size, None))
+			Some(Value::Node(hash.as_ref(), Some(*size), None))
 		} else {
 			self.value.clone()
 		}

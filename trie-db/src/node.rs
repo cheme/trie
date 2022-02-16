@@ -50,7 +50,7 @@ pub enum Value<'a> {
 	Inline(&'a [u8]),
 	/// Hash byte slice as stored in a trie node,
 	/// and the actual value when accessed.
-	Node(&'a [u8], usize, Option<DBValue>),
+	Node(&'a [u8], Option<usize>, Option<DBValue>),
 }
 
 impl<'a> Value<'a> {
@@ -144,7 +144,7 @@ pub enum ValuePlan {
 	Inline(Range<usize>),
 	/// Range for hash in encoded node and original
 	/// value size.
-	Node(Range<usize>, usize),
+	Node(Range<usize>, Option<usize>),
 }
 
 impl ValuePlan {

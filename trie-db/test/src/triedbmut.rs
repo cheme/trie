@@ -18,7 +18,7 @@ use log::debug;
 use memory_db::{MemoryDB, PrefixedKey};
 use reference_trie::{
 	reference_trie_root_iter_build as reference_trie_root, test_layouts, ExtensionLayout,
-	HashedValueNoExt, HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
+	HashedValueNoExt, HashedValueNoExtThreshold, HashedValueNoExtThresholdWithSize, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
 	ReferenceNodeCodecNoExt,
 };
 use trie_db::{DBValue, NodeCodec, TrieDBMut, TrieError, TrieLayout, TrieMut, Value};
@@ -66,6 +66,7 @@ fn reference_hashed_null_node<T: TrieLayout>() -> <T::Hash as Hasher>::Out {
 #[test]
 fn playpen() {
 	env_logger::init();
+	playpen_internal::<HashedValueNoExtThresholdWithSize>();
 	playpen_internal::<HashedValueNoExtThreshold>();
 	playpen_internal::<HashedValueNoExt>();
 	playpen_internal::<NoExtensionLayout>();
@@ -651,4 +652,10 @@ fn register_proof_without_value() {
 			Err(TrieError::IncompleteDatabase(..))
 		));
 	}
+}
+
+
+#[test]
+fn register_proof_without_size() {
+	// TODO access size get proof len, then access value get proof len: assert diff > value.len
 }
