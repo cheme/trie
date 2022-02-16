@@ -186,6 +186,25 @@ impl<L: TrieLayout> Value<L> {
 				},
 		}))
 	}
+
+	fn in_memory_size(
+		&self,
+		prefix: Prefix,
+		db: &dyn HashDB<L::Hash, DBValue>,
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		Ok(Some(match self {
+			Value::Inline(value) => value.len(),
+			Value::NewNode(_, value) => value.len(),
+			Value::Node(_, Some(size), _) => *size,
+			Value::Node(_, _, Some(value)) => value.len(),
+			Value::Node(hash, _, None) =>
+				if let Some(value) = db.get(hash, prefix) {
+					value.len()
+				} else {
+					return Err(Box::new(TrieError::IncompleteDatabase(hash.clone())))
+				},
+		}))
+	}
 }
 
 /// Node types in the Trie.
@@ -745,6 +764,160 @@ where
 			handle = child;
 		}
 	}
+
+	// TODO avoid redundant ocde with fn lookup (pass fn -> R: Default)
+	fn lookup_contains<'x, 'key>(
+		&'x self,
+		mut partial: NibbleSlice<'key>,
+		_full_key: &'key [u8],
+		handle: &NodeHandle<TrieHash<L>>,
+	) -> Result<bool, TrieHash<L>, CError<L>>
+	where
+		'x: 'key,
+	{
+		let mut handle = handle;
+		loop {
+			let (mid, child) = match handle {
+				NodeHandle::Hash(hash) =>
+					return Lookup::<L, _> {
+						db: &self.db,
+						query: |v: &[u8]| v.to_vec(),
+						hash: *hash,
+					}
+					.look_up_contains(partial),
+				NodeHandle::InMemory(handle) => match &self.storage[handle] {
+					Node::Empty => return Ok(Default::default()),
+					Node::Leaf(key, _) =>
+						if NibbleSlice::from_stored(key) == partial {
+							return Ok(true)
+						} else {
+							return Ok(Default::default())
+						},
+					Node::Extension(slice, child) => {
+						let slice = NibbleSlice::from_stored(slice);
+						if partial.starts_with(&slice) {
+							(slice.len(), child)
+						} else {
+							return Ok(Default::default())
+						}
+					},
+					Node::Branch(children, value) =>
+						if partial.is_empty() {
+							return Ok(if let Some(_) = value.as_ref() {
+								true
+							} else {
+								Default::default()
+							})
+						} else {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1, child),
+								None => return Ok(Default::default()),
+							}
+						},
+					Node::NibbledBranch(slice, children, value) => {
+						let slice = NibbleSlice::from_stored(slice);
+						if slice == partial {
+							return Ok(if let Some(_) = value.as_ref() {
+								true
+							} else {
+								Default::default()
+							})
+						} else if partial.starts_with(&slice) {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1 + slice.len(), child),
+								None => return Ok(Default::default()),
+							}
+						} else {
+							return Ok(Default::default())
+						}
+					},
+				},
+			};
+
+			partial = partial.mid(mid);
+			handle = child;
+		}
+	}
+
+	// TODO factor in mem part
+	fn lookup_size<'x, 'key>(
+		&'x self,
+		mut partial: NibbleSlice<'key>,
+		full_key: &'key [u8],
+		handle: &NodeHandle<TrieHash<L>>,
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>>
+	where
+		'x: 'key,
+	{
+		let mut handle = handle;
+		let prefix = (full_key, None);
+		loop {
+			let (mid, child) = match handle {
+				NodeHandle::Hash(hash) =>
+					return Lookup::<L, _> {
+						db: &self.db,
+						query: |v: &[u8]| v.to_vec(),
+						hash: *hash,
+					}
+					.look_up_size(partial),
+				NodeHandle::InMemory(handle) => match &self.storage[handle] {
+					Node::Empty => return Ok(None),
+					Node::Leaf(key, value) =>
+						if NibbleSlice::from_stored(key) == partial {
+							return Ok(value.in_memory_size(prefix, self.db)?)
+						} else {
+							return Ok(None)
+						},
+					Node::Extension(slice, child) => {
+						let slice = NibbleSlice::from_stored(slice);
+						if partial.starts_with(&slice) {
+							(slice.len(), child)
+						} else {
+							return Ok(None)
+						}
+					},
+					Node::Branch(children, value) =>
+						if partial.is_empty() {
+							return Ok(if let Some(v) = value.as_ref() {
+								v.in_memory_size(prefix, self.db)?
+							} else {
+								None
+							})
+						} else {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1, child),
+								None => return Ok(None),
+							}
+						},
+					Node::NibbledBranch(slice, children, value) => {
+						let slice = NibbleSlice::from_stored(slice);
+						if slice == partial {
+							return Ok(if let Some(v) = value.as_ref() {
+								v.in_memory_size(prefix, self.db)?
+							} else {
+								None
+							})
+						} else if partial.starts_with(&slice) {
+							let idx = partial.at(0);
+							match children[idx as usize].as_ref() {
+								Some(child) => (1 + slice.len(), child),
+								None => return Ok(None),
+							}
+						} else {
+							return Ok(None)
+						}
+					},
+				},
+			};
+
+			partial = partial.mid(mid);
+			handle = child;
+		}
+	}
+
 
 	/// Insert a key-value pair into the trie, creating new nodes if necessary.
 	fn insert_at(
@@ -1739,6 +1912,20 @@ where
 		'x: 'key,
 	{
 		self.lookup(NibbleSlice::new(key), key, &self.root_handle)
+	}
+
+	fn contains(
+		&self,
+		key: &[u8],
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+		self.lookup_contains(NibbleSlice::new(key), key, &self.root_handle)
+	}
+
+	fn get_size(
+		&self,
+		key: &[u8],
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		self.lookup_size(NibbleSlice::new(key), key, &self.root_handle)
 	}
 
 	fn insert(

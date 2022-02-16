@@ -141,6 +141,22 @@ where
 		Lookup::<L, Q> { db: self.db, query, hash: *self.root }.look_up(NibbleSlice::new(key))
 	}
 
+	fn contains(
+		&self,
+		key: &[u8],
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+		let query = |v: &[u8]| v.to_vec();
+		Lookup::<L, _> { db: self.db, query, hash: *self.root }.look_up_contains(NibbleSlice::new(key))
+	}
+
+	fn get_size(
+		&self,
+		key: &[u8],
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		let query = |v: &[u8]| v.to_vec();
+		Lookup::<L, _> { db: self.db, query, hash: *self.root }.look_up_size(NibbleSlice::new(key))
+	}
+
 	fn iter<'a>(
 		&'a self,
 	) -> Result<

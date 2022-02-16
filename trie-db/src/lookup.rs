@@ -43,26 +43,62 @@ where
 		v: Value,
 		prefix: Prefix,
 		depth: u32,
-	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
-		match v {
-			Value::Inline(value) => Ok(self.query.decode(value)),
-			Value::Node(_, _, Some(value)) => Ok(self.query.decode(value.as_slice())),
+	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+		Ok(Some(match v {
+			Value::Inline(value) => self.query.decode(value),
+			Value::Node(_, _, Some(value)) => self.query.decode(value.as_slice()),
 			Value::Node(hash, _, None) => {
 				let mut res = TrieHash::<L>::default();
 				res.as_mut().copy_from_slice(hash);
 				if let Some(value) = self.db.get(&res, prefix) {
 					self.query.record(&res, &value, depth);
-					Ok(self.query.decode(value.as_slice()))
+					self.query.decode(value.as_slice())
 				} else {
-					Err(Box::new(TrieError::IncompleteDatabase(res)))
+					return Err(Box::new(TrieError::IncompleteDatabase(res)))
 				}
 			},
-		}
+		}))
+	}
+
+	fn contains(
+		self,
+		_v: Value,
+		_prefix: Prefix,
+		_depth: u32,
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+		Ok(true)
+	}
+
+	fn size(
+		mut self,
+		v: Value,
+		prefix: Prefix,
+		depth: u32,
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		Ok(Some(match v {
+			Value::Inline(value) => value.len(),
+			Value::Node(_, Some(size), _) => size,
+			Value::Node(_, _, Some(value)) => value.len(),
+			Value::Node(hash, _, None) => {
+				let mut res = TrieHash::<L>::default();
+				res.as_mut().copy_from_slice(hash);
+				if let Some(value) = self.db.get(&res, prefix) {
+					self.query.record(&res, &value, depth);
+					value.len()
+				} else {
+					return Err(Box::new(TrieError::IncompleteDatabase(res)))
+				}
+			},
+		}))
 	}
 
 	/// Look up the given key. If the value is found, it will be passed to the given
 	/// function to decode or copy.
-	pub fn look_up(mut self, key: NibbleSlice) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+	pub(crate) fn look_up_with<R: Default>(
+		mut self,
+		key: NibbleSlice,
+		apply: fn (Self, Value, Prefix, u32) -> Result<R, TrieHash<L>, CError<L>>,
+	) -> Result<R, TrieHash<L>, CError<L>> {
 		let mut partial = key;
 		let mut key_nibbles = 0;
 
@@ -95,8 +131,8 @@ where
 				let next_node = match decoded {
 					Node::Leaf(slice, value) =>
 						return Ok(match slice == partial {
-							true => Some(self.decode(value, full_key, depth)?),
-							false => None,
+							true => apply(self, value, full_key, depth)?,
+							false => Default::default(),
 						}),
 					Node::Extension(slice, item) =>
 						if partial.starts_with(&slice) {
@@ -104,14 +140,14 @@ where
 							key_nibbles += slice.len();
 							item
 						} else {
-							return Ok(None)
+							return Ok(Default::default())
 						},
 					Node::Branch(children, value) => match partial.is_empty() {
 						true =>
 							if let Some(value) = value {
-								return Ok(Some(self.decode(value, full_key, depth)?))
+								return apply(self, value, full_key, depth)
 							} else {
-								return Ok(None)
+								return Ok(Default::default())
 							},
 						false => match children[partial.at(0) as usize] {
 							Some(x) => {
@@ -119,20 +155,20 @@ where
 								key_nibbles += 1;
 								x
 							},
-							None => return Ok(None),
+							None => return Ok(Default::default()),
 						},
 					},
 					Node::NibbledBranch(slice, children, value) => {
 						if !partial.starts_with(&slice) {
-							return Ok(None)
+							return Ok(Default::default())
 						}
 
 						match partial.len() == slice.len() {
 							true =>
 								if let Some(value) = value {
-									return Ok(Some(self.decode(value, full_key, depth)?))
+									return apply(self, value, full_key, depth)
 								} else {
-									return Ok(None)
+									return Ok(Default::default())
 								},
 							false => match children[partial.at(slice.len()) as usize] {
 								Some(x) => {
@@ -140,11 +176,11 @@ where
 									key_nibbles += slice.len() + 1;
 									x
 								},
-								None => return Ok(None),
+								None => return Ok(Default::default()),
 							},
 						}
 					},
-					Node::Empty => return Ok(None),
+					Node::Empty => return Ok(Default::default()),
 				};
 
 				// check if new node data is inline or hash.
@@ -160,6 +196,22 @@ where
 				}
 			}
 		}
-		Ok(None)
+		Ok(Default::default())
+	}
+
+	/// Look up the given key. If the value is found, it will be passed to the given
+	/// function to decode or copy.
+	pub fn look_up(self, key: NibbleSlice) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+		self.look_up_with(key, Self::decode)
+	}
+
+	/// Look up the given key. Check if value exists.
+	pub fn look_up_contains(self, key: NibbleSlice) -> Result<bool, TrieHash<L>, CError<L>> {
+		self.look_up_with(key, Self::contains)
+	}
+
+	/// Look up the given key. Check value size if it exists.
+	pub fn look_up_size(self, key: NibbleSlice) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		self.look_up_with(key, Self::size)
 	}
 }

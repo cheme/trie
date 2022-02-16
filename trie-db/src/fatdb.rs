@@ -63,6 +63,10 @@ where
 		self.raw.contains(L::Hash::hash(key).as_ref())
 	}
 
+	fn get_size(&self, key: &[u8]) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		self.raw.get_size(L::Hash::hash(key).as_ref())
+	}
+
 	fn get_with<'a, 'key, Q: Query<L::Hash>>(
 		&'a self,
 		key: &'key [u8],

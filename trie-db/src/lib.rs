@@ -206,9 +206,11 @@ pub trait Trie<L: TrieLayout> {
 	}
 
 	/// Does the trie contain a given key?
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
-		self.get(key).map(|x| x.is_some())
-	}
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>>;
+
+	/// Get size of value if value exists. Depending on layout, this
+	/// can require to access the full value.
+	fn get_size(&self, key: &[u8]) -> Result<Option<usize>, TrieHash<L>, CError<L>>;
 
 	/// What is the value of the given key in this trie?
 	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
@@ -256,9 +258,11 @@ pub trait TrieMut<L: TrieLayout> {
 	fn is_empty(&self) -> bool;
 
 	/// Does the trie contain a given key?
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
-		self.get(key).map(|x| x.is_some())
-	}
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>>;
+
+	/// Get size of value if value exists. Depending on layout, this
+	/// can require to access the full value.
+	fn get_size(&self, key: &[u8]) -> Result<Option<usize>, TrieHash<L>, CError<L>>;
 
 	/// What is the value of the given key in this trie?
 	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
@@ -342,6 +346,10 @@ impl<'db, L: TrieLayout> Trie<L> for TrieKinds<'db, L> {
 
 	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
 		wrapper!(self, contains, key)
+	}
+
+	fn get_size(&self, key: &[u8]) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		wrapper!(self, get_size, key)
 	}
 
 	fn get_with<'a, 'key, Q: Query<L::Hash>>(
