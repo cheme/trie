@@ -789,6 +789,7 @@ where
 				Node::from_node_owned(&node, &mut self.storage)
 			},
 			None => {
+				// TODO get_or_insert_node that do cache encoded directly
 				let node_encoded = self
 					.db
 					.get(&hash, key)

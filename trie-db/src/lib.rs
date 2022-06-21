@@ -18,6 +18,8 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+use hashbrown::HashMap;
+
 #[cfg(feature = "std")]
 mod rstd {
 	pub use std::{
@@ -216,6 +218,129 @@ impl RecordedForKey {
 	/// Is `self` equal to [`Self::None`]?
 	pub fn is_none(&self) -> bool {
 		matches!(self, Self::None)
+	}
+}
+
+/// Context is used to register access (act as recorder),
+/// but also allow implementation and use of caching (both trie
+/// nodes and content by key).
+pub trait Context<NC: NodeCodec> {
+	/// We start record node, ensure we dont hit direct value or hash cache.
+	/// Warning this does not empty the current recording (just ensure we record
+	/// trie as needed).
+	fn restart_record_node(&mut self);
+
+	/// Lookup value for the given `key`.
+	///
+	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated
+	/// value.
+	///
+	/// [`Self::cache_data_for_key`] is used to make the cache aware of data that is associated
+	/// to a `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of always returning the correct value
+	/// for the current trie root.
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<NC::HashOut>>;
+
+	/// Cache the given `value` for the given `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of caching `value` for the current
+	/// trie root.
+	///
+	/// This recored a direct access. TODO TrieAccess::Value and TRieAccess::Cache and
+	/// TrieAccess::NonExisting
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<NC::HashOut>);
+
+	/// Get or insert a [`NodeOwned`].
+	///
+	/// The cache implementation should look up based on the given `hash` if the node is already
+	/// known. If the node is not yet known, the given `fetch_node` function can be used to fetch
+	/// the particular node.
+	///
+	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
+	///
+	/// This recored a NodeOwned trie access. TODO TrieAccess::NodeOwned
+	fn get_or_insert_node(
+		&mut self,
+		hash: NC::HashOut,
+		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
+	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+
+	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
+	///
+	/// This recored a NodeOwned trie access. TODO remove TrieAccess::NodeOwned
+	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+
+	/// Record the given [`TrieAccess`].
+	///
+	/// TODO remove
+	fn record<'a>(&mut self, access: TrieAccess<'a, NC::HashOut>);
+
+	/// Check if we have recorded any trie nodes for the given `key`.
+	///
+	/// Returns [`RecordedForKey`] to express the state of the recorded trie nodes.
+	///
+	/// TODO remove should be part of logic of lookup_value_for_key
+	fn trie_nodes_recorded_for_key(&self, key: &[u8]) -> RecordedForKey;
+}
+
+/// Impl of context example, with recording and simple caching.
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct ContextImpl<NC: NodeCodec> {
+	nodes: Vec<(NC::HashOut, Vec<u8>)>,
+	recorded_keys: HashMap<Vec<u8>, RecordedForKey>,
+}
+
+impl<NC: NodeCodec> Default for ContextImpl<NC> {
+	fn default() -> Self {
+		ContextImpl::new()
+	}
+}
+
+impl<NC: NodeCodec> ContextImpl<NC> {
+	/// Create a new `Recorder` which records all given nodes.
+	pub fn new() -> Self {
+		Self { nodes: Default::default(), recorded_keys: Default::default() }
+	}
+
+	/// Drain all visited records.
+	pub fn drain(&mut self) -> Vec<(NC::HashOut, Vec<u8>)> {
+		self.recorded_keys.clear();
+		crate::rstd::mem::take(&mut self.nodes)
+	}
+}
+
+impl<NC: NodeCodec> TrieRecorder<NC::HashOut> for ContextImpl<NC> {
+	fn record<'a>(&mut self, access: TrieAccess<'a, NC::HashOut>) {
+		match access {
+			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
+				self.nodes.push((hash, encoded_node.to_vec()));
+			},
+			TrieAccess::NodeOwned { hash, node_owned, .. } => {
+				self.nodes.push((hash, node_owned.to_encoded::<NC>()));
+			},
+			TrieAccess::Value { hash, value, full_key } => {
+				self.nodes.push((hash, value.to_vec()));
+				self.recorded_keys.entry(full_key.to_vec()).insert(RecordedForKey::Value);
+			},
+			TrieAccess::Hash { full_key } => {
+				self.recorded_keys.entry(full_key.to_vec()).or_insert(RecordedForKey::Hash);
+			},
+			TrieAccess::NonExisting { full_key } => {
+				// We handle the non existing value/hash like having recorded the value.
+				self.recorded_keys.entry(full_key.to_vec()).insert(RecordedForKey::Value);
+			},
+		}
+	}
+
+	fn trie_nodes_recorded_for_key(&self, key: &[u8]) -> RecordedForKey {
+		self.recorded_keys.get(key).copied().unwrap_or(RecordedForKey::None)
 	}
 }
 

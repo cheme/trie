@@ -540,6 +540,7 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
+			// TODO get_or_insert_node that record directly
 			let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
 				Some(value) => value,
 				None =>

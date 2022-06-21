@@ -154,6 +154,7 @@ where
 			NodeHandle::Hash(data) => {
 				let node_hash = decode_hash::<L::Hash>(data)
 					.ok_or_else(|| Box::new(TrieError::InvalidHash(parent_hash, data.to_vec())))?;
+					// TODO get_or_insert_node that record directly
 				let node_data = self.db.get(&node_hash, partial_key).ok_or_else(|| {
 					if partial_key == EMPTY_PREFIX {
 						Box::new(TrieError::InvalidStateRoot(node_hash))
