@@ -23,7 +23,7 @@ use crate::{
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
-	Bytes, CError, CachedValue, Context, DBValue, Result, TrieAccess, TrieCache, TrieError,
+	Bytes, CError, CachedValue, Context, DBValue, Result, TrieCache, TrieError,
 	TrieHash, TrieLayout, TrieMut, TrieRecorder,
 };
 
@@ -178,25 +178,20 @@ impl<L: TrieLayout> Value<L> {
 		&self,
 		prefix: Prefix,
 		db: &dyn HashDB<L::Hash, DBValue>,
-		recorder: &Option<core::cell::RefCell<&mut dyn TrieRecorder<TrieHash<L>>>>,
-		full_key: &[u8],
+		_recorder: &Option<core::cell::RefCell<&mut dyn TrieRecorder<TrieHash<L>>>>,
+		context: &core::cell::RefCell<&mut dyn Context<L>>,
+		_full_key: &[u8],
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
 		Ok(Some(match self {
 			Value::Inline(value) => value.to_vec(),
 			Value::NewNode(_, value) => value.to_vec(),
-			Value::Node(hash) =>
-				if let Some(value) = db.get(hash, prefix) {
-					recorder.as_ref().map(|r| {
-						r.borrow_mut().record(TrieAccess::Value {
-							hash: *hash,
-							value: value.as_slice().into(),
-							full_key,
-						})
-					});
-
-					value
-				} else {
-					return Err(Box::new(TrieError::IncompleteDatabase(hash.clone())))
+			Value::Node(hash) => match 
+				context.borrow_mut().get_or_insert_node(*hash, true, &mut ||
+					db
+					.get(hash, prefix)
+					.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(*hash))))? {
+					NodeOwned::Value(data, _) => data.clone().to_vec(), // TODO remove Value from node
+					_ => return Err(Box::new(TrieError::IncompleteDatabase(*hash))),
 				},
 		}))
 	}
@@ -270,7 +265,8 @@ where
 }
 
 impl<L: TrieLayout> Node<L> {
-	// load an inline node into memory or get the hash to do the lookup later.
+	// load an inline node into memory or get the hash to do the lookup later. TODO seem useless
+	// now??
 	fn inline_or_hash(
 		parent_hash: TrieHash<L>,
 		child: EncodedNodeHandle,
@@ -304,7 +300,7 @@ impl<L: TrieLayout> Node<L> {
 		}
 	}
 
-	// Decode a node from encoded bytes.
+	// Decode a node from encoded bytes. TODO seem useless now
 	fn from_encoded<'a, 'b>(
 		node_hash: TrieHash<L>,
 		data: &'a [u8],
@@ -783,31 +779,17 @@ where
 		// the node if it wasn't there, because we only access the node while computing
 		// a new trie (aka some branch). We assume that this node isn't that important
 		// to have it being cached.
-		let node = match self.cache.as_mut().and_then(|c| c.get_node(&hash)) {
-			Some(node) => {
-				if let Some(recorder) = self.recorder.as_mut() {
-					recorder.borrow_mut().record(TrieAccess::NodeOwned { hash, node_owned: &node });
-				}
-
-				Node::from_node_owned(&node, &mut self.storage)
-			},
-			None => {
-				// TODO get_or_insert_node that do cache encoded directly
-				let node_encoded = self
+		// TODO self.context.disable_cache_write(); so we do no update and enable afteward.
+		// could also just be a bool in cache that is set before using it in triedbmut (no need
+		// to be part of the trait).
+		let mut context = self.context.borrow_mut();
+		let node = context.get_or_insert_node(hash, false, &mut || {
+		 self
 					.db
 					.get(&hash, key)
-					.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
-
-				if let Some(recorder) = self.recorder.as_mut() {
-					recorder.borrow_mut().record(TrieAccess::EncodedNode {
-						hash,
-						encoded_node: node_encoded.as_slice().into(),
-					});
-				}
-
-				Node::from_encoded(hash, &node_encoded, &mut self.storage)?
-			},
-		};
+					.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))
+		})?;
+		let node = Node::from_node_owned(&node, &mut self.storage);
 
 		Ok(self.storage.alloc(Stored::Cached(node, hash)))
 	}
@@ -882,6 +864,7 @@ where
 								prefix,
 								self.db,
 								&self.recorder,
+								&self.context,
 								full_key,
 							)?)
 						} else {
@@ -902,6 +885,7 @@ where
 									prefix,
 									self.db,
 									&self.recorder,
+									&self.context,
 									full_key,
 								)?
 							} else {
@@ -922,6 +906,7 @@ where
 									prefix,
 									self.db,
 									&self.recorder,
+									&self.context,
 									full_key,
 								)?
 							} else {
@@ -1813,6 +1798,7 @@ where
 		#[cfg(feature = "std")]
 		trace!(target: "trie", "{:?} nodes to remove from db", self.death_row.len());
 		for (hash, prefix) in self.death_row.drain() {
+			// TODO can drop from cache
 			self.db.remove(&hash, (&prefix.0[..], prefix.1));
 		}
 
@@ -1824,9 +1810,7 @@ where
 		match self.storage.destroy(handle) {
 			Stored::New(node) => {
 				// Reconstructs the full key
-				let full_key = self.cache.as_ref().and_then(|_| {
-					node.partial_key().and_then(|k| Some(NibbleSlice::from_stored(k).into()))
-				});
+				let full_key = 	node.partial_key().and_then(|k| Some(NibbleSlice::from_stored(k).into()));
 
 				let mut k = NibbleVec::new();
 
@@ -1867,20 +1851,16 @@ where
 
 	/// Cache the given `encoded` node.
 	fn cache_node(&mut self, hash: TrieHash<L>, encoded: &[u8], full_key: Option<NibbleVec>) {
-		// If we have a cache, cache our node directly.
-		if let Some(cache) = self.cache.as_mut() {
-			let node = cache.get_or_insert_node(hash, &mut || {
-				Ok(L::Codec::decode(&encoded)
-					.ok()
-					.and_then(|n| n.to_owned_node::<L>().ok())
-					.expect("Just encoded the node, so it should decode without any errors; qed"))
-			});
+		let context = self.context.get_mut();
+			let node = context.get_or_insert_node(hash, false, &mut || Ok(encoded.to_vec()));
 
 			// `node` should always be `OK`, but let's play it safe.
 			let node = if let Ok(node) = node { node } else { return };
 
 			let mut values_to_cache = Vec::new();
 
+			// TODO value to cache shoul follow an insert call (with original key) -> remove the whole
+			// following block.
 			// If the given node has data attached, the `full_key` is the full key to this node.
 			if let Some(full_key) = full_key {
 				node.data().and_then(|v| node.data_hash().map(|h| (&full_key, v, h))).map(
@@ -1917,8 +1897,7 @@ where
 			}
 
 			drop(node);
-			values_to_cache.into_iter().for_each(|(k, v)| cache.cache_value_for_key(&k, v));
-		}
+			values_to_cache.into_iter().for_each(|(k, v)| context.cache_value_for_key(&k, v));
 	}
 
 	/// Cache the given `value`.
