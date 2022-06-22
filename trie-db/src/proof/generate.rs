@@ -251,7 +251,6 @@ where
 		let mut context = Recorder::<L>::new();
 		let expected_value = {
 			let trie = TrieDBBuilder::<L>::new(db, root)
-				.with_recorder(&mut recorder)
 				.build(&mut context);
 			trie.get(key_bytes)?
 		};

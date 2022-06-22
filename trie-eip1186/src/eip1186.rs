@@ -21,7 +21,6 @@ where
 
 	let item = {
 		let trie = TrieDBBuilder::<L>::new(db, root)
-			.with_recorder(&mut recorder)
 			.build(&mut context);
 		trie.get(key)?
 	};

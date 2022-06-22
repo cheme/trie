@@ -19,8 +19,8 @@ use crate::{
 	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
-	Bytes, CError, CachedValue, Context, DBValue, Query, Result, TrieAccess,
-	TrieCache, TrieError, TrieHash, TrieLayout, TrieRecorder,
+	Bytes, CError, Context, DBValue, Query, Result, TrieAccess, TrieError,
+	TrieHash, TrieLayout,
 };
 use hash_db::{HashDBRef, Hasher, Prefix};
 
@@ -32,18 +32,14 @@ pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
 	pub query: Q,
 	/// Hash to start at
 	pub hash: TrieHash<L>,
-	/// Optional cache that should be used to speed up the lookup.
-	pub cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
-	/// Optional recorder that will be called to record all trie accesses.
-	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
 	/// TODO
 	pub context: &'cache mut dyn Context<L>,
 }
 
 impl<'a, 'cache, L, Q> Lookup<'a, 'cache, L, Q>
 where
-		L: TrieLayout,
-		Q: Query<L::Hash>,
+	L: TrieLayout,
+	Q: Query<L::Hash>,
 {
 	/// Load the given value.
 	///
@@ -56,7 +52,6 @@ where
 		prefix: Prefix,
 		_full_key: &[u8],
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		_recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 		context: &mut dyn Context<L>,
 		query: Q,
 	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
@@ -93,17 +88,14 @@ where
 		v: ValueOwned<TrieHash<L>>,
 		prefix: Prefix,
 		full_key: &[u8],
-		_cache: &mut dyn crate::TrieCache<L::Codec>,
 		context: &mut dyn Context<L>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
 			ValueOwned::Node(hash) => {
 				let node = context.get_or_insert_node(hash, true, &mut || {
-					db
-						.get(&hash, prefix)
+					db.get(&hash, prefix)
 						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))
 				})?;
 
@@ -115,25 +107,15 @@ where
 					)
 					.clone();
 
-					if let Some(recorder) = recorder {
-						recorder.record(TrieAccess::Value {
-							hash,
-							value: value.as_ref().into(),
-							full_key,
-						});
-					}
+					// TODO should be at top level (when querying look) only.
+					context.record(TrieAccess::Value {
+						hash,
+						value: value.as_ref().into(),
+						full_key,
+					});
 
-					Ok((value, hash))
+				Ok((value, hash))
 			},
-		}
-	}
-
-	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, TrieHash<L>>)
-	where
-			TrieHash<L>: 'b,
-	{
-		if let Some(recorder) = self.recorder.as_mut() {
-			recorder.record(get_access());
 		}
 	}
 
@@ -144,14 +126,11 @@ where
 	/// The given `full_key` should be the full key to the data that is requested. This will
 	/// be used when there is a cache to potentially speed up the lookup.
 	pub fn look_up(
-		mut self,
+		self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
 	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
-		match self.cache.take() {
-			Some(cache) => self.look_up_with_cache(full_key, nibble_key, cache),
-			None => self.look_up_without_cache(nibble_key, full_key, Self::load_value),
-		}
+			self.look_up_without_cache(nibble_key, full_key, Self::load_value)
 	}
 
 	/// Look up the value hash for the given `nibble_key`.
@@ -159,166 +138,31 @@ where
 	/// The given `full_key` should be the full key to the data that is requested. This will
 	/// be used when there is a cache to potentially speed up the lookup.
 	pub fn look_up_hash(
-		mut self,
+		self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
 	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
-		match self.cache.take() {
-			Some(cache) => self.look_up_hash_with_cache(full_key, nibble_key, cache),
-			None => self.look_up_without_cache(
+			self.look_up_without_cache(
 				nibble_key,
 				full_key,
-				|v, _, full_key, _, recorder, context, _| {
+				|v, _, full_key, _, context, _| {
 					Ok(match v {
 						Value::Inline(v) => {
 							let hash = L::Hash::hash(&v);
 
-							// TODO this should be recorded with `cache_value_for_key`. 
-							context.record(TrieAccess::Value {
-								hash,
-								value: v.into(),
-								full_key,
-							});
+							// TODO this should be recorded with `cache_value_for_key`.
+							context.record(TrieAccess::Value { hash, value: v.into(), full_key });
 
 							hash
 						},
 						Value::Node(hash_bytes) => {
-							if let Some(recoder) = recorder.as_mut() {
-								recoder.record(TrieAccess::Hash { full_key });
-							}
-
 							let mut hash = TrieHash::<L>::default();
 							hash.as_mut().copy_from_slice(hash_bytes);
 							hash
 						},
 					})
 				},
-				),
-		}
-	}
-
-	/// Look up the value hash for the given key.
-	///
-	/// It uses the given cache to speed-up lookups.
-	fn look_up_hash_with_cache(
-		mut self,
-		full_key: &[u8],
-		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
-	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
-		let value_cache_allowed = self
-			.recorder
-			.as_ref()
-			// Check if the recorder has the trie nodes already recorded for this key.
-			.map(|r| !r.trie_nodes_recorded_for_key(full_key).is_none())
-			// If there is no recorder, we can always use the value cache.
-			.unwrap_or(true);
-
-			let res = if let Some(hash) = value_cache_allowed
-				.then(|| self.context.lookup_value_for_key(full_key).map(|v| v.hash()))
-				.flatten()
-			{
-				hash
-			} else {
-				let hash_and_value = self.look_up_with_cache_internal(
-					nibble_key,
-					full_key,
-					cache,
-					|value, _, full_key, _, context, _, recorder| match value {
-						ValueOwned::Inline(value, hash) => {
-							// TODO this should be recorded with cache_value_for_key at lookup call (with
-							// lookup_value_for_key)
-								context.record(TrieAccess::Value {
-									hash,
-									value: value.as_ref().into(),
-									full_key,
-								});
-
-							Ok((hash, Some(value.clone())))
-						},
-						ValueOwned::Node(hash) => {
-							if let Some(recoder) = recorder.as_mut() {
-								recoder.record(TrieAccess::Hash { full_key });
-							}
-
-							Ok((hash, None))
-						},
-					},
-					)?;
-
-				match &hash_and_value {
-					Some((hash, Some(value))) =>
-						self.context.cache_value_for_key(full_key, (value.clone(), *hash).into()),
-						Some((hash, None)) => self.context.cache_value_for_key(full_key, (*hash).into()),
-						None => self.context.cache_value_for_key(full_key, CachedValue::NonExisting),
-				}
-
-				hash_and_value.map(|v| v.0)
-			};
-
-			Ok(res)
-	}
-
-	/// Look up the given key. If the value is found, it will be passed to the given
-	/// function to decode or copy.
-	///
-	/// It uses the given cache to speed-up lookups.
-	fn look_up_with_cache(
-		mut self,
-		full_key: &[u8],
-		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
-		let res = match self.context.lookup_value_for_key(full_key)
-		{
-			Some(CachedValue::NonExisting) => None,
-			Some(CachedValue::ExistingHash(hash)) => {
-				let data = Self::load_owned_value(
-					// If we only have the hash cached, this can only be a value node.
-					// For inline nodes we cache them directly as `CachedValue::Existing`.
-					ValueOwned::Node(*hash),
-					nibble_key.original_data_as_prefix(),
-					full_key,
-					cache,
-					self.context,
-					self.db,
-					&mut self.recorder,
-				)?;
-
-				self.context.cache_value_for_key(full_key, data.clone().into());
-
-				Some(data.0)
-			},
-			Some(CachedValue::Existing { data, .. }) =>
-				if let Some(data) = data.upgrade() {
-					Some(data)
-				} else {
-					let data = self.look_up_with_cache_internal(
-						nibble_key,
-						full_key,
-						cache,
-						Self::load_owned_value,
-					)?;
-
-					self.context.cache_value_for_key(full_key, data.clone().into());
-
-					data.map(|d| d.0)
-				},
-			None => {
-				let data = self.look_up_with_cache_internal(
-					nibble_key,
-					full_key,
-					cache,
-					Self::load_owned_value,
-				)?;
-
-				self.context.cache_value_for_key(full_key, data.clone().into());
-
-				data.map(|d| d.0)
-			},
-		};
-
-		Ok(res.map(|v| self.query.decode(&v)))
+			)
 	}
 
 	/// When modifying any logic inside this function, you also need to do the same in
@@ -327,15 +171,12 @@ where
 		&mut self,
 		nibble_key: NibbleSlice,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
 		load_value_owned: impl Fn(
 			ValueOwned<TrieHash<L>>,
 			Prefix,
 			&[u8],
-			&mut dyn crate::TrieCache<L::Codec>,
 			&mut dyn Context<L>,
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 		) -> Result<R, TrieHash<L>, CError<L>>,
 	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
 		let mut partial = nibble_key;
@@ -369,14 +210,13 @@ where
 								value,
 								nibble_key.original_data_as_prefix(),
 								full_key,
-								cache,
 								self.context,
 								self.db,
-								&mut self.recorder,
 							)
 							.map(Some)
 						} else {
-							self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at look up level
+//							self.record(|| TrieAccess::NonExisting { full_key });
 
 							Ok(None)
 						},
@@ -386,7 +226,8 @@ where
 							key_nibbles += slice.len();
 							item
 						} else {
-							self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at look up level
+//							self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
 						},
@@ -398,14 +239,13 @@ where
 									value,
 									nibble_key.original_data_as_prefix(),
 									full_key,
-									cache,
 									self.context,
 									self.db,
-									&mut self.recorder,
 								)
 								.map(Some)
 							} else {
-								self.record(|| TrieAccess::NonExisting { full_key });
+								// TODO on lookup query
+								// self.record(|| TrieAccess::NonExisting { full_key });
 
 								Ok(None)
 							}
@@ -417,7 +257,8 @@ where
 									x
 								},
 								None => {
-									self.record(|| TrieAccess::NonExisting { full_key });
+									// TODO on lookup query
+									// self.record(|| TrieAccess::NonExisting { full_key });
 
 									return Ok(None)
 								},
@@ -425,7 +266,9 @@ where
 						},
 					NodeOwned::NibbledBranch(slice, children, value) => {
 						if !partial.starts_with_vec(&slice) {
-							self.record(|| TrieAccess::NonExisting { full_key });
+
+							// TODO at lookup level
+//							self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
 						}
@@ -437,14 +280,13 @@ where
 									value,
 									nibble_key.original_data_as_prefix(),
 									full_key,
-									cache,
 									self.context,
 									self.db,
-									&mut self.recorder,
 								)
 								.map(Some)
 							} else {
-								self.record(|| TrieAccess::NonExisting { full_key });
+								// TODO on lookup query
+								// self.record(|| TrieAccess::NonExisting { full_key });
 
 								Ok(None)
 							}
@@ -456,7 +298,8 @@ where
 									x
 								},
 								None => {
-									self.record(|| TrieAccess::NonExisting { full_key });
+								// TODO on lookup query
+								// self.record(|| TrieAccess::NonExisting { full_key });
 
 									return Ok(None)
 								},
@@ -464,7 +307,8 @@ where
 						}
 					},
 					NodeOwned::Empty => {
-						self.record(|| TrieAccess::NonExisting { full_key });
+								// TODO on lookup query
+								// self.record(|| TrieAccess::NonExisting { full_key });
 
 						return Ok(None)
 					},
@@ -499,7 +343,7 @@ where
 	/// When modifying any logic inside this function, you also need to do the same in
 	/// [`Self::lookup_with_cache_internal`].
 	fn look_up_without_cache<R>(
-		mut self,
+		self,
 		nibble_key: NibbleSlice,
 		full_key: &[u8],
 		load_value: impl Fn(
@@ -507,7 +351,6 @@ where
 			Prefix,
 			&[u8],
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 			&mut dyn Context<L>,
 			Q,
 		) -> Result<R, TrieHash<L>, CError<L>>,
@@ -528,11 +371,6 @@ where
 					})),
 			};
 
-			self.record(|| TrieAccess::EncodedNode {
-				hash,
-				encoded_node: node_data.as_slice().into(),
-			});
-
 			// this loop iterates through all inline children (usually max 1)
 			// without incrementing the depth.
 			let mut node_data = &node_data[..];
@@ -550,13 +388,13 @@ where
 								nibble_key.original_data_as_prefix(),
 								full_key,
 								self.db,
-								&mut self.recorder,
 								self.context,
 								self.query,
 							)
 							.map(Some)
 						} else {
-							self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+//							self.record(|| TrieAccess::NonExisting { full_key });
 
 							Ok(None)
 						},
@@ -566,7 +404,8 @@ where
 							key_nibbles += slice.len();
 							item
 						} else {
-							self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
 						},
@@ -578,13 +417,13 @@ where
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									self.db,
-									&mut self.recorder,
 									self.context,
 									self.query,
 								)
 								.map(Some)
 							} else {
-								self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//	self.record(|| TrieAccess::NonExisting { full_key });
 
 								Ok(None)
 							}
@@ -596,7 +435,8 @@ where
 									x
 								},
 								None => {
-									self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//		self.record(|| TrieAccess::NonExisting { full_key });
 
 									return Ok(None)
 								},
@@ -604,7 +444,8 @@ where
 						},
 					Node::NibbledBranch(slice, children, value) => {
 						if !partial.starts_with(&slice) {
-							self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
 						}
@@ -616,13 +457,13 @@ where
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									self.db,
-									&mut self.recorder,
 									self.context,
 									self.query,
 								)
 								.map(Some)
 							} else {
-								self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//	self.record(|| TrieAccess::NonExisting { full_key });
 
 								Ok(None)
 							}
@@ -634,7 +475,8 @@ where
 									x
 								},
 								None => {
-									self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+							//		self.record(|| TrieAccess::NonExisting { full_key });
 
 									return Ok(None)
 								},
@@ -642,7 +484,8 @@ where
 						}
 					},
 					Node::Empty => {
-						self.record(|| TrieAccess::NonExisting { full_key });
+							// TODO at call level
+						//self.record(|| TrieAccess::NonExisting { full_key });
 
 						return Ok(None)
 					},

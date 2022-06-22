@@ -20,8 +20,8 @@ use crate::{
 	nibble::NibbleSlice,
 	node::{decode_hash, Node, NodeHandle, OwnedNode, Value},
 	rstd::boxed::Box,
-	CError, Context, DBValue, Query, Result, Trie, TrieAccess, TrieCache, TrieError, TrieHash,
-	TrieItem, TrieIterator, TrieKeyItem, TrieLayout, TrieRecorder,
+	CError, Context, DBValue, Query, Result, Trie, TrieAccess, TrieError, TrieHash,
+	TrieItem, TrieIterator, TrieKeyItem, TrieLayout,
 };
 use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 
@@ -29,61 +29,25 @@ use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 use crate::rstd::{fmt, vec::Vec};
 
 /// A builder for creating a [`TrieDB`].
-pub struct TrieDBBuilder<'db, 'cache, L: TrieLayout> {
+pub struct TrieDBBuilder<'db, L: TrieLayout> {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
 	root: &'db TrieHash<L>,
-	cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
-	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
 }
 
-impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
+impl<'db, L: TrieLayout> TrieDBBuilder<'db, L> {
 	/// Create a new trie-db builder with the backing database `db` and `root`.
 	///
 	/// This doesn't check if `root` exists in the given `db`. If `root` doesn't exist it will fail
 	/// when trying to lookup any key.
 	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L>) -> Self {
-		Self { db, root, cache: None, recorder: None }
-	}
-
-	/// Use the given `cache` for the db.
-	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec>) -> Self {
-		self.cache = Some(cache);
-		self
-	}
-
-	/// Use the given optional `cache` for the db.
-	pub fn with_optional_cache<'ocache: 'cache>(
-		mut self,
-		cache: Option<&'ocache mut dyn TrieCache<L::Codec>>,
-	) -> Self {
-		// Make the compiler happy by "converting" the lifetime
-		self.cache = cache.map(|c| c as _);
-		self
-	}
-
-	/// Use the given `recorder` to record trie accesses.
-	pub fn with_recorder(mut self, recorder: &'cache mut dyn TrieRecorder<TrieHash<L>>) -> Self {
-		self.recorder = Some(recorder);
-		self
-	}
-
-	/// Use the given optional `recorder` to record trie accesses.
-	pub fn with_optional_recorder<'recorder: 'cache>(
-		mut self,
-		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L>>>,
-	) -> Self {
-		// Make the compiler happy by "converting" the lifetime
-		self.recorder = recorder.map(|r| r as _);
-		self
+		Self { db, root }
 	}
 
 	/// Build the [`TrieDB`].
-	pub fn build(self, context: &'cache mut dyn Context<L>) -> TrieDB<'db, 'cache, L> {
+	pub fn build<'cache>(self, context: &'cache mut dyn Context<L>) -> TrieDB<'db, 'cache, L> {
 		TrieDB {
 			db: self.db,
 			root: self.root,
-			cache: self.cache.map(core::cell::RefCell::new),
-			recorder: self.recorder.map(core::cell::RefCell::new),
 			hash_count: 0,
 			context: core::cell::RefCell::new(context),
 		}
@@ -120,8 +84,6 @@ where
 	root: &'db TrieHash<L>,
 	/// The number of hashes performed so far in operations on this trie.
 	hash_count: usize,
-	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec>>>,
-	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>>>>,
 	context: core::cell::RefCell<&'cache mut dyn Context<L>>, // TODO try rem refcell
 }
 
@@ -190,15 +152,13 @@ where
 			.get(&hash, prefix)
 			.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
 
-		if let Some(recorder) = self.recorder.as_ref() {
 			debug_assert!(prefix.1.is_none(), "A value has never a partial key; qed");
 
-			recorder.borrow_mut().record(TrieAccess::Value {
+			self.context.borrow_mut().record(TrieAccess::Value {
 				hash,
 				value: value.as_slice().into(),
 				full_key: prefix.0,
 			});
-		}
 
 		Ok(value)
 	}
@@ -213,15 +173,10 @@ where
 	}
 
 	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
-		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
-		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
-
 		Lookup::<L, _> {
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
-			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 			context: &mut **self.context.borrow_mut(),
 		}
 		.look_up_hash(key, NibbleSlice::new(key))
@@ -232,15 +187,10 @@ where
 		key: &[u8],
 		query: Q,
 	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
-		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
-		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
-
 		Lookup::<L, Q> {
 			db: self.db,
 			query,
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
-			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 			context: &mut **self.context.borrow_mut(),
 		}
 		.look_up(key, NibbleSlice::new(key))
