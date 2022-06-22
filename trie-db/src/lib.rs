@@ -269,6 +269,7 @@ pub trait Context<L: TrieLayout> {
 	/// This recored a NodeOwned trie access. TODO TrieAccess::NodeOwned
 	///
 	/// TODO return Cow instead of &Node so the non caching implementation could be less awkward.
+	/// TODO have a separate method for value
 	fn get_or_insert_node(
 		&mut self,
 		hash: TrieHash<L>,
@@ -800,11 +801,12 @@ impl TrieFactory {
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
 	) -> Box<dyn TrieMut<L> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::new(db, root).build()),
-			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::new(db, root)),
-			TrieSpec::Fat => Box::new(FatDBMut::<L>::new(db, root)),
+			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::new(db, root).build(context)),
+			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::new(db, root, context)),
+			TrieSpec::Fat => Box::new(FatDBMut::<L>::new(db, root, context)),
 		}
 	}
 
@@ -813,11 +815,13 @@ impl TrieFactory {
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
 	) -> Box<dyn TrieMut<L> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::from_existing(db, root).build()),
-			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::from_existing(db, root)),
-			TrieSpec::Fat => Box::new(FatDBMut::<L>::from_existing(db, root)),
+			TrieSpec::Generic =>
+				Box::new(TrieDBMutBuilder::<L>::from_existing(db, root).build(context)),
+			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::from_existing(db, root, context)),
+			TrieSpec::Fat => Box::new(FatDBMut::<L>::from_existing(db, root, context)),
 		}
 	}
 

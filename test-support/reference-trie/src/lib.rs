@@ -891,17 +891,17 @@ where
 	T: TrieLayout,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
+	let mut context = CacheNode::new();
 	let root_new = calc_root_build::<T, _, _, _, _>(data.clone(), &mut hashdb);
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build(&mut context);
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 		}
 		t.commit();
 		*t.root()
 	};
-	let mut context = CacheNode::new();
 	if root_new != root {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
@@ -931,10 +931,11 @@ pub fn compare_root<T: TrieLayout, DB: hash_db::HashDB<T::Hash, DBValue>>(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 	mut memdb: DB,
 ) {
+	let mut context = CacheNode::new();
 	let root_new = reference_trie_root_iter_build::<T, _, _, _>(data.clone());
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build(&mut context);
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 		}
@@ -1006,10 +1007,11 @@ pub fn compare_implementations_unordered<T, DB>(
 	T: TrieLayout,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
+	let mut context = CacheNode::new();
 	let mut b_map = std::collections::btree_map::BTreeMap::new();
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build(&mut context);
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 			b_map.insert(data[i].0.clone(), data[i].1.clone());
@@ -1022,7 +1024,6 @@ pub fn compare_implementations_unordered<T, DB>(
 		cb.root.unwrap_or_default()
 	};
 
-	let mut context = CacheNode::new();
 	if root != root_new {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &memdb;
@@ -1054,17 +1055,19 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
 	T: TrieLayout,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
+	let mut context = CacheNode::new();
 	let mut data2 = std::collections::BTreeMap::new();
 	let mut root = Default::default();
 	let mut a = 0;
 	{
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build(&mut context);
 		t.commit();
 	}
 	while a < data.len() {
 		// new triemut every 3 element
 		root = {
-			let mut t = TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build();
+			let mut t =
+				TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build(&mut context);
 			for _ in 0..3 {
 				if data[a].0 {
 					// remove
@@ -1085,7 +1088,7 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
 			*t.root()
 		};
 	}
-	let mut t = TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build();
+	let mut t = TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build(&mut context);
 	// we are testing the RefTrie code here so we do not sort or check uniqueness
 	// before.
 	assert_eq!(*t.root(), calc_root::<T, _, _, _>(data2));

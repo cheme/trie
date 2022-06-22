@@ -19,8 +19,8 @@ use crate::{
 	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
-	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
-	TrieError, TrieHash, TrieLayout, TrieRecorder,
+	Bytes, CError, CachedValue, Context, DBValue, Query, Result, TrieAccess,
+	TrieCache, TrieError, TrieHash, TrieLayout, TrieRecorder,
 };
 use hash_db::{HashDBRef, Hasher, Prefix};
 
@@ -36,12 +36,14 @@ pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
 	pub cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
 	/// Optional recorder that will be called to record all trie accesses.
 	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
+	/// TODO
+	pub context: &'cache mut dyn Context<L>,
 }
 
 impl<'a, 'cache, L, Q> Lookup<'a, 'cache, L, Q>
 where
-	L: TrieLayout,
-	Q: Query<L::Hash>,
+		L: TrieLayout,
+		Q: Query<L::Hash>,
 {
 	/// Load the given value.
 	///
@@ -52,9 +54,10 @@ where
 	fn load_value(
 		v: Value,
 		prefix: Prefix,
-		full_key: &[u8],
+		_full_key: &[u8],
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+		_recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+		context: &mut dyn Context<L>,
 		query: Q,
 	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
 		match v {
@@ -62,18 +65,19 @@ where
 			Value::Node(hash) => {
 				let mut res = TrieHash::<L>::default();
 				res.as_mut().copy_from_slice(hash);
-				if let Some(value) = db.get(&res, prefix) {
-					if let Some(recorder) = recorder {
-						recorder.record(TrieAccess::Value {
-							hash: res,
-							value: value.as_slice().into(),
-							full_key,
-						});
+				let mut h = TrieHash::<L>::default();
+				h.as_mut().copy_from_slice(&hash[..]);
+				let value = context.get_or_insert_node(h, true, &mut || {
+					if let Some(value) = db.get(&res, prefix) {
+						Ok(value)
+					} else {
+						Err(Box::new(TrieError::IncompleteDatabase(res)))
 					}
-
-					Ok(query.decode(&value))
-				} else {
-					Err(Box::new(TrieError::IncompleteDatabase(res)))
+				})?;
+				// TODO have a single value function (and store value as variant of cachenode)
+				match value {
+					NodeOwned::Value(v, _) => Ok(query.decode(&v)),
+					_ => Err(Box::new(TrieError::IncompleteDatabase(res))),
 				}
 			},
 		}
@@ -89,19 +93,18 @@ where
 		v: ValueOwned<TrieHash<L>>,
 		prefix: Prefix,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		_cache: &mut dyn crate::TrieCache<L::Codec>,
+		context: &mut dyn Context<L>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
 		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
 			ValueOwned::Node(hash) => {
-				let node = cache.get_or_insert_node(hash, &mut || {
-					let value = db
+				let node = context.get_or_insert_node(hash, true, &mut || {
+					db
 						.get(&hash, prefix)
-						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
-
-					Ok(NodeOwned::Value(value.into(), hash))
+						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))
 				})?;
 
 				let value = node
@@ -112,22 +115,22 @@ where
 					)
 					.clone();
 
-				if let Some(recorder) = recorder {
-					recorder.record(TrieAccess::Value {
-						hash,
-						value: value.as_ref().into(),
-						full_key,
-					});
-				}
+					if let Some(recorder) = recorder {
+						recorder.record(TrieAccess::Value {
+							hash,
+							value: value.as_ref().into(),
+							full_key,
+						});
+					}
 
-				Ok((value, hash))
+					Ok((value, hash))
 			},
 		}
 	}
 
 	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, TrieHash<L>>)
 	where
-		TrieHash<L>: 'b,
+			TrieHash<L>: 'b,
 	{
 		if let Some(recorder) = self.recorder.as_mut() {
 			recorder.record(get_access());
@@ -165,18 +168,17 @@ where
 			None => self.look_up_without_cache(
 				nibble_key,
 				full_key,
-				|v, _, full_key, _, recorder, _| {
+				|v, _, full_key, _, recorder, context, _| {
 					Ok(match v {
 						Value::Inline(v) => {
 							let hash = L::Hash::hash(&v);
 
-							if let Some(recoder) = recorder.as_mut() {
-								recoder.record(TrieAccess::Value {
-									hash,
-									value: v.into(),
-									full_key,
-								});
-							}
+							// TODO this should be recorded with `cache_value_for_key`. 
+							context.record(TrieAccess::Value {
+								hash,
+								value: v.into(),
+								full_key,
+							});
 
 							hash
 						},
@@ -191,7 +193,7 @@ where
 						},
 					})
 				},
-			),
+				),
 		}
 	}
 
@@ -212,49 +214,49 @@ where
 			// If there is no recorder, we can always use the value cache.
 			.unwrap_or(true);
 
-		let res = if let Some(hash) = value_cache_allowed
-			.then(|| cache.lookup_value_for_key(full_key).map(|v| v.hash()))
-			.flatten()
-		{
-			hash
-		} else {
-			let hash_and_value = self.look_up_with_cache_internal(
-				nibble_key,
-				full_key,
-				cache,
-				|value, _, full_key, _, _, recorder| match value {
-					ValueOwned::Inline(value, hash) => {
-						if let Some(recorder) = recorder.as_mut() {
-							recorder.record(TrieAccess::Value {
-								hash,
-								value: value.as_ref().into(),
-								full_key,
-							});
-						}
+			let res = if let Some(hash) = value_cache_allowed
+				.then(|| self.context.lookup_value_for_key(full_key).map(|v| v.hash()))
+				.flatten()
+			{
+				hash
+			} else {
+				let hash_and_value = self.look_up_with_cache_internal(
+					nibble_key,
+					full_key,
+					cache,
+					|value, _, full_key, _, context, _, recorder| match value {
+						ValueOwned::Inline(value, hash) => {
+							// TODO this should be recorded with cache_value_for_key at lookup call (with
+							// lookup_value_for_key)
+								context.record(TrieAccess::Value {
+									hash,
+									value: value.as_ref().into(),
+									full_key,
+								});
 
-						Ok((hash, Some(value.clone())))
+							Ok((hash, Some(value.clone())))
+						},
+						ValueOwned::Node(hash) => {
+							if let Some(recoder) = recorder.as_mut() {
+								recoder.record(TrieAccess::Hash { full_key });
+							}
+
+							Ok((hash, None))
+						},
 					},
-					ValueOwned::Node(hash) => {
-						if let Some(recoder) = recorder.as_mut() {
-							recoder.record(TrieAccess::Hash { full_key });
-						}
+					)?;
 
-						Ok((hash, None))
-					},
-				},
-			)?;
+				match &hash_and_value {
+					Some((hash, Some(value))) =>
+						self.context.cache_value_for_key(full_key, (value.clone(), *hash).into()),
+						Some((hash, None)) => self.context.cache_value_for_key(full_key, (*hash).into()),
+						None => self.context.cache_value_for_key(full_key, CachedValue::NonExisting),
+				}
 
-			match &hash_and_value {
-				Some((hash, Some(value))) =>
-					cache.cache_value_for_key(full_key, (value.clone(), *hash).into()),
-				Some((hash, None)) => cache.cache_value_for_key(full_key, (*hash).into()),
-				None => cache.cache_value_for_key(full_key, CachedValue::NonExisting),
-			}
+				hash_and_value.map(|v| v.0)
+			};
 
-			hash_and_value.map(|v| v.0)
-		};
-
-		Ok(res)
+			Ok(res)
 	}
 
 	/// Look up the given key. If the value is found, it will be passed to the given
@@ -267,21 +269,7 @@ where
 		nibble_key: NibbleSlice,
 		cache: &mut dyn crate::TrieCache<L::Codec>,
 	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
-		let trie_nodes_recorded =
-			self.recorder.as_ref().map(|r| r.trie_nodes_recorded_for_key(full_key));
-
-		let (value_cache_allowed, value_recording_required) = match trie_nodes_recorded {
-			// If we already have the trie nodes recorded up to the value, we are allowed
-			// to use the value cache.
-			Some(RecordedForKey::Value) | None => (true, false),
-			// If we only have recorded the hash, we are allowed to use the value cache, but
-			// we may need to have the value recorded.
-			Some(RecordedForKey::Hash) => (true, true),
-			// As we don't allow the value cache, the second value can be actually anything.
-			Some(RecordedForKey::None) => (false, true),
-		};
-
-		let res = match value_cache_allowed.then(|| cache.lookup_value_for_key(full_key)).flatten()
+		let res = match self.context.lookup_value_for_key(full_key)
 		{
 			Some(CachedValue::NonExisting) => None,
 			Some(CachedValue::ExistingHash(hash)) => {
@@ -292,25 +280,17 @@ where
 					nibble_key.original_data_as_prefix(),
 					full_key,
 					cache,
+					self.context,
 					self.db,
 					&mut self.recorder,
 				)?;
 
-				cache.cache_value_for_key(full_key, data.clone().into());
+				self.context.cache_value_for_key(full_key, data.clone().into());
 
 				Some(data.0)
 			},
-			Some(CachedValue::Existing { data, hash, .. }) =>
+			Some(CachedValue::Existing { data, .. }) =>
 				if let Some(data) = data.upgrade() {
-					if value_recording_required {
-						// As a value is only raw data, we can directly record it.
-						self.record(|| TrieAccess::Value {
-							hash: *hash,
-							value: data.as_ref().into(),
-							full_key,
-						});
-					}
-
 					Some(data)
 				} else {
 					let data = self.look_up_with_cache_internal(
@@ -320,7 +300,7 @@ where
 						Self::load_owned_value,
 					)?;
 
-					cache.cache_value_for_key(full_key, data.clone().into());
+					self.context.cache_value_for_key(full_key, data.clone().into());
 
 					data.map(|d| d.0)
 				},
@@ -332,7 +312,7 @@ where
 					Self::load_owned_value,
 				)?;
 
-				cache.cache_value_for_key(full_key, data.clone().into());
+				self.context.cache_value_for_key(full_key, data.clone().into());
 
 				data.map(|d| d.0)
 			},
@@ -353,6 +333,7 @@ where
 			Prefix,
 			&[u8],
 			&mut dyn crate::TrieCache<L::Codec>,
+			&mut dyn Context<L>,
 			&dyn HashDBRef<L::Hash, DBValue>,
 			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 		) -> Result<R, TrieHash<L>, CError<L>>,
@@ -363,8 +344,9 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let mut node = cache.get_or_insert_node(hash, &mut || {
-				let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
+			let db = &mut self.db;
+			let mut node = self.context.get_or_insert_node(hash, false, &mut || {
+				let node_data = match db.get(&hash, nibble_key.mid(key_nibbles).left()) {
 					Some(value) => value,
 					None =>
 						return Err(Box::new(match depth {
@@ -372,16 +354,8 @@ where
 							_ => TrieError::IncompleteDatabase(hash),
 						})),
 				};
-
-				let decoded = match L::Codec::decode(&node_data[..]) {
-					Ok(node) => node,
-					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
-				};
-
-				decoded.to_owned_node::<L>()
+				Ok(node_data)
 			})?;
-
-			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });
 
 			// this loop iterates through all inline children (usually max 1)
 			// without incrementing the depth.
@@ -396,6 +370,7 @@ where
 								nibble_key.original_data_as_prefix(),
 								full_key,
 								cache,
+								self.context,
 								self.db,
 								&mut self.recorder,
 							)
@@ -424,6 +399,7 @@ where
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,
+									self.context,
 									self.db,
 									&mut self.recorder,
 								)
@@ -462,6 +438,7 @@ where
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,
+									self.context,
 									self.db,
 									&mut self.recorder,
 								)
@@ -531,6 +508,7 @@ where
 			&[u8],
 			&dyn HashDBRef<L::Hash, DBValue>,
 			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+			&mut dyn Context<L>,
 			Q,
 		) -> Result<R, TrieHash<L>, CError<L>>,
 	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
@@ -573,6 +551,7 @@ where
 								full_key,
 								self.db,
 								&mut self.recorder,
+								self.context,
 								self.query,
 							)
 							.map(Some)
@@ -600,6 +579,7 @@ where
 									full_key,
 									self.db,
 									&mut self.recorder,
+									self.context,
 									self.query,
 								)
 								.map(Some)
@@ -637,6 +617,7 @@ where
 									full_key,
 									self.db,
 									&mut self.recorder,
+									self.context,
 									self.query,
 								)
 								.map(Some)

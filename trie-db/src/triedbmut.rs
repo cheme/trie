@@ -23,8 +23,8 @@ use crate::{
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
-	Bytes, CError, CachedValue, DBValue, Result, TrieAccess, TrieCache, TrieError, TrieHash,
-	TrieLayout, TrieMut, TrieRecorder,
+	Bytes, CError, CachedValue, Context, DBValue, Result, TrieAccess, TrieCache, TrieError,
+	TrieHash, TrieLayout, TrieMut, TrieRecorder,
 };
 
 use hash_db::{HashDB, Hasher, Prefix, EMPTY_PREFIX};
@@ -695,7 +695,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	}
 
 	/// Build the [`TrieDBMut`].
-	pub fn build(self) -> TrieDBMut<'db, L> {
+	pub fn build(self, context: &'db mut dyn Context<L>) -> TrieDBMut<'db, L> {
 		let root_handle = NodeHandle::Hash(*self.root);
 
 		TrieDBMut {
@@ -707,6 +707,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 			storage: NodeStorage::empty(),
 			death_row: Default::default(),
 			root_handle,
+			context: core::cell::RefCell::new(context),
 		}
 	}
 }
@@ -754,6 +755,8 @@ where
 	cache: Option<&'a mut dyn TrieCache<L::Codec>>,
 	/// Optional trie recorder for recording trie accesses.
 	recorder: Option<core::cell::RefCell<&'a mut dyn TrieRecorder<TrieHash<L>>>>,
+	/// TODO
+	context: core::cell::RefCell<&'a mut dyn Context<L>>,
 }
 
 impl<'a, L> TrieDBMut<'a, L>
@@ -867,6 +870,7 @@ where
 						recorder: recorder
 							.as_mut()
 							.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+						context: &mut **self.context.borrow_mut(),
 					}
 					.look_up(full_key, partial)
 				},

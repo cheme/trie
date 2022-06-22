@@ -14,7 +14,7 @@
 
 use crate::{
 	triedbmut::{TrieDBMutBuilder, Value},
-	CError, DBValue, Result, TrieDBMut, TrieHash, TrieLayout, TrieMut,
+	CError, Context, DBValue, Result, TrieDBMut, TrieHash, TrieLayout, TrieMut,
 };
 use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 
@@ -36,8 +36,12 @@ where
 	/// Create a new trie with the backing database `db` and empty `root`
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
-		FatDBMut { raw: TrieDBMutBuilder::new(db, root).build() }
+	pub fn new(
+		db: &'db mut dyn HashDB<L::Hash, DBValue>,
+		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
+	) -> Self {
+		FatDBMut { raw: TrieDBMutBuilder::new(db, root).build(context) }
 	}
 
 	/// Create a new trie with the backing database `db` and `root`.
@@ -46,8 +50,9 @@ where
 	pub fn from_existing(
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
 	) -> Self {
-		FatDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build() }
+		FatDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build(context) }
 	}
 
 	/// Get the backing database.

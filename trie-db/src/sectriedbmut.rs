@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::{
-	triedbmut::TrieDBMutBuilder, CError, DBValue, Result, TrieDBMut, TrieHash, TrieLayout, TrieMut,
-	Value,
+	triedbmut::TrieDBMutBuilder, CError, Context, DBValue, Result, TrieDBMut, TrieHash, TrieLayout,
+	TrieMut, Value,
 };
 use hash_db::{HashDB, Hasher};
 
@@ -36,16 +36,21 @@ where
 	/// Create a new trie with the backing database `db` and empty `root`
 	/// Initialize to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
-		SecTrieDBMut { raw: TrieDBMutBuilder::new(db, root).build() }
+	pub fn new(
+		db: &'db mut dyn HashDB<L::Hash, DBValue>,
+		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
+	) -> Self {
+		SecTrieDBMut { raw: TrieDBMutBuilder::new(db, root).build(context) }
 	}
 
 	/// Create a new trie with the backing database `db` and `root`.
 	pub fn from_existing(
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
+		context: &'db mut dyn Context<L>,
 	) -> Self {
-		SecTrieDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build() }
+		SecTrieDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build(context) }
 	}
 
 	/// Get the backing database.

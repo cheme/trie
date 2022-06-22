@@ -222,6 +222,7 @@ where
 			hash: *self.root,
 			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+			context: &mut **self.context.borrow_mut(),
 		}
 		.look_up_hash(key, NibbleSlice::new(key))
 	}
@@ -240,6 +241,7 @@ where
 			hash: *self.root,
 			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+			context: &mut **self.context.borrow_mut(),
 		}
 		.look_up(key, NibbleSlice::new(key))
 	}

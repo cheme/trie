@@ -60,10 +60,11 @@ fn benchmark<L: TrieLayout, S: TrieStream>(
 		BenchmarkId::new("Fill", bench_size),
 		bench_list,
 		|b, d: &TrieInsertionList| {
+			let mut context = CacheNode::new();
 			b.iter(&mut || {
 				let mut memdb = MemoryDB::<_, HashKey<L::Hash>, _>::new(L::Codec::empty_node());
 				let mut root = <TrieHash<L>>::default();
-				let mut t = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root).build();
+				let mut t = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root).build(&mut context);
 				for i in d.0.iter() {
 					t.insert(&i.0, &i.1).unwrap();
 				}
@@ -74,15 +75,15 @@ fn benchmark<L: TrieLayout, S: TrieStream>(
 		BenchmarkId::new("Iter", bench_size),
 		bench_list,
 		|b, d: &TrieInsertionList| {
+			let mut context = CacheNode::new();
 			let mut memdb = MemoryDB::<_, HashKey<_>, _>::new(L::Codec::empty_node());
 			let mut root = <TrieHash<L>>::default();
 			{
-				let mut t = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root).build();
+				let mut t = TrieDBMutBuilder::<L>::new(&mut memdb, &mut root).build(&mut context);
 				for i in d.0.iter() {
 					t.insert(&i.0, &i.1).unwrap();
 				}
 			}
-			let mut context = CacheNode::new();
 			b.iter(&mut || {
 				let t = TrieDBBuilder::<L>::new(&memdb, &root).build(&mut context);
 				for n in t.iter().unwrap() {
