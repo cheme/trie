@@ -248,8 +248,11 @@ where
 
 		// Perform the trie lookup for the next key, recording the sequence of nodes traversed.
 		let mut recorder = Recorder::<L>::new();
+		let mut context = Recorder::<L>::new();
 		let expected_value = {
-			let trie = TrieDBBuilder::<L>::new(db, root).with_recorder(&mut recorder).build();
+			let trie = TrieDBBuilder::<L>::new(db, root)
+				.with_recorder(&mut recorder)
+				.build(&mut context);
 			trie.get(key_bytes)?
 		};
 

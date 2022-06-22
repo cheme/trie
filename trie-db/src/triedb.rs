@@ -20,8 +20,8 @@ use crate::{
 	nibble::NibbleSlice,
 	node::{decode_hash, Node, NodeHandle, OwnedNode, Value},
 	rstd::boxed::Box,
-	CError, DBValue, Query, Result, Trie, TrieAccess, TrieCache, TrieError, TrieHash, TrieItem,
-	TrieIterator, TrieKeyItem, TrieLayout, TrieRecorder,
+	CError, Context, DBValue, Query, Result, Trie, TrieAccess, TrieCache, TrieError, TrieHash,
+	TrieItem, TrieIterator, TrieKeyItem, TrieLayout, TrieRecorder,
 };
 use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 
@@ -78,13 +78,14 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	}
 
 	/// Build the [`TrieDB`].
-	pub fn build(self) -> TrieDB<'db, 'cache, L> {
+	pub fn build(self, context: &'cache mut dyn Context<L>) -> TrieDB<'db, 'cache, L> {
 		TrieDB {
 			db: self.db,
 			root: self.root,
 			cache: self.cache.map(core::cell::RefCell::new),
 			recorder: self.recorder.map(core::cell::RefCell::new),
 			hash_count: 0,
+			context: core::cell::RefCell::new(context),
 		}
 	}
 }
@@ -121,6 +122,7 @@ where
 	hash_count: usize,
 	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec>>>,
 	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>>>>,
+	context: core::cell::RefCell<&'cache mut dyn Context<L>>, // TODO try rem refcell
 }
 
 impl<'db, 'cache, L> TrieDB<'db, 'cache, L>
@@ -148,40 +150,33 @@ where
 		parent_hash: TrieHash<L>,
 		node_handle: NodeHandle,
 		partial_key: Prefix,
-		record_access: bool,
+		// TODO record_access bool as get input
+		_record_access: bool,
 	) -> Result<(OwnedNode<DBValue>, Option<TrieHash<L>>), TrieHash<L>, CError<L>> {
-		let (node_hash, node_data) = match node_handle {
+		let node_data = match node_handle {
 			NodeHandle::Hash(data) => {
 				let node_hash = decode_hash::<L::Hash>(data)
 					.ok_or_else(|| Box::new(TrieError::InvalidHash(parent_hash, data.to_vec())))?;
-					// TODO get_or_insert_node that record directly
-				let node_data = self.db.get(&node_hash, partial_key).ok_or_else(|| {
-					if partial_key == EMPTY_PREFIX {
-						Box::new(TrieError::InvalidStateRoot(node_hash))
-					} else {
-						Box::new(TrieError::IncompleteDatabase(node_hash))
-					}
-				})?;
-
-				(Some(node_hash), node_data)
+				return self
+					.context
+					.borrow_mut()
+					.get_or_insert_node2(node_hash, false, &mut || {
+						self.db.get(&node_hash, partial_key).ok_or_else(|| {
+							if partial_key == EMPTY_PREFIX {
+								Box::new(TrieError::InvalidStateRoot(node_hash))
+							} else {
+								Box::new(TrieError::IncompleteDatabase(node_hash))
+							}
+						})
+					})
+					.map(|n| (n.clone(), Some(node_hash)))
 			},
-			NodeHandle::Inline(data) => (None, data.to_vec()),
+			NodeHandle::Inline(data) => data.to_vec(),
 		};
 		let owned_node = OwnedNode::new::<L::Codec>(node_data)
-			.map_err(|e| Box::new(TrieError::DecoderError(node_hash.unwrap_or(parent_hash), e)))?;
+			.map_err(|e| Box::new(TrieError::DecoderError(parent_hash, e)))?;
 
-		if record_access {
-			if let Some((hash, recorder)) =
-				node_hash.as_ref().and_then(|h| self.recorder.as_ref().map(|r| (h, r)))
-			{
-				recorder.borrow_mut().record(TrieAccess::EncodedNode {
-					hash: *hash,
-					encoded_node: owned_node.data().into(),
-				});
-			}
-		}
-
-		Ok((owned_node, node_hash))
+		Ok((owned_node, None))
 	}
 
 	/// Fetch a value under the given `hash`.

@@ -41,7 +41,7 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::NodeOwned;
+use node::{NodeOwned, OwnedNode};
 
 pub mod node;
 pub mod proof;
@@ -224,10 +224,11 @@ impl RecordedForKey {
 /// Context is used to register access (act as recorder),
 /// but also allow implementation and use of caching (both trie
 /// nodes and content by key).
-pub trait Context<NC: NodeCodec> {
+pub trait Context<L: TrieLayout> {
 	/// We start record node, ensure we dont hit direct value or hash cache.
 	/// Warning this does not empty the current recording (just ensure we record
 	/// trie as needed).
+	/// TODO useless?
 	fn restart_record_node(&mut self);
 
 	/// Lookup value for the given `key`.
@@ -243,7 +244,7 @@ pub trait Context<NC: NodeCodec> {
 	/// The cache can be used for different tries, aka with different roots. This means
 	/// that the cache implementation needs to take care of always returning the correct value
 	/// for the current trie root.
-	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<NC::HashOut>>;
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<TrieHash<L>>>;
 
 	/// Cache the given `value` for the given `key`.
 	///
@@ -255,7 +256,7 @@ pub trait Context<NC: NodeCodec> {
 	///
 	/// This recored a direct access. TODO TrieAccess::Value and TRieAccess::Cache and
 	/// TrieAccess::NonExisting
-	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<NC::HashOut>);
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<TrieHash<L>>);
 
 	/// Get or insert a [`NodeOwned`].
 	///
@@ -266,21 +267,32 @@ pub trait Context<NC: NodeCodec> {
 	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
 	///
 	/// This recored a NodeOwned trie access. TODO TrieAccess::NodeOwned
+	///
+	/// TODO return Cow instead of &Node so the non caching implementation could be less awkward.
 	fn get_or_insert_node(
 		&mut self,
-		hash: NC::HashOut,
-		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
-	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, CError<L>>;
+
+	fn get_or_insert_node2(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&OwnedNode<Vec<u8>>, TrieHash<L>, CError<L>>;
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
 	///
 	/// This recored a NodeOwned trie access. TODO remove TrieAccess::NodeOwned
-	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+	/// TODO remove (get_or_insert_node should be enough).
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>>;
 
 	/// Record the given [`TrieAccess`].
 	///
 	/// TODO remove
-	fn record<'a>(&mut self, access: TrieAccess<'a, NC::HashOut>);
+	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L>>);
 
 	/// Check if we have recorded any trie nodes for the given `key`.
 	///
@@ -290,40 +302,259 @@ pub trait Context<NC: NodeCodec> {
 	fn trie_nodes_recorded_for_key(&self, key: &[u8]) -> RecordedForKey;
 }
 
+impl<L: TrieLayout> Context<L> for CacheNode<L> {
+	fn restart_record_node(&mut self) {}
+
+	fn lookup_value_for_key(&mut self, _key: &[u8]) -> Option<&CachedValue<TrieHash<L>>> {
+		None
+	}
+
+	fn cache_value_for_key(&mut self, _key: &[u8], _value: CachedValue<TrieHash<L>>) {}
+
+	fn get_or_insert_node(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		let node_data = (*fetch_node)()?;
+		if is_value {
+			let node = NodeOwned::Value(node_data.clone().into(), hash);
+
+			*self = CacheNode { owned: Some(node), encoded: None };
+			Ok(self.node_owned())
+		} else {
+			let node = match L::Codec::decode(&node_data[..]) {
+				Ok(node) => node,
+				Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+			};
+			let node = node.to_owned_node::<L>()?;
+			*self = CacheNode { owned: Some(node), encoded: None };
+			Ok(self.node_owned())
+		}
+	}
+
+	fn get_or_insert_node2(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&OwnedNode<Vec<u8>>, TrieHash<L>, CError<L>> {
+		let node_data = (*fetch_node)()?;
+		if is_value {
+			unreachable!("TODO never use this for value, just use the NodeOwned variant");
+		} else {
+			let node = match OwnedNode::new::<L::Codec>(node_data) {
+				Ok(node) => node,
+				Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+			};
+
+			*self = CacheNode { owned: None, encoded: Some(node) };
+			Ok(self.owned_node())
+		}
+	}
+
+	// TODO should be removable (get_or_insert as single entry point).
+	fn get_node(&mut self, _hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
+		None
+	}
+
+	fn record<'a>(&mut self, _access: TrieAccess<'a, TrieHash<L>>) {}
+
+	fn trie_nodes_recorded_for_key(&self, _key: &[u8]) -> RecordedForKey {
+		RecordedForKey::None
+	}
+}
 /// Impl of context example, with recording and simple caching.
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct ContextImpl<NC: NodeCodec> {
-	nodes: Vec<(NC::HashOut, Vec<u8>)>,
+pub struct ContextImpl<L: TrieLayout> {
+	// recorder part (TODO could keep recorder impl and embed it rather (this struct should be part
+	// of test_support).
+	// TODO could be merge with node_cache??: single hashmap access and no duplicate.
+	nodes: Vec<(TrieHash<L>, Vec<u8>)>,
 	recorded_keys: HashMap<Vec<u8>, RecordedForKey>,
+	/// In a real implementation we need to make sure that this is unique per trie root.
+	value_cache: HashMap<Vec<u8>, CachedValue<TrieHash<L>>>,
+	node_cache: HashMap<TrieHash<L>, CacheNode<L>>,
 }
 
-impl<NC: NodeCodec> Default for ContextImpl<NC> {
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct CacheNode<L: TrieLayout> {
+	owned: Option<NodeOwned<TrieHash<L>>>,
+	encoded: Option<OwnedNode<Vec<u8>>>,
+}
+
+impl<L: TrieLayout> From<NodeOwned<TrieHash<L>>> for CacheNode<L> {
+	fn from(node: NodeOwned<TrieHash<L>>) -> Self {
+		CacheNode { owned: Some(node), encoded: None }
+	}
+}
+
+impl<L: TrieLayout> From<OwnedNode<Vec<u8>>> for CacheNode<L> {
+	fn from(node: OwnedNode<Vec<u8>>) -> Self {
+		CacheNode { encoded: Some(node), owned: None }
+	}
+}
+
+impl<L: TrieLayout> CacheNode<L> {
+	pub fn new() -> Self {
+		CacheNode { owned: Some(NodeOwned::Empty), encoded: None }
+	}
+
+	pub fn node_owned(&mut self) -> &NodeOwned<TrieHash<L>> {
+		if self.owned.is_none() {
+			unimplemented!("TODO find or implement convert");
+			//			self.owned = Some(self.encoded.as_ref().unwrap().into())
+		}
+		self.owned.as_ref().unwrap()
+	}
+
+	pub fn owned_node(&mut self) -> &OwnedNode<Vec<u8>> {
+		if self.encoded.is_none() {
+			unimplemented!("TODO find or implement convert");
+			//			self.encoded = Some(self.owned.as_ref().unwrap().into())
+		}
+		self.encoded.as_ref().unwrap()
+	}
+}
+
+impl<L: TrieLayout> Default for ContextImpl<L> {
 	fn default() -> Self {
 		ContextImpl::new()
 	}
 }
 
-impl<NC: NodeCodec> ContextImpl<NC> {
+impl<L: TrieLayout> ContextImpl<L> {
 	/// Create a new `Recorder` which records all given nodes.
 	pub fn new() -> Self {
-		Self { nodes: Default::default(), recorded_keys: Default::default() }
+		Self {
+			nodes: Default::default(),
+			recorded_keys: Default::default(),
+			node_cache: Default::default(),
+			value_cache: Default::default(),
+		}
 	}
 
 	/// Drain all visited records.
-	pub fn drain(&mut self) -> Vec<(NC::HashOut, Vec<u8>)> {
+	pub fn drain(&mut self) -> Vec<(TrieHash<L>, Vec<u8>)> {
 		self.recorded_keys.clear();
 		crate::rstd::mem::take(&mut self.nodes)
 	}
+
+	/// Clear the value cache.
+	pub fn clear_value_cache(&mut self) {
+		self.value_cache.clear();
+	}
+
+	/// Clear the node cache.
+	pub fn clear_node_cache(&mut self) {
+		self.node_cache.clear();
+	}
 }
 
-impl<NC: NodeCodec> TrieRecorder<NC::HashOut> for ContextImpl<NC> {
-	fn record<'a>(&mut self, access: TrieAccess<'a, NC::HashOut>) {
+impl<L: TrieLayout> Context<L> for ContextImpl<L> {
+	fn restart_record_node(&mut self) {
+		self.recorded_keys.clear();
+	}
+
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<TrieHash<L>>> {
+		// TODO make recorder optional and skip when undefined.
+		if self.trie_nodes_recorded_for_key(key).is_none() {
+			return None
+		}
+		self.value_cache.get(key)
+	}
+
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<TrieHash<L>>) {
+		match &value {
+			CachedValue::NonExisting => {
+				self.recorded_keys.entry(key.to_vec()).insert(RecordedForKey::Value);
+			},
+			CachedValue::ExistingHash(_h) => {
+				self.recorded_keys.entry(key.to_vec()).or_insert(RecordedForKey::Hash);
+			},
+			CachedValue::Existing { .. } => {
+				self.recorded_keys.entry(key.to_vec()).insert(RecordedForKey::Value);
+			},
+		}
+		self.value_cache.insert(key.to_vec(), value);
+	}
+
+	fn get_or_insert_node(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		use hashbrown::hash_map::Entry;
+		match self.node_cache.entry(hash) {
+			Entry::Occupied(e) => Ok(e.into_mut().node_owned()),
+			Entry::Vacant(e) => {
+				let node_data = (*fetch_node)()?;
+				if is_value {
+					let node = NodeOwned::Value(node_data.clone().into(), hash);
+					self.nodes.push((hash, node_data));
+
+					Ok(e.insert(node.into()).node_owned())
+				} else {
+					let node = match L::Codec::decode(&node_data[..]) {
+						Ok(node) => node,
+						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+					};
+					let node = node.to_owned_node::<L>()?;
+
+					self.nodes.push((hash, node_data));
+
+					Ok(e.insert(node.into()).node_owned())
+				}
+			},
+		}
+	}
+
+	// TODO can olny return &mut CacheNode??
+	fn get_or_insert_node2(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&OwnedNode<Vec<u8>>, TrieHash<L>, CError<L>> {
+		use hashbrown::hash_map::Entry;
+		match self.node_cache.entry(hash) {
+			Entry::Occupied(e) => Ok(e.into_mut().owned_node()),
+			Entry::Vacant(e) => {
+				let node_data = (*fetch_node)()?;
+				if is_value {
+					let node = NodeOwned::Value(node_data.clone().into(), hash);
+					self.nodes.push((hash, node_data));
+
+					Ok(e.insert(node.into()).owned_node())
+				} else {
+					let node = match L::Codec::decode(&node_data[..]) {
+						Ok(node) => node,
+						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+					};
+					let node = node.to_owned_node::<L>()?;
+
+					self.nodes.push((hash, node_data));
+
+					Ok(e.insert(node.into()).owned_node())
+				}
+			},
+		}
+	}
+
+	// TODO should be removable (get_or_insert as single entry point).
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
+		self.node_cache.get_mut(hash).map(|o| o.node_owned())
+	}
+
+	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L>>) {
 		match access {
 			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
 				self.nodes.push((hash, encoded_node.to_vec()));
 			},
 			TrieAccess::NodeOwned { hash, node_owned, .. } => {
-				self.nodes.push((hash, node_owned.to_encoded::<NC>()));
+				self.nodes.push((hash, node_owned.to_encoded::<L::Codec>()));
 			},
 			TrieAccess::Value { hash, value, full_key } => {
 				self.nodes.push((hash, value.to_vec()));
@@ -555,11 +786,12 @@ impl TrieFactory {
 		&self,
 		db: &'db dyn HashDBRef<L::Hash, DBValue>,
 		root: &'db TrieHash<L>,
+		context: &'cache mut dyn Context<L>,
 	) -> TrieKinds<'db, 'cache, L> {
 		match self.spec {
-			TrieSpec::Generic => TrieKinds::Generic(TrieDBBuilder::new(db, root).build()),
-			TrieSpec::Secure => TrieKinds::Secure(SecTrieDB::new(db, root)),
-			TrieSpec::Fat => TrieKinds::Fat(FatDB::new(db, root)),
+			TrieSpec::Generic => TrieKinds::Generic(TrieDBBuilder::new(db, root).build(context)),
+			TrieSpec::Secure => TrieKinds::Secure(SecTrieDB::new(db, root, context)),
+			TrieSpec::Fat => TrieKinds::Fat(FatDB::new(db, root, context)),
 		}
 	}
 

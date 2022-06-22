@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-	CError, DBValue, Query, Result, Trie, TrieDB, TrieDBIterator, TrieDBKeyIterator, TrieHash,
-	TrieItem, TrieIterator, TrieKeyItem, TrieLayout,
+	CError, Context, DBValue, Query, Result, Trie, TrieDB, TrieDBIterator, TrieDBKeyIterator,
+	TrieHash, TrieItem, TrieIterator, TrieKeyItem, TrieLayout,
 };
 use hash_db::{HashDBRef, Hasher};
 
@@ -38,8 +38,12 @@ where
 	/// Create a new trie with the backing database `db` and empty `root`
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L>) -> Self {
-		FatDB { raw: TrieDBBuilder::new(db, root).build() }
+	pub fn new(
+		db: &'db dyn HashDBRef<L::Hash, DBValue>,
+		root: &'db TrieHash<L>,
+		context: &'cache mut dyn Context<L>,
+	) -> Self {
+		FatDB { raw: TrieDBBuilder::new(db, root).build(context) }
 	}
 
 	/// Get the backing database.

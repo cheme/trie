@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-	rstd::boxed::Box, triedb::TrieDB, CError, DBValue, Query, Result, Trie, TrieDBBuilder,
+	rstd::boxed::Box, triedb::TrieDB, CError, Context, DBValue, Query, Result, Trie, TrieDBBuilder,
 	TrieHash, TrieItem, TrieIterator, TrieKeyItem, TrieLayout,
 };
 use hash_db::{HashDBRef, Hasher};
@@ -36,8 +36,12 @@ where
 	///
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L>) -> Self {
-		SecTrieDB { raw: TrieDBBuilder::new(db, root).build() }
+	pub fn new(
+		db: &'db dyn HashDBRef<L::Hash, DBValue>,
+		root: &'db TrieHash<L>,
+		context: &'cache mut dyn Context<L>,
+	) -> Self {
+		SecTrieDB { raw: TrieDBBuilder::new(db, root).build(context) }
 	}
 
 	/// Get a reference to the underlying raw `TrieDB` struct.

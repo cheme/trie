@@ -22,8 +22,8 @@ use trie_db::{
 	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
 	trie_visit,
 	triedbmut::ChildReference,
-	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,
-	TrieHash, TrieLayout, TrieMut, TrieRoot,
+	CacheNode, DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder,
+	TrieDBMutBuilder, TrieHash, TrieLayout, TrieMut, TrieRoot,
 };
 pub use trie_root::TrieStream;
 use trie_root::{Hasher, Value as TrieStreamValue};
@@ -901,10 +901,11 @@ where
 		t.commit();
 		*t.root()
 	};
+	let mut context = CacheNode::new();
 	if root_new != root {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root_new).build();
+			let t = TrieDBBuilder::<T>::new(&db, &root_new).build(&mut context);
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:x?}", a);
@@ -912,7 +913,7 @@ where
 		}
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &memdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root).build();
+			let t = TrieDBBuilder::<T>::new(&db, &root).build(&mut context);
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:x?}", a);
@@ -1021,10 +1022,11 @@ pub fn compare_implementations_unordered<T, DB>(
 		cb.root.unwrap_or_default()
 	};
 
+	let mut context = CacheNode::new();
 	if root != root_new {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &memdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root).build();
+			let t = TrieDBBuilder::<T>::new(&db, &root).build(&mut context);
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:?}", a);
@@ -1032,7 +1034,7 @@ pub fn compare_implementations_unordered<T, DB>(
 		}
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root_new).build();
+			let t = TrieDBBuilder::<T>::new(&db, &root_new).build(&mut context);
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:?}", a);
