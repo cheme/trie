@@ -36,7 +36,7 @@ fn iterator_works_internal<T: TrieLayout>() {
 		}
 	}
 
-	let trie = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let trie = TrieDB::<T>::new(&memdb, &root);
 
 	let iter = trie.iter().unwrap();
 	let mut iter_pairs = Vec::new();
@@ -64,7 +64,7 @@ fn iterator_seek_works_internal<T: TrieLayout>() {
 		}
 	}
 
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 
 	let mut iter = t.iter().unwrap();
 	assert_eq!(
@@ -97,7 +97,7 @@ fn iterator_internal<T: TrieLayout>() {
 		}
 	}
 
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 	assert_eq!(
 		d.iter().map(|i| i.clone()).collect::<Vec<_>>(),
 		t.iter().unwrap().map(|x| x.unwrap().0).collect::<Vec<_>>()
@@ -107,8 +107,8 @@ fn iterator_internal<T: TrieLayout>() {
 
 test_layouts!(iterator_seek, iterator_seek_internal);
 fn iterator_seek_internal<T: TrieLayout>() {
-	let d = vec![b"A".to_vec(), b"AA".to_vec(), b"AB".to_vec(), b"B".to_vec()];
-	let vals = vec![vec![0; 32], vec![1; 32], vec![2; 32], vec![3; 32]];
+	let d = vec![b"A".to_vec(), b"AA".to_vec(), b"AB".to_vec(), b"AS".to_vec(), b"B".to_vec()];
+	let vals = vec![vec![0; 32], vec![1; 32], vec![2; 32], vec![4; 32], vec![3; 32]];
 
 	let mut memdb = PrefixedMemoryDB::<T>::default();
 	let mut root = Default::default();
@@ -119,7 +119,7 @@ fn iterator_seek_internal<T: TrieLayout>() {
 		}
 	}
 
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 	let mut iter = t.iter().unwrap();
 	assert_eq!(iter.next().unwrap().unwrap(), (b"A".to_vec(), vals[0].clone()));
 	iter.seek(b"!").unwrap();
@@ -133,11 +133,15 @@ fn iterator_seek_internal<T: TrieLayout>() {
 	let iter = trie_db::TrieDBIterator::new_prefixed(&t, b"aaaaa").unwrap();
 	assert_eq!(&vals[..0], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let iter = trie_db::TrieDBIterator::new_prefixed(&t, b"A").unwrap();
-	assert_eq!(&vals[..3], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	assert_eq!(&vals[..4], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let iter = trie_db::TrieDBIterator::new_prefixed_then_seek(&t, b"A", b"AA").unwrap();
-	assert_eq!(&vals[1..3], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	assert_eq!(&vals[1..4], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	let iter = trie_db::TrieDBIterator::new_prefixed_then_seek(&t, b"A", b"AR").unwrap();
+	assert_eq!(&vals[3..4], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	let iter = trie_db::TrieDBIterator::new_prefixed_then_seek(&t, b"A", b"AS").unwrap();
+	assert_eq!(&vals[3..4], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let iter = trie_db::TrieDBIterator::new_prefixed_then_seek(&t, b"A", b"AB").unwrap();
-	assert_eq!(&vals[2..3], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	assert_eq!(&vals[2..4], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let iter = trie_db::TrieDBIterator::new_prefixed_then_seek(&t, b"", b"AB").unwrap();
 	assert_eq!(&vals[2..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let mut iter = t.iter().unwrap();
@@ -151,10 +155,10 @@ fn iterator_seek_internal<T: TrieLayout>() {
 	assert_eq!(&vals[3..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let mut iter = t.iter().unwrap();
 	iter.seek(b"B").unwrap();
-	assert_eq!(&vals[3..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	assert_eq!(&vals[4..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 	let mut iter = t.iter().unwrap();
 	iter.seek(b"C").unwrap();
-	assert_eq!(&vals[4..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
+	assert_eq!(&vals[5..], &iter.map(|x| x.unwrap().1).collect::<Vec<_>>()[..]);
 }
 
 test_layouts!(get_length_with_extension, get_length_with_extension_internal);
@@ -167,7 +171,7 @@ fn get_length_with_extension_internal<T: TrieLayout>() {
 		t.insert(b"B", b"ABCBAAAAAAAAAAAAAAAAAAAAAAAAAAAA").unwrap();
 	}
 
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 	assert_eq!(t.get_with(b"A", |x: &[u8]| x.len()).unwrap(), Some(3));
 	assert_eq!(t.get_with(b"B", |x: &[u8]| x.len()).unwrap(), Some(32));
 	assert_eq!(t.get_with(b"C", |x: &[u8]| x.len()).unwrap(), None);
@@ -186,7 +190,7 @@ fn debug_output_supports_pretty_print_internal<T: TrieLayout>() {
 		}
 		t.root().clone()
 	};
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 
 	if T::USE_EXTENSION {
 		assert_eq!(
@@ -268,7 +272,7 @@ fn test_lookup_with_corrupt_data_returns_decoder_error_internal<T: TrieLayout>()
 		t.insert(b"B", b"ABCBA").unwrap();
 	}
 
-	let t = TrieDB::<T>::new(&memdb, &root).unwrap();
+	let t = TrieDB::<T>::new(&memdb, &root);
 
 	// query for an invalid data type to trigger an error
 	let q = |x: &[u8]| x.len() < 64;
