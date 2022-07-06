@@ -19,7 +19,7 @@ use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Ou
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
 	nibble_ops,
-	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
+	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan, CachedValueOwned},
 	trie_visit,
 	triedbmut::ChildReference,
 	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,
@@ -1096,6 +1096,7 @@ pub struct TestTrieCache<L: TrieLayout> {
 	/// In a real implementation we need to make sure that this is unique per trie root.
 	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
 	node_cache: HashMap<TrieHash<L>, NodeOwned<TrieHash<L>>>,
+	node_value_cache: HashMap<TrieHash<L>, CachedValueOwned<TrieHash<L>>>,
 }
 
 impl<L: TrieLayout> TestTrieCache<L> {
@@ -1112,7 +1113,7 @@ impl<L: TrieLayout> TestTrieCache<L> {
 
 impl<L: TrieLayout> Default for TestTrieCache<L> {
 	fn default() -> Self {
-		Self { value_cache: Default::default(), node_cache: Default::default() }
+		Self { value_cache: Default::default(), node_cache: Default::default(), node_value_cache: Default::default() }
 	}
 }
 
@@ -1142,6 +1143,25 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
 			},
 		}
 	}
+
+	fn get_or_insert_value(
+		&mut self,
+		hash: TrieHash<L>,
+		fetch_node: &mut dyn FnMut() -> trie_db::Result<
+			CachedValueOwned<TrieHash<L>>,
+			TrieHash<L>,
+			trie_db::CError<L>,
+		>,
+	) -> trie_db::Result<&CachedValueOwned<TrieHash<L>>, TrieHash<L>, trie_db::CError<L>> {
+		match self.node_value_cache.entry(hash) {
+			Entry::Occupied(e) => Ok(e.into_mut()),
+			Entry::Vacant(e) => {
+				let node = (*fetch_node)()?;
+				Ok(e.insert(node))
+			},
+		}
+	}
+
 
 	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
 		self.node_cache.get(hash)

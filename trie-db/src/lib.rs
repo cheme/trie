@@ -39,7 +39,7 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::NodeOwned;
+use node::{NodeOwned, CachedValueOwned};
 
 pub mod node;
 pub mod proof;
@@ -620,6 +620,12 @@ impl<H> From<Option<H>> for CachedValue<H> {
 	}
 }
 
+/// Cached item.
+pub enum CachedNode<H> {
+	Node(NodeOwned<H>),
+	Value(CachedValueOwned<H>),
+}
+
 /// A cache that can be used to speed-up certain operations when accessing the trie.
 pub trait TrieCache<NC: NodeCodec> {
 	/// Lookup value for the given `key`.
@@ -658,6 +664,20 @@ pub trait TrieCache<NC: NodeCodec> {
 		hash: NC::HashOut,
 		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
 	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+
+	/// Get or insert a [`CachedValueOwned`].
+	///
+	/// The cache implementation should look up based on the given `hash` if the node is already
+	/// known. If the node is not yet known, the given `fetch_node` function can be used to fetch
+	/// the particular node.
+	///
+	/// Returns the [`CachedValueOwned`] or an error that happened on fetching the node.
+	fn get_or_insert_value(
+		&mut self,
+		hash: NC::HashOut,
+		fetch_node: &mut dyn FnMut() -> Result<CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>,
+	) -> Result<&CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
 	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;

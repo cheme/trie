@@ -19,7 +19,7 @@ use crate::{
 	nibble::{nibble_ops, BackingByteVec, NibbleSlice, NibbleVec},
 	node::{
 		decode_hash, Node as EncodedNode, NodeHandle as EncodedNodeHandle, NodeHandleOwned,
-		NodeKey, NodeOwned, Value as EncodedValue, ValueOwned,
+		NodeKey, NodeOwned, Value as EncodedValue, ValueOwned, CachedValueOwned,
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
@@ -438,8 +438,6 @@ impl<L: TrieLayout> Node<L> {
 
 				Node::NibbledBranch(k.into(), children, val.as_ref().map(Into::into))
 			},
-			NodeOwned::Value(_, _) =>
-				unreachable!("`NodeOwned::Value` can only be returned for the hash of a value."),
 		}
 	}
 
@@ -1908,7 +1906,7 @@ where
 				}
 
 				// Also cache values of inline nodes.
-				cache_child_values::<L>(&node, &mut values_to_cache, full_key.clone());
+				cache_child_values::<L>(node, &mut values_to_cache, full_key.clone());
 			}
 
 			drop(node);
@@ -1925,10 +1923,10 @@ where
 
 			// `get_or_insert` should always return `Ok`, but be safe.
 			let value = if let Ok(value) = cache
-				.get_or_insert_node(hash, &mut || Ok(NodeOwned::Value(value.clone(), hash)))
-				.map(|n| n.data().cloned())
+				.get_or_insert_value(hash, &mut || Ok(CachedValueOwned(value.clone(), hash)))
+				.map(|n| n.0.clone())
 			{
-				value
+				Some(value)
 			} else {
 				None
 			};

@@ -264,12 +264,15 @@ pub enum NodeOwned<H> {
 		[Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH],
 		Option<ValueOwned<H>>,
 	),
-	/// Node that represents a value.
-	///
-	/// This variant is only constructed when working with a [`crate::TrieCache`]. It is only
-	/// used to cache a raw value.
-	Value(Bytes, H),
 }
+
+/// Node that represents a value.
+///
+/// This variant is only constructed when working with a [`crate::TrieCache`]. It is only
+/// used to cache a raw value.
+#[derive(Eq, PartialEq, Clone)]
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct CachedValueOwned<H>(pub Bytes, pub H);
 
 impl<H> NodeOwned<H>
 where
@@ -299,7 +302,6 @@ where
 				children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference::<C>())),
 				value.as_ref().map(|v| v.as_value()),
 			),
-			Self::Value(data, _) => data.to_vec(),
 		}
 	}
 
@@ -342,7 +344,7 @@ where
 		}
 
 		match self {
-			Self::Leaf(_, _) | Self::Empty | Self::Value(_, _) => ChildIter::Empty,
+			Self::Leaf(_, _) | Self::Empty => ChildIter::Empty,
 			Self::Extension(_, child) => ChildIter::Single(child, false),
 			Self::Branch(children, _) | Self::NibbledBranch(_, children, _) =>
 				ChildIter::Array(children, 0),
@@ -357,7 +359,6 @@ where
 			Self::Extension(_, _) => None,
 			Self::Branch(_, value) => value.as_ref().and_then(|v| v.data_hash()),
 			Self::NibbledBranch(_, _, value) => value.as_ref().and_then(|v| v.data_hash()),
-			Self::Value(_, hash) => Some(*hash),
 		}
 	}
 }
@@ -371,14 +372,13 @@ impl<H> NodeOwned<H> {
 			Self::Extension(_, _) => None,
 			Self::Branch(_, value) => value.as_ref().and_then(|v| v.data()),
 			Self::NibbledBranch(_, _, value) => value.as_ref().and_then(|v| v.data()),
-			Self::Value(data, _) => Some(data),
 		}
 	}
 
 	/// Returns the partial key of this node.
 	pub fn partial_key(&self) -> Option<&NibbleVec> {
 		match self {
-			Self::Branch(_, _) | Self::Value(_, _) | Self::Empty => None,
+			Self::Branch(_, _) | Self::Empty => None,
 			Self::Extension(partial, _) |
 			Self::Leaf(partial, _) |
 			Self::NibbledBranch(partial, _, _) => Some(partial),
@@ -406,7 +406,6 @@ impl<H> NodeOwned<H> {
 			Self::Empty => 0,
 			Self::Leaf(nibbles, value) =>
 				nibbles.inner().len() + value.data().map_or(0, |b| b.len()),
-			Self::Value(bytes, _) => bytes.len(),
 			Self::Extension(nibbles, child) => {
 				// If the `child` isn't an inline node, its size is already taken account for by
 				// `self_size`.

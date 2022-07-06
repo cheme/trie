@@ -16,7 +16,7 @@
 
 use crate::{
 	nibble::NibbleSlice,
-	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned},
+	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned, CachedValueOwned},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
 	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
@@ -94,23 +94,19 @@ where
 		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
+			// TODO inline value cache by key record should be here
+			// for inline too
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
 			ValueOwned::Node(hash) => {
-				let node = cache.get_or_insert_node(hash, &mut || {
+				let node = cache.get_or_insert_value(hash, &mut || {
 					let value = db
 						.get(&hash, prefix)
 						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
 
-					Ok(NodeOwned::Value(value.into(), hash))
+					Ok(CachedValueOwned(value.into(), hash))
 				})?;
 
-				let value = node
-					.data()
-					.expect(
-						"We are caching a `NodeOwned::Value` for a value node \
-						hash and this cached node has always data attached; qed",
-					)
-					.clone();
+				let value = node.0.clone();
 
 				if let Some(recorder) = recorder {
 					recorder.record(TrieAccess::Value {
@@ -490,13 +486,6 @@ where
 						self.record(|| TrieAccess::NonExisting { full_key });
 
 						return Ok(None)
-					},
-					NodeOwned::Value(_, _) => {
-						unreachable!(
-							"`NodeOwned::Value` can not be reached by using the hash of a node. \
-							 `NodeOwned::Value` is only constructed when loading a value into memory, \
-							 which needs to have a different hash than any node; qed",
-						)
 					},
 				};
 
