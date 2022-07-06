@@ -18,8 +18,8 @@ use crate::{
 	lookup::Lookup,
 	nibble::{nibble_ops, BackingByteVec, NibbleSlice, NibbleVec},
 	node::{
-		decode_hash, Node as EncodedNode, NodeHandle as EncodedNodeHandle, NodeHandleOwned,
-		NodeKey, NodeOwned, Value as EncodedValue, ValueOwned, CachedValueOwned,
+		decode_hash, CachedValueOwned, Node as EncodedNode, NodeHandle as EncodedNodeHandle,
+		NodeHandleOwned, NodeKey, NodeOwned, Value as EncodedValue, ValueOwned,
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
@@ -71,7 +71,7 @@ type NibbleFullKey<'key> = NibbleSlice<'key>;
 #[derive(Clone, Eq)]
 pub enum Value<L: TrieLayout> {
 	/// Value bytes inlined in a trie node.
-	Inline(Bytes),
+	Inline(Bytes, Option<TrieHash<L>>),
 	/// Hash of the value.
 	Node(TrieHash<L>),
 	/// Hash of value bytes if calculated and value bytes.
@@ -83,7 +83,7 @@ pub enum Value<L: TrieLayout> {
 impl<L: TrieLayout> PartialEq<Self> for Value<L> {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
-			(Value::Inline(v), Value::Inline(ov)) => v == ov,
+			(Value::Inline(v, _), Value::Inline(ov, _)) => v == ov,
 			(Value::Node(h), Value::Node(oh)) => h == oh,
 			(Value::NewNode(Some(h), _), Value::NewNode(Some(oh), _)) => h == oh,
 			(Value::NewNode(_, v), Value::NewNode(_, ov)) => v == ov,
@@ -97,7 +97,7 @@ impl<L: TrieLayout> PartialEq<Self> for Value<L> {
 impl<'a, L: TrieLayout> From<EncodedValue<'a>> for Value<L> {
 	fn from(v: EncodedValue<'a>) -> Self {
 		match v {
-			EncodedValue::Inline(value) => Value::Inline(value.into()),
+			EncodedValue::Inline(value) => Value::Inline(value.into(), None),
 			EncodedValue::Node(hash) => {
 				let mut h = TrieHash::<L>::default();
 				h.as_mut().copy_from_slice(hash);
@@ -110,7 +110,7 @@ impl<'a, L: TrieLayout> From<EncodedValue<'a>> for Value<L> {
 impl<L: TrieLayout> From<&ValueOwned<TrieHash<L>>> for Value<L> {
 	fn from(val: &ValueOwned<TrieHash<L>>) -> Self {
 		match val {
-			ValueOwned::Inline(data, _) => Self::Inline(data.clone()),
+			ValueOwned::Inline(data, hash) => Self::Inline(data.clone(), Some(*hash)),
 			ValueOwned::Node(hash) => Self::Node(*hash),
 		}
 	}
@@ -123,7 +123,7 @@ impl<L: TrieLayout> From<(Bytes, Option<u32>)> for Value<L> {
 				if threshold.map(|threshold| value.len() >= threshold as usize).unwrap_or(false) {
 					Value::NewNode(None, value)
 				} else {
-					Value::Inline(value)
+					Value::Inline(value, None)
 				},
 		}
 	}
@@ -165,7 +165,7 @@ impl<L: TrieLayout> Value<L> {
 			}
 		}
 		let value = match &*self {
-			Value::Inline(value) => EncodedValue::Inline(&value),
+			Value::Inline(value, _hash) => EncodedValue::Inline(&value),
 			Value::Node(hash) => EncodedValue::Node(hash.as_ref()),
 			Value::NewNode(Some(hash), _value) => EncodedValue::Node(hash.as_ref()),
 			Value::NewNode(None, _value) =>
@@ -182,7 +182,7 @@ impl<L: TrieLayout> Value<L> {
 		full_key: &[u8],
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
 		Ok(Some(match self {
-			Value::Inline(value) => value.to_vec(),
+			Value::Inline(value, _hash) => value.to_vec(),
 			Value::NewNode(_, value) => value.to_vec(),
 			Value::Node(hash) =>
 				if let Some(value) = db.get(hash, prefix) {
@@ -242,7 +242,7 @@ impl<'a> Debug for ToHex<'a> {
 impl<L: TrieLayout> Debug for Value<L> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
-			Self::Inline(value) => write!(fmt, "Some({:?})", ToHex(value)),
+			Self::Inline(value, _) => write!(fmt, "Some({:?})", ToHex(value)),
 			Self::Node(hash) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
 			Self::NewNode(Some(hash), _) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
 			Self::NewNode(_hash, value) => write!(fmt, "Some({:?})", ToHex(value)),
@@ -379,9 +379,9 @@ impl<L: TrieLayout> Node<L> {
 	fn from_node_owned(node_owned: &NodeOwned<TrieHash<L>>, storage: &mut NodeStorage<L>) -> Self {
 		match node_owned {
 			NodeOwned::Empty => Node::Empty,
-			NodeOwned::Leaf(k, v) => Node::Leaf(k.into(), v.into()),
+			NodeOwned::Leaf(k, v) => Node::Leaf(k.clone(), v.into()),
 			NodeOwned::Extension(key, cb) =>
-				Node::Extension(key.into(), Self::inline_or_hash_owned(cb, storage)),
+				Node::Extension(key.clone(), Self::inline_or_hash_owned(cb, storage)),
 			NodeOwned::Branch(encoded_children, val) => {
 				let mut child = |i: usize| {
 					encoded_children[i]
@@ -436,7 +436,7 @@ impl<L: TrieLayout> Node<L> {
 					child(15),
 				]);
 
-				Node::NibbledBranch(k.into(), children, val.as_ref().map(Into::into))
+				Node::NibbledBranch(k.clone(), children, val.as_ref().map(Into::into))
 			},
 		}
 	}
@@ -1891,7 +1891,8 @@ where
 						|(n, c)| {
 							let mut key = full_key.clone();
 							n.map(|n| key.push(n));
-							c.partial_key().map(|p| key.append(p));
+							c.partial_key()
+								.map(|p| key.append_optional_slice_and_nibble(Some(&p), None));
 
 							if let Some((hash, data)) =
 								c.data().and_then(|d| c.data_hash().map(|h| (h, d)))
@@ -1900,6 +1901,8 @@ where
 									.push((key.inner().to_vec(), (data.clone(), hash).into()));
 							}
 
+							// TODO should we cache only the queried value and new value.
+							// Caching all unrelated to query value seems overkill.
 							cache_child_values::<L>(c, values_to_cache, key);
 						},
 					);

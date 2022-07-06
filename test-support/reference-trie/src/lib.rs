@@ -19,7 +19,9 @@ use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Ou
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
 	nibble_ops,
-	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan, CachedValueOwned},
+	node::{
+		CachedValueOwned, NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan,
+	},
 	trie_visit,
 	triedbmut::ChildReference,
 	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,
@@ -1113,7 +1115,11 @@ impl<L: TrieLayout> TestTrieCache<L> {
 
 impl<L: TrieLayout> Default for TestTrieCache<L> {
 	fn default() -> Self {
-		Self { value_cache: Default::default(), node_cache: Default::default(), node_value_cache: Default::default() }
+		Self {
+			value_cache: Default::default(),
+			node_cache: Default::default(),
+			node_value_cache: Default::default(),
+		}
 	}
 }
 
@@ -1161,7 +1167,6 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
 			},
 		}
 	}
-
 
 	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
 		self.node_cache.get(hash)

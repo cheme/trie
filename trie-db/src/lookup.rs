@@ -16,7 +16,10 @@
 
 use crate::{
 	nibble::NibbleSlice,
-	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned, CachedValueOwned},
+	node::{
+		decode_hash, CachedValueOwned, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value,
+		ValueOwned,
+	},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
 	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
@@ -383,8 +386,9 @@ where
 			// without incrementing the depth.
 			loop {
 				let next_node = match node {
-					NodeOwned::Leaf(slice, value) =>
-						return if partial == *slice {
+					NodeOwned::Leaf(slice, value) => {
+						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						return if partial == pr {
 							let value = (*value).clone();
 							drop(node);
 							load_value_owned(
@@ -400,17 +404,20 @@ where
 							self.record(|| TrieAccess::NonExisting { full_key });
 
 							Ok(None)
-						},
-					NodeOwned::Extension(slice, item) =>
-						if partial.starts_with_vec(&slice) {
-							partial = partial.mid(slice.len());
-							key_nibbles += slice.len();
+						}
+					},
+					NodeOwned::Extension(slice, item) => {
+						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						if partial.starts_with(&pr) {
+							partial = partial.mid(pr.len());
+							key_nibbles += pr.len();
 							item
 						} else {
 							self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
-						},
+						}
+					},
 					NodeOwned::Branch(children, value) =>
 						if partial.is_empty() {
 							return if let Some(value) = value.clone() {
@@ -444,13 +451,14 @@ where
 							}
 						},
 					NodeOwned::NibbledBranch(slice, children, value) => {
-						if !partial.starts_with_vec(&slice) {
+						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						if !partial.starts_with(&pr) {
 							self.record(|| TrieAccess::NonExisting { full_key });
 
 							return Ok(None)
 						}
 
-						if partial.len() == slice.len() {
+						if partial.len() == pr.len() {
 							return if let Some(value) = value.clone() {
 								drop(node);
 								load_value_owned(
@@ -468,10 +476,10 @@ where
 								Ok(None)
 							}
 						} else {
-							match &children[partial.at(slice.len()) as usize] {
+							match &children[partial.at(pr.len()) as usize] {
 								Some(x) => {
-									partial = partial.mid(slice.len() + 1);
-									key_nibbles += slice.len() + 1;
+									partial = partial.mid(pr.len() + 1);
+									key_nibbles += pr.len() + 1;
 									x
 								},
 								None => {

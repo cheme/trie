@@ -39,7 +39,7 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::{NodeOwned, CachedValueOwned};
+use node::{CachedValueOwned, NodeOwned};
 
 pub mod node;
 pub mod proof;
@@ -675,9 +675,9 @@ pub trait TrieCache<NC: NodeCodec> {
 	fn get_or_insert_value(
 		&mut self,
 		hash: NC::HashOut,
-		fetch_node: &mut dyn FnMut() -> Result<CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>,
+		fetch_node: &mut dyn FnMut()
+			-> Result<CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>,
 	) -> Result<&CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>;
-
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
 	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;

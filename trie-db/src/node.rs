@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-	nibble::{self, nibble_ops, NibbleSlice, NibbleVec},
+	nibble::{self, nibble_ops, NibbleSlice},
 	node_codec::NodeCodec,
 	Bytes, CError, ChildReference, Result, TrieError, TrieHash, TrieLayout,
 };
@@ -26,6 +26,14 @@ use crate::rstd::{borrow::Borrow, mem, ops::Range};
 /// Partial node key type: offset and owned value of a nibbleslice.
 /// Offset is applied on first byte of array (bytes are right aligned).
 pub type NodeKey = (usize, nibble::BackingByteVec);
+
+fn node_key_dyn_size(key: &NodeKey) -> usize {
+	if key.1.len() > crate::nibble::BACKING_BYTE_VEC_SMALLVEC_SIZE {
+		key.1.len()
+	} else {
+		0
+	}
+}
 
 /// A reference to a trie node which may be stored within another trie node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,15 +260,15 @@ pub enum NodeOwned<H> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has key slice and value. Value may not be empty.
-	Leaf(NibbleVec, ValueOwned<H>),
+	Leaf(NodeKey, ValueOwned<H>),
 	/// Extension node; has key slice and node data. Data may not be null.
-	Extension(NibbleVec, NodeHandleOwned<H>),
+	Extension(NodeKey, NodeHandleOwned<H>),
 	/// Branch node; has slice of child nodes (each possibly null)
 	/// and an optional immediate node data.
 	Branch([Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH], Option<ValueOwned<H>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
 	NibbledBranch(
-		NibbleVec,
+		NodeKey,
 		[Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH],
 		Option<ValueOwned<H>>,
 	),
@@ -285,23 +293,33 @@ where
 	{
 		match self {
 			Self::Empty => C::empty_node().to_vec(),
-			Self::Leaf(partial, value) =>
-				C::leaf_node(partial.right_iter(), partial.len(), value.as_value()),
-			Self::Extension(partial, child) => C::extension_node(
-				partial.right_iter(),
-				partial.len(),
-				child.as_child_reference::<C>(),
-			),
+			Self::Leaf(partial, value) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				C::leaf_node(partial.right_iter(), partial.len(), value.as_value())
+			},
+			Self::Extension(partial, child) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				C::extension_node(
+					partial.right_iter(),
+					partial.len(),
+					child.as_child_reference::<C>(),
+				)
+			},
 			Self::Branch(children, value) => C::branch_node(
 				children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference::<C>())),
 				value.as_ref().map(|v| v.as_value()),
 			),
-			Self::NibbledBranch(partial, children, value) => C::branch_node_nibbled(
-				partial.right_iter(),
-				partial.len(),
-				children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference::<C>())),
-				value.as_ref().map(|v| v.as_value()),
-			),
+			Self::NibbledBranch(partial, children, value) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				C::branch_node_nibbled(
+					partial.right_iter(),
+					partial.len(),
+					children
+						.iter()
+						.map(|child| child.as_ref().map(|c| c.as_child_reference::<C>())),
+					value.as_ref().map(|v| v.as_value()),
+				)
+			},
 		}
 	}
 
@@ -376,12 +394,15 @@ impl<H> NodeOwned<H> {
 	}
 
 	/// Returns the partial key of this node.
-	pub fn partial_key(&self) -> Option<&NibbleVec> {
+	pub fn partial_key(&self) -> Option<NibbleSlice> {
 		match self {
 			Self::Branch(_, _) | Self::Empty => None,
 			Self::Extension(partial, _) |
 			Self::Leaf(partial, _) |
-			Self::NibbledBranch(partial, _, _) => Some(partial),
+			Self::NibbledBranch(partial, _, _) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				Some(partial)
+			},
 		}
 	}
 
@@ -405,17 +426,17 @@ impl<H> NodeOwned<H> {
 		let dynamic_size = match self {
 			Self::Empty => 0,
 			Self::Leaf(nibbles, value) =>
-				nibbles.inner().len() + value.data().map_or(0, |b| b.len()),
+				node_key_dyn_size(nibbles) + value.data().map_or(0, |b| b.len()),
 			Self::Extension(nibbles, child) => {
 				// If the `child` isn't an inline node, its size is already taken account for by
 				// `self_size`.
-				nibbles.inner().len() + child.as_inline().map_or(0, |n| n.size_in_bytes())
+				node_key_dyn_size(nibbles) + child.as_inline().map_or(0, |n| n.size_in_bytes())
 			},
 			Self::Branch(childs, value) =>
 				childs_size(childs.iter()) +
 					value.as_ref().and_then(|v| v.data()).map_or(0, |b| b.len()),
 			Self::NibbledBranch(nibbles, childs, value) =>
-				nibbles.inner().len() +
+				node_key_dyn_size(nibbles) +
 					childs_size(childs.iter()) +
 					value.as_ref().and_then(|v| v.data()).map_or(0, |b| b.len()),
 		};
