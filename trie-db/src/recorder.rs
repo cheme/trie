@@ -43,14 +43,14 @@ impl<L: TrieLayout> Recorder<L> {
 	}
 }
 
-impl<L: TrieLayout> TrieRecorder<TrieHash<L>> for Recorder<L> {
-	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L>>) {
+impl<L: TrieLayout> TrieRecorder<L> for Recorder<L> {
+	fn record<'a>(&mut self, access: TrieAccess<'a, L>) {
 		match access {
 			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
 				self.nodes.push((hash, encoded_node.to_vec()));
 			},
 			TrieAccess::NodeOwned { hash, node_owned, .. } => {
-				self.nodes.push((hash, node_owned.to_encoded::<L::Codec>()));
+				self.nodes.push((hash, node_owned.to_encoded()));
 			},
 			TrieAccess::Value { hash, value, full_key } => {
 				self.nodes.push((hash, value.to_vec()));

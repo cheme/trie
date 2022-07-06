@@ -19,14 +19,14 @@ use crate::{
 	nibble::{nibble_ops, BackingByteVec, NibbleSlice, NibbleVec},
 	node::{
 		decode_hash, CachedValueOwned, Node as EncodedNode, NodeHandle as EncodedNodeHandle,
-		NodeHandleOwned, NodeKey, NodeOwned, Value as EncodedValue, ValueOwned,
+		NodeKey, Value as EncodedValue, ValueOwned,
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
 	Bytes, CError, CachedValue, DBValue, Result, TrieAccess, TrieCache, TrieError, TrieHash,
 	TrieLayout, TrieMut, TrieRecorder,
 };
-
+use derivative::Derivative;
 use hash_db::{HashDB, Hasher, Prefix, EMPTY_PREFIX};
 use hashbrown::HashSet;
 
@@ -38,25 +38,52 @@ use crate::rstd::fmt::{self, Debug};
 
 // For lookups into the Node storage buffer.
 // This is deliberately non-copyable.
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Debug))]
 struct StorageHandle(usize);
 
 // Handles to nodes in the trie.
-#[cfg_attr(feature = "std", derive(Debug))]
-enum NodeHandle<H> {
-	/// Loaded into memory.
+#[derive(Derivative)]
+#[derivative(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derivative(Debug))]
+pub enum NodeHandle<L: TrieLayout> {
+	/// Loaded in memory.
+	Inline(Box<Node<L>>),
+	/// Loaded into storage (in memory.
 	InMemory(StorageHandle),
 	/// Either a hash or an inline node
-	Hash(H),
+	Hash(TrieHash<L>),
 }
 
-impl<H> From<StorageHandle> for NodeHandle<H> {
+impl<L: TrieLayout> From<StorageHandle> for NodeHandle<L> {
 	fn from(handle: StorageHandle) -> Self {
 		NodeHandle::InMemory(handle)
 	}
 }
 
-fn empty_children<H>() -> Box<[Option<NodeHandle<H>>; nibble_ops::NIBBLE_LENGTH]> {
+impl<L: TrieLayout> NodeHandle<L> {
+	/// Returns `self` as a [`ChildReference`].
+	///
+	/// # Panic
+	///
+	/// This function panics if `self == Self::Inline(_)` and the inline node encoded length is
+	/// greater then the length of the hash.
+	fn as_child_reference(&self) -> ChildReference<TrieHash<L>> {
+		match self {
+			NodeHandle::Hash(h) => ChildReference::Hash(*h),
+			NodeHandle::Inline(n) => {
+				let encoded = n.to_encoded();
+				let mut store = TrieHash::<L>::default();
+				assert!(store.as_ref().len() > encoded.len(), "Invalid inline node handle");
+
+				store.as_mut()[..encoded.len()].copy_from_slice(&encoded);
+				ChildReference::Inline(store, encoded.len())
+			},
+		}
+	}
+}
+
+fn empty_children<L: TrieLayout>() -> Box<[Option<NodeHandle<L>>; nibble_ops::NIBBLE_LENGTH]> {
 	Box::new([
 		None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
 		None,
@@ -68,7 +95,8 @@ fn empty_children<H>() -> Box<[Option<NodeHandle<H>>; nibble_ops::NIBBLE_LENGTH]
 type NibbleFullKey<'key> = NibbleSlice<'key>;
 
 /// Value representation for Node.
-#[derive(Clone, Eq)]
+#[derive(Derivative)]
+#[derivative(Clone(bound = "TrieHash<L>: Clone"), Eq, Debug)]
 pub enum Value<L: TrieLayout> {
 	/// Value bytes inlined in a trie node.
 	Inline(Bytes, Option<TrieHash<L>>),
@@ -78,6 +106,16 @@ pub enum Value<L: TrieLayout> {
 	/// The hash may be undefined until it node is added
 	/// to the db.
 	NewNode(Option<TrieHash<L>>, Bytes),
+}
+
+impl<L: TrieLayout> Value<L> {
+	/// Returns self as [`EncodedValue`].
+	pub fn as_value(&self) -> EncodedValue {
+		match self {
+			Self::Inline(data, _) => EncodedValue::Inline(&data),
+			Self::Node(hash) => EncodedValue::Node(hash.as_ref()),
+		}
+	}
 }
 
 impl<L: TrieLayout> PartialEq<Self> for Value<L> {
@@ -129,9 +167,9 @@ impl<L: TrieLayout> From<(Bytes, Option<u32>)> for Value<L> {
 	}
 }
 
-enum NodeToEncode<'a, H> {
+enum NodeToEncode<'a, L: TrieLayout> {
 	Node(&'a [u8]),
-	TrieNode(NodeHandle<H>),
+	TrieNode(NodeHandle<L>),
 }
 
 impl<L: TrieLayout> Value<L> {
@@ -146,7 +184,7 @@ impl<L: TrieLayout> Value<L> {
 	) -> EncodedValue<'a>
 	where
 		F: FnMut(
-			NodeToEncode<TrieHash<L>>,
+			NodeToEncode<L>,
 			Option<&NibbleSlice>,
 			Option<u8>,
 		) -> ChildReference<TrieHash<L>>,
@@ -178,7 +216,7 @@ impl<L: TrieLayout> Value<L> {
 		&self,
 		prefix: Prefix,
 		db: &dyn HashDB<L::Hash, DBValue>,
-		recorder: &Option<core::cell::RefCell<&mut dyn TrieRecorder<TrieHash<L>>>>,
+		recorder: &Option<core::cell::RefCell<&mut dyn TrieRecorder<L>>>,
 		full_key: &[u8],
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
 		Ok(Some(match self {
@@ -202,8 +240,11 @@ impl<L: TrieLayout> Value<L> {
 	}
 }
 
+#[derive(Derivative)]
+#[derivative(Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derivative(Debug))]
 /// Node types in the Trie.
-enum Node<L: TrieLayout> {
+pub enum Node<L: TrieLayout> {
 	/// Empty node.
 	Empty,
 	/// A leaf node contains the end of a key and a value.
@@ -214,13 +255,13 @@ enum Node<L: TrieLayout> {
 	/// The shared portion is encoded from a `NibbleSlice` meaning it contains
 	/// a flag indicating it is an extension.
 	/// The child node is always a branch.
-	Extension(NodeKey, NodeHandle<TrieHash<L>>),
+	Extension(NodeKey, NodeHandle<L>),
 	/// A branch has up to 16 children and an optional value.
-	Branch(Box<[Option<NodeHandle<TrieHash<L>>>; nibble_ops::NIBBLE_LENGTH]>, Option<Value<L>>),
+	Branch(Box<[Option<NodeHandle<L>>; nibble_ops::NIBBLE_LENGTH]>, Option<Value<L>>),
 	/// Branch node with support for a nibble (to avoid extension node).
 	NibbledBranch(
 		NodeKey,
-		Box<[Option<NodeHandle<TrieHash<L>>>; nibble_ops::NIBBLE_LENGTH]>,
+		Box<[Option<NodeHandle<L>>; nibble_ops::NIBBLE_LENGTH]>,
 		Option<Value<L>>,
 	),
 }
@@ -238,44 +279,13 @@ impl<'a> Debug for ToHex<'a> {
 	}
 }
 
-#[cfg(feature = "std")]
-impl<L: TrieLayout> Debug for Value<L> {
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		match self {
-			Self::Inline(value, _) => write!(fmt, "Some({:?})", ToHex(value)),
-			Self::Node(hash) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
-			Self::NewNode(Some(hash), _) => write!(fmt, "Hash({:?})", ToHex(hash.as_ref())),
-			Self::NewNode(_hash, value) => write!(fmt, "Some({:?})", ToHex(value)),
-		}
-	}
-}
-
-#[cfg(feature = "std")]
-impl<L: TrieLayout> Debug for Node<L>
-where
-	L::Hash: Debug,
-{
-	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			Self::Empty => write!(fmt, "Empty"),
-			Self::Leaf((ref a, ref b), ref c) =>
-				write!(fmt, "Leaf({:?}, {:?})", (a, ToHex(&*b)), c),
-			Self::Extension((ref a, ref b), ref c) =>
-				write!(fmt, "Extension({:?}, {:?})", (a, ToHex(&*b)), c),
-			Self::Branch(ref a, ref b) => write!(fmt, "Branch({:?}, {:?}", a, b),
-			Self::NibbledBranch((ref a, ref b), ref c, ref d) =>
-				write!(fmt, "NibbledBranch({:?}, {:?}, {:?})", (a, ToHex(&*b)), c, d),
-		}
-	}
-}
-
 impl<L: TrieLayout> Node<L> {
 	// load an inline node into memory or get the hash to do the lookup later.
 	fn inline_or_hash(
 		parent_hash: TrieHash<L>,
 		child: EncodedNodeHandle,
 		storage: &mut NodeStorage<L>,
-	) -> Result<NodeHandle<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<NodeHandle<L>, TrieHash<L>, CError<L>> {
 		let handle = match child {
 			EncodedNodeHandle::Hash(data) => {
 				let hash = decode_hash::<L::Hash>(data)
@@ -292,12 +302,12 @@ impl<L: TrieLayout> Node<L> {
 
 	// load an inline node into memory or get the hash to do the lookup later.
 	fn inline_or_hash_owned(
-		child: &NodeHandleOwned<TrieHash<L>>,
+		child: &NodeHandle<L>,
 		storage: &mut NodeStorage<L>,
-	) -> NodeHandle<TrieHash<L>> {
+	) -> NodeHandle<L> {
 		match child {
-			NodeHandleOwned::Hash(hash) => NodeHandle::Hash(*hash),
-			NodeHandleOwned::Inline(node) => {
+			NodeHandle::Hash(hash) => NodeHandle::Hash(*hash),
+			NodeHandle::Inline(node) => {
 				let child = Node::from_node_owned(&**node, storage);
 				NodeHandle::InMemory(storage.alloc(Stored::New(child)))
 			},
@@ -375,14 +385,14 @@ impl<L: TrieLayout> Node<L> {
 		Ok(node)
 	}
 
-	/// Decode a node from a [`NodeOwned`].
-	fn from_node_owned(node_owned: &NodeOwned<TrieHash<L>>, storage: &mut NodeStorage<L>) -> Self {
+	/// Decode a node from a [`Node`].
+	fn from_node_owned(node_owned: &Node<L>, storage: &mut NodeStorage<L>) -> Self {
 		match node_owned {
-			NodeOwned::Empty => Node::Empty,
-			NodeOwned::Leaf(k, v) => Node::Leaf(k.clone(), v.into()),
-			NodeOwned::Extension(key, cb) =>
+			Node::Empty => Node::Empty,
+			Node::Leaf(k, v) => Node::Leaf(k.clone(), v.clone()),
+			Node::Extension(key, cb) =>
 				Node::Extension(key.clone(), Self::inline_or_hash_owned(cb, storage)),
-			NodeOwned::Branch(encoded_children, val) => {
+			Node::Branch(encoded_children, val) => {
 				let mut child = |i: usize| {
 					encoded_children[i]
 						.as_ref()
@@ -408,9 +418,9 @@ impl<L: TrieLayout> Node<L> {
 					child(15),
 				]);
 
-				Node::Branch(children, val.as_ref().map(Into::into))
+				Node::Branch(children, val.clone())
 			},
-			NodeOwned::NibbledBranch(k, encoded_children, val) => {
+			Node::NibbledBranch(k, encoded_children, val) => {
 				let mut child = |i: usize| {
 					encoded_children[i]
 						.as_ref()
@@ -436,7 +446,7 @@ impl<L: TrieLayout> Node<L> {
 					child(15),
 				]);
 
-				Node::NibbledBranch(k.clone(), children, val.as_ref().map(Into::into))
+				Node::NibbledBranch(k.clone(), children, val.clone())
 			},
 		}
 	}
@@ -447,7 +457,7 @@ impl<L: TrieLayout> Node<L> {
 	fn into_encoded<F>(self, mut child_cb: F) -> Vec<u8>
 	where
 		F: FnMut(
-			NodeToEncode<TrieHash<L>>,
+			NodeToEncode<L>,
 			Option<&NibbleSlice>,
 			Option<u8>,
 		) -> ChildReference<TrieHash<L>>,
@@ -493,6 +503,41 @@ impl<L: TrieLayout> Node<L> {
 						})
 					}),
 					value,
+				)
+			},
+		}
+	}
+
+	/// Convert to its encoded format.
+	/// TODO consider merge with into_encoded
+	pub fn to_encoded(&self) -> Vec<u8> 	{
+		match self {
+			Self::Empty => L::Codec::empty_node().to_vec(),
+			Self::Leaf(partial, value) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				L::Codec::leaf_node(partial.right_iter(), partial.len(), value.as_value())
+			},
+			Self::Extension(partial, child) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				L::Codec::extension_node(
+					partial.right_iter(),
+					partial.len(),
+					child.as_child_reference(),
+				)
+			},
+			Self::Branch(children, value) => L::Codec::branch_node(
+				children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference())),
+				value.as_ref().map(|v| v.as_value()),
+			),
+			Self::NibbledBranch(partial, children, value) => {
+				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				L::Codec::branch_node_nibbled(
+					partial.right_iter(),
+					partial.len(),
+					children
+						.iter()
+						.map(|child| child.as_ref().map(|c| c.as_child_reference())),
+					value.as_ref().map(|v| v.as_value()),
 				)
 			},
 		}
@@ -636,8 +681,8 @@ impl<'a, L: TrieLayout> Index<&'a StorageHandle> for NodeStorage<L> {
 pub struct TrieDBMutBuilder<'db, L: TrieLayout> {
 	db: &'db mut dyn HashDB<L::Hash, DBValue>,
 	root: &'db mut TrieHash<L>,
-	cache: Option<&'db mut dyn TrieCache<L::Codec>>,
-	recorder: Option<&'db mut dyn TrieRecorder<TrieHash<L>>>,
+	cache: Option<&'db mut dyn TrieCache<L>>,
+	recorder: Option<&'db mut dyn TrieRecorder<L>>,
 }
 
 impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
@@ -661,7 +706,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	}
 
 	/// Use the given `cache` for the db.
-	pub fn with_cache(mut self, cache: &'db mut dyn TrieCache<L::Codec>) -> Self {
+	pub fn with_cache(mut self, cache: &'db mut dyn TrieCache<L>) -> Self {
 		self.cache = Some(cache);
 		self
 	}
@@ -669,7 +714,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	/// Use the given optional `cache` for the db.
 	pub fn with_optional_cache<'cache: 'db>(
 		mut self,
-		cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
+		cache: Option<&'cache mut dyn TrieCache<L>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.cache = cache.map(|c| c as _);
@@ -677,7 +722,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	}
 
 	/// Use the given `recorder` to record trie accesses.
-	pub fn with_recorder(mut self, recorder: &'db mut dyn TrieRecorder<TrieHash<L>>) -> Self {
+	pub fn with_recorder(mut self, recorder: &'db mut dyn TrieRecorder<L>) -> Self {
 		self.recorder = Some(recorder);
 		self
 	}
@@ -685,7 +730,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	/// Use the given optional `recorder` to record trie accesses.
 	pub fn with_optional_recorder<'recorder: 'db>(
 		mut self,
-		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L>>>,
+		recorder: Option<&'recorder mut dyn TrieRecorder<L>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.recorder = recorder.map(|r| r as _);
@@ -736,22 +781,19 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 /// t.remove(b"foo").unwrap();
 /// assert!(!t.contains(b"foo").unwrap());
 /// ```
-pub struct TrieDBMut<'a, L>
-where
-	L: TrieLayout,
-{
+pub struct TrieDBMut<'a, L: TrieLayout> {
 	storage: NodeStorage<L>,
 	db: &'a mut dyn HashDB<L::Hash, DBValue>,
 	root: &'a mut TrieHash<L>,
-	root_handle: NodeHandle<TrieHash<L>>,
+	root_handle: NodeHandle<L>,
 	death_row: HashSet<(TrieHash<L>, (BackingByteVec, Option<u8>))>,
 	/// The number of hash operations this trie has performed.
 	/// Note that none are performed until changes are committed.
 	hash_count: usize,
 	/// Optional cache for speeding up the lookup of nodes.
-	cache: Option<&'a mut dyn TrieCache<L::Codec>>,
+	cache: Option<&'a mut dyn TrieCache<L>>,
 	/// Optional trie recorder for recording trie accesses.
-	recorder: Option<core::cell::RefCell<&'a mut dyn TrieRecorder<TrieHash<L>>>>,
+	recorder: Option<core::cell::RefCell<&'a mut dyn TrieRecorder<L>>>,
 }
 
 impl<'a, L> TrieDBMut<'a, L>
@@ -847,7 +889,7 @@ where
 		&self,
 		full_key: &[u8],
 		mut partial: NibbleSlice,
-		handle: &NodeHandle<TrieHash<L>>,
+		handle: &NodeHandle<L>,
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
 		let mut handle = handle;
 		let prefix = (full_key, None);
@@ -863,7 +905,7 @@ where
 						cache: None,
 						recorder: recorder
 							.as_mut()
-							.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+							.map(|r| &mut ***r as &mut dyn TrieRecorder<L>),
 					}
 					.look_up(full_key, partial)
 				},
@@ -941,7 +983,7 @@ where
 	/// Insert a key-value pair into the trie, creating new nodes if necessary.
 	fn insert_at(
 		&mut self,
-		handle: NodeHandle<TrieHash<L>>,
+		handle: NodeHandle<L>,
 		key: &mut NibbleFullKey,
 		value: Bytes,
 		old_val: &mut Option<Value<L>>,
@@ -1332,7 +1374,7 @@ where
 	/// Removes a node from the trie based on key.
 	fn remove_at(
 		&mut self,
-		handle: NodeHandle<TrieHash<L>>,
+		handle: NodeHandle<L>,
 		key: &mut NibbleFullKey,
 		old_val: &mut Option<Value<L>>,
 	) -> Result<Option<(StorageHandle, bool)>, TrieHash<L>, CError<L>> {
@@ -1865,7 +1907,7 @@ where
 			let node = cache.get_or_insert_node(hash, &mut || {
 				Ok(L::Codec::decode(&encoded)
 					.ok()
-					.and_then(|n| n.to_owned_node::<L>().ok())
+					.and_then(|n| n.to_owned_node2::<L>().ok())
 					.expect("Just encoded the node, so it should decode without any errors; qed"))
 			});
 
@@ -1883,7 +1925,7 @@ where
 				);
 
 				fn cache_child_values<L: TrieLayout>(
-					node: &NodeOwned<TrieHash<L>>,
+					node: &Node<L>,
 					values_to_cache: &mut Vec<(Vec<u8>, CachedValue<TrieHash<L>>)>,
 					full_key: NibbleVec,
 				) {
@@ -1947,7 +1989,7 @@ where
 	/// `into_encoded` method of `Node`.
 	fn commit_child(
 		&mut self,
-		handle: NodeHandle<TrieHash<L>>,
+		handle: NodeHandle<L>,
 		prefix: &mut NibbleVec,
 	) -> ChildReference<TrieHash<L>> {
 		match handle {
@@ -1966,7 +2008,7 @@ where
 						});
 
 						let encoded = {
-							let commit_child = |node: NodeToEncode<TrieHash<L>>,
+							let commit_child = |node: NodeToEncode<L>,
 							                    o_slice: Option<&NibbleSlice>,
 							                    o_index: Option<u8>| {
 								let mov = prefix.append_optional_slice_and_nibble(o_slice, o_index);
@@ -2011,7 +2053,7 @@ where
 	}
 
 	// a hack to get the root node's handle
-	fn root_handle(&self) -> NodeHandle<TrieHash<L>> {
+	fn root_handle(&self) -> NodeHandle<L> {
 		match self.root_handle {
 			NodeHandle::Hash(h) => NodeHandle::Hash(h),
 			NodeHandle::InMemory(StorageHandle(x)) => NodeHandle::InMemory(StorageHandle(x)),

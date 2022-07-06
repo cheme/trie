@@ -57,6 +57,23 @@ impl NodeHandle<'_> {
 			},
 		}
 	}
+
+	/// Converts this node handle into a [`NodeHandleOwned`].
+	pub fn to_owned_handle2<L: TrieLayout>(
+		&self,
+	) -> Result<crate::triedbmut::NodeHandle<L>, TrieHash<L>, CError<L>> {
+		use crate::triedbmut::NodeHandle as NodeHandleOwned;
+		match self {
+			Self::Hash(h) => decode_hash::<L::Hash>(h)
+				.ok_or_else(|| Box::new(TrieError::InvalidHash(Default::default(), h.to_vec())))
+				.map(NodeHandleOwned::Hash),
+			Self::Inline(i) => match L::Codec::decode(i) {
+				Ok(node) => Ok(NodeHandleOwned::Inline(Box::new(node.to_owned_node2::<L>()?))),
+				Err(e) => Err(Box::new(TrieError::DecoderError(Default::default(), e))),
+			},
+		}
+	}
+
 }
 
 /// Owned version of [`NodeHandleOwned`].
@@ -138,6 +155,19 @@ impl<'a> Value<'a> {
 	pub fn to_owned_value<L: TrieLayout>(&self) -> ValueOwned<TrieHash<L>> {
 		match self {
 			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), L::Hash::hash(data)),
+			Self::Node(hash) => {
+				let mut res = TrieHash::<L>::default();
+				res.as_mut().copy_from_slice(hash);
+
+				ValueOwned::Node(res)
+			},
+		}
+	}
+
+	pub fn to_owned_value2<L: TrieLayout>(&self) -> crate::triedbmut::Value<L> {
+		use crate::triedbmut::Value as ValueOwned;
+		match self {
+			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), None),
 			Self::Node(hash) => {
 				let mut res = TrieHash::<L>::default();
 				res.as_mut().copy_from_slice(hash);
@@ -251,6 +281,53 @@ impl Node<'_> {
 			},
 		}
 	}
+
+	/// Converts this node into a [`NodeOwned`].
+	pub fn to_owned_node2<L: TrieLayout>(
+		&self,
+	) -> Result<crate::triedbmut::Node<L>, TrieHash<L>, CError<L>> {
+		use crate::triedbmut::Node as NodeOwned;
+		match self {
+			Self::Empty => Ok(NodeOwned::Empty),
+			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value2::<L>())),
+			Self::Extension(n, h) =>
+				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle2::<L>()?)),
+			Self::Branch(childs, data) => {
+				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
+				childs
+					.iter()
+					.enumerate()
+					.map(|(i, c)| {
+						childs_owned[i] =
+							c.as_ref().map(|c| c.to_owned_handle2::<L>()).transpose()?;
+						Ok(())
+					})
+					.collect::<Result<_, _, _>>()?;
+
+				Ok(NodeOwned::Branch(Box::new(childs_owned), data.as_ref().map(|d| d.to_owned_value2::<L>())))
+			},
+			Self::NibbledBranch(n, childs, data) => {
+				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
+				childs
+					.iter()
+					.enumerate()
+					.map(|(i, c)| {
+						childs_owned[i] =
+							c.as_ref().map(|c| c.to_owned_handle2::<L>()).transpose()?;
+						Ok(())
+					})
+					.collect::<Result<_, _, _>>()?;
+
+				Ok(NodeOwned::NibbledBranch(
+					(*n).into(),
+					Box::new(childs_owned),
+					data.as_ref().map(|d| d.to_owned_value2::<L>()),
+				))
+			},
+		}
+	}
+
+
 }
 
 /// Owned version of [`Node`].

@@ -39,7 +39,8 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::{CachedValueOwned, NodeOwned};
+use node::{CachedValueOwned};
+use triedbmut::Node as NodeOwned;
 
 pub mod node;
 pub mod proof;
@@ -162,17 +163,17 @@ pub trait Query<H: Hasher> {
 /// If a cache is used, [`Self::Key`] and [`Self::NodeOwned`] are possible
 /// values. Otherwise only [`Self::EncodedNode`] is a possible value.
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum TrieAccess<'a, H> {
+pub enum TrieAccess<'a, L: TrieLayout> {
 	/// The given [`NodeOwned`] was accessed using its `hash`.
-	NodeOwned { hash: H, node_owned: &'a NodeOwned<H> },
+	NodeOwned { hash: TrieHash<L>, node_owned: &'a NodeOwned<L> },
 	/// The given `encoded_node` was accessed using its `hash`.
-	EncodedNode { hash: H, encoded_node: rstd::borrow::Cow<'a, [u8]> },
+	EncodedNode { hash: TrieHash<L>, encoded_node: rstd::borrow::Cow<'a, [u8]> },
 	/// The given `value` was accessed using its `hash`.
 	///
 	/// The given `full_key` is the key to access this value in the trie.
 	///
 	/// Should map to [`RecordedForKey::Value`] when checking the recorder.
-	Value { hash: H, value: rstd::borrow::Cow<'a, [u8]>, full_key: &'a [u8] },
+	Value { hash: TrieHash<L>, value: rstd::borrow::Cow<'a, [u8]>, full_key: &'a [u8] },
 	/// The hash of the value for the given `full_key` was accessed.
 	///
 	/// Should map to [`RecordedForKey::Hash`] when checking the recorder.
@@ -220,9 +221,9 @@ impl RecordedForKey {
 }
 
 /// A trie recorder that can be used to record all kind of trie accesses.
-pub trait TrieRecorder<H> {
+pub trait TrieRecorder<L: TrieLayout> {
 	/// Record the given [`TrieAccess`].
-	fn record<'a>(&mut self, access: TrieAccess<'a, H>);
+	fn record<'a>(&mut self, access: TrieAccess<'a, L>);
 
 	/// Check if we have recorded any trie nodes for the given `key`.
 	///
@@ -621,13 +622,13 @@ impl<H> From<Option<H>> for CachedValue<H> {
 }
 
 /// Cached item.
-pub enum CachedNode<H> {
-	Node(NodeOwned<H>),
-	Value(CachedValueOwned<H>),
+pub enum CachedNode<L: TrieLayout> {
+	Node(NodeOwned<L>),
+	Value(CachedValueOwned<TrieHash<L>>),
 }
 
 /// A cache that can be used to speed-up certain operations when accessing the trie.
-pub trait TrieCache<NC: NodeCodec> {
+pub trait TrieCache<L: TrieLayout> {
 	/// Lookup value for the given `key`.
 	///
 	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated
@@ -641,7 +642,7 @@ pub trait TrieCache<NC: NodeCodec> {
 	/// The cache can be used for different tries, aka with different roots. This means
 	/// that the cache implementation needs to take care of always returning the correct value
 	/// for the current trie root.
-	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<NC::HashOut>>;
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<TrieHash<L>>>;
 
 	/// Cache the given `value` for the given `key`.
 	///
@@ -650,7 +651,7 @@ pub trait TrieCache<NC: NodeCodec> {
 	/// The cache can be used for different tries, aka with different roots. This means
 	/// that the cache implementation needs to take care of caching `value` for the current
 	/// trie root.
-	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<NC::HashOut>);
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<TrieHash<L>>);
 
 	/// Get or insert a [`NodeOwned`].
 	///
@@ -661,9 +662,9 @@ pub trait TrieCache<NC: NodeCodec> {
 	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
 	fn get_or_insert_node(
 		&mut self,
-		hash: NC::HashOut,
-		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
-	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+		hash: TrieHash<L>,
+		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<L>, TrieHash<L>, CError<L>>,
+	) -> Result<&NodeOwned<L>, TrieHash<L>, CError<L>>;
 
 	/// Get or insert a [`CachedValueOwned`].
 	///
@@ -674,13 +675,13 @@ pub trait TrieCache<NC: NodeCodec> {
 	/// Returns the [`CachedValueOwned`] or an error that happened on fetching the node.
 	fn get_or_insert_value(
 		&mut self,
-		hash: NC::HashOut,
+		hash: TrieHash<L>,
 		fetch_node: &mut dyn FnMut()
-			-> Result<CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>,
-	) -> Result<&CachedValueOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+			-> Result<CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>>,
+	) -> Result<&CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>>;
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
-	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<L>>;
 }
 
 /// A container for storing bytes.

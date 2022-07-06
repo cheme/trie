@@ -36,9 +36,9 @@ pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
 	/// Hash to start at
 	pub hash: TrieHash<L>,
 	/// Optional cache that should be used to speed up the lookup.
-	pub cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
+	pub cache: Option<&'cache mut dyn TrieCache<L>>,
 	/// Optional recorder that will be called to record all trie accesses.
-	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
+	pub recorder: Option<&'cache mut dyn TrieRecorder<L>>,
 }
 
 impl<'a, 'cache, L, Q> Lookup<'a, 'cache, L, Q>
@@ -57,7 +57,7 @@ where
 		prefix: Prefix,
 		full_key: &[u8],
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+		recorder: &mut Option<&mut dyn TrieRecorder<L>>,
 		query: Q,
 	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
 		match v {
@@ -94,7 +94,7 @@ where
 		full_key: &[u8],
 		cache: &mut dyn crate::TrieCache<L::Codec>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+		recorder: &mut Option<&mut dyn TrieRecorder<L>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
 			// TODO inline value cache by key record should be here
@@ -124,9 +124,9 @@ where
 		}
 	}
 
-	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, TrieHash<L>>)
+	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, L>)
 	where
-		TrieHash<L>: 'b,
+		L: 'b,
 	{
 		if let Some(recorder) = self.recorder.as_mut() {
 			recorder.record(get_access());
@@ -351,9 +351,9 @@ where
 			ValueOwned<TrieHash<L>>,
 			Prefix,
 			&[u8],
-			&mut dyn crate::TrieCache<L::Codec>,
+			&mut dyn crate::TrieCache<L>,
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+			&mut Option<&mut dyn TrieRecorder<L>>,
 		) -> Result<R, TrieHash<L>, CError<L>>,
 	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
 		let mut partial = nibble_key;
@@ -527,7 +527,7 @@ where
 			Prefix,
 			&[u8],
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+			&mut Option<&mut dyn TrieRecorder<L>>,
 			Q,
 		) -> Result<R, TrieHash<L>, CError<L>>,
 	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
