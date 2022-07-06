@@ -39,7 +39,7 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::NodeOwned;
+use node::{NodeOwned, OwnedNode};
 
 pub mod node;
 pub mod proof;
@@ -216,6 +216,198 @@ impl RecordedForKey {
 	/// Is `self` equal to [`Self::None`]?
 	pub fn is_none(&self) -> bool {
 		matches!(self, Self::None)
+	}
+}
+
+#[cfg_attr(feature = "std", derive(Debug))]
+pub struct CacheNode<L: TrieLayout> {
+	owned: Option<NodeOwned<TrieHash<L>>>,
+	encoded: Option<OwnedNode<Vec<u8>>>,
+}
+
+impl<L: TrieLayout> From<NodeOwned<TrieHash<L>>> for CacheNode<L> {
+	fn from(node: NodeOwned<TrieHash<L>>) -> Self {
+		CacheNode { owned: Some(node), encoded: None }
+	}
+}
+
+impl<L: TrieLayout> From<OwnedNode<Vec<u8>>> for CacheNode<L> {
+	fn from(node: OwnedNode<Vec<u8>>) -> Self {
+		CacheNode { encoded: Some(node), owned: None }
+	}
+}
+
+impl<L: TrieLayout> CacheNode<L> {
+	pub fn new() -> Self {
+		CacheNode { owned: Some(NodeOwned::Empty), encoded: None }
+	}
+
+	pub fn node_owned(&mut self) -> &NodeOwned<TrieHash<L>> {
+		if self.owned.is_none() {
+			unimplemented!("TODO find or implement convert");
+			//			self.owned = Some(self.encoded.as_ref().unwrap().into())
+		}
+		self.owned.as_ref().unwrap()
+	}
+
+	pub fn owned_node(&mut self) -> &OwnedNode<Vec<u8>> {
+		if self.encoded.is_none() {
+			unimplemented!("TODO find or implement convert");
+			//			self.encoded = Some(self.owned.as_ref().unwrap().into())
+		}
+		self.encoded.as_ref().unwrap()
+	}
+}
+
+
+/// Context is binding together `Recorder` and `Cache`.
+pub struct Context<'a, L: TrieLayout> {
+	cache: Option<&'a mut dyn TrieCache<L::Codec>>,
+	recorder: Option<&'a mut dyn TrieRecorder<TrieHash<L>>>,
+	cache_value_by_key: Option<&'a [u8]>,
+	cached_node: CacheNode<L>,
+}
+
+impl<'a, L: TrieLayout> Context<'a, L> {
+	// TODO rem
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<TrieHash<L>>> {
+		self.cache_value_by_key = Some(key);
+		if self.recorder.as_ref().map(|r| 
+		r.recorded_keys.get(key).copied().unwrap_or(RecordedForKey::None).is_none()
+			).unwrap_or(false) {
+			return None
+		}
+		self.cache.as_ref().and_then(|c| c.lookup_value_for_key(key))
+	}
+
+	/// Cache the given `value` for the given `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of caching `value` for the current
+	/// trie root.
+	///
+	/// This recored a direct access. TODO TrieAccess::Value and TrieAccess::Cache and
+	/// TrieAccess::NonExisting
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<TrieHash<L>>) {
+		if self.cache_value_by_key == Some(key) {
+			if let Some(cache) = self.cache.as_ref() {
+				match &value {
+					CachedValue::NonExisting => {
+						cache.recorded_keys.entry(key.to_vec()).insert(RecordedForKey::Value);
+					},
+					CachedValue::ExistingHash(_h) => {
+						cache.recorded_keys.entry(key.to_vec()).or_insert(RecordedForKey::Hash);
+					},
+					CachedValue::Existing { .. } => {
+						cache.recorded_keys.entry(key.to_vec()).insert(RecordedForKey::Value);
+					},
+				}
+				cache.value_cache.insert(key.to_vec(), value);
+			}
+			self.cache_value_by_key = None;
+		}
+	}
+
+	/// Get or insert a [`NodeOwned`].
+	///
+	/// The cache implementation should look up based on the given `hash` if the node is already
+	/// known. If the node is not yet known, the given `fetch_node` function can be used to fetch
+	/// the particular node.
+	///
+	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
+	///
+	/// This recored a NodeOwned trie access. TODO TrieAccess::NodeOwned
+	///
+	/// TODO return Cow instead of &Node so the non caching implementation could be less awkward.
+	/// TODO have a separate method for value
+	fn get_or_insert_node(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&mut CacheNode<L>, TrieHash<L>, CError<L>> {
+		use hashbrown::hash_map::Entry;
+		let vacant = match self.cache.as_ref().map(|c|c.node_cache.entry(hash)) {
+			Some(Entry::Occupied(e)) => return Ok(e.into_mut().node_owned()),
+			Some(Entry::Vacant(e)) => Some(e),
+		};
+		let node_data = (*fetch_node)()?;
+		self.recored.as_ref().map(|recorder| {
+		});
+		if is_value {
+			// NodeOwned::Value could be a CacheNode Variant.
+			let node = NodeOwned::Value(node_data.clone().into(), hash);
+			self.nodes.push((hash, node_data));
+
+			if let Some(e) = vacant {
+				Ok(e.insert(node.into()))
+			} else {
+				self.cached_node = node.into();
+				&mut self.cache_node
+			}
+		} else {
+			let node = match L::Codec::decode(&node_data[..]) {
+				Ok(node) => node,
+				Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+			};
+			let node = node.to_owned_node::<L>()?;
+
+			self.nodes.push((hash, node_data));
+
+			if let Some(e) = vacant {
+				Ok(e.insert(node.into()))
+			} else {
+				self.cached_node = node.into();
+				&mut self.cache_node
+			}
+		}
+	}
+
+/*	fn get_or_insert_node2(
+		&mut self,
+		hash: TrieHash<L>,
+		is_value: bool,
+		fetch_node: &mut dyn FnMut() -> Result<Vec<u8>, TrieHash<L>, CError<L>>,
+	) -> Result<&OwnedNode<Vec<u8>>, TrieHash<L>, CError<L>>;*/
+
+	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
+	///
+	/// This recored a NodeOwned trie access. TODO remove TrieAccess::NodeOwned
+	/// TODO remove (get_or_insert_node should be enough).
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
+	if let Some(cache) = self.cache.as_ref() {
+		cache.get_mut(hash).map(|o| o.node_owned())
+	} else{
+		None
+	}
+}
+
+	/// Record the given [`TrieAccess`].
+	///
+	/// TODO remove
+	fn record<'b>(&mut self, access: TrieAccess<'b, TrieHash<L>>) {
+		if let Some(r) = self.recorder.as_ref() {
+		match access {
+			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
+				r.nodes.push((hash, encoded_node.to_vec()));
+			},
+			TrieAccess::NodeOwned { hash, node_owned, .. } => {
+				r.nodes.push((hash, node_owned.to_encoded::<L::Codec>()));
+			},
+			TrieAccess::Value { hash, value, full_key } => {
+				r.nodes.push((hash, value.to_vec()));
+				r.recorded_keys.entry(full_key.to_vec()).insert(RecordedForKey::Value);
+			},
+			TrieAccess::Hash { full_key } => {
+				r.recorded_keys.entry(full_key.to_vec()).or_insert(RecordedForKey::Hash);
+			},
+			TrieAccess::NonExisting { full_key } => {
+				// We handle the non existing value/hash like having recorded the value.
+				r.recorded_keys.entry(full_key.to_vec()).insert(RecordedForKey::Value);
+			},
+		}}
 	}
 }
 
