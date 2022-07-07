@@ -184,6 +184,6 @@ fn encoding_node_owned_and_decoding_node_works() {
 			<<ExtensionLayout as TrieLayout>::Codec as NodeCodec>::decode(&record.1).unwrap();
 		let node_owned = node.to_owned_node::<ExtensionLayout>().unwrap();
 
-		assert_eq!(record.1, node_owned.to_encoded::<<ExtensionLayout as TrieLayout>::Codec>());
+		assert_eq!(record.1, node_owned.to_encoded());
 	}
 }

@@ -19,9 +19,7 @@ use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Ou
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
 	nibble_ops,
-	node::{
-		CachedValueOwned, NibbleSlicePlan, NodeHandlePlan, NodePlan, Value, ValuePlan,
-	},
+	node::{CachedValueOwned, NibbleSlicePlan, NodeHandlePlan, NodePlan, Value, ValuePlan},
 	trie_visit,
 	triedbmut::{ChildReference, Node as NodeOwned},
 	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,

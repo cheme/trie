@@ -252,7 +252,7 @@ where
 						let hash = L::Hash::hash(&data[..]);
 						Ok((hash, Some(data)))
 					},
-				}
+				},
 			)?;
 
 			match &hash_and_value {
@@ -389,7 +389,7 @@ where
 					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
 				};
 
-				decoded.to_owned_node2::<L>()
+				decoded.to_owned_node()
 			})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });

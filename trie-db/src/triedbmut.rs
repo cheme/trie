@@ -18,8 +18,8 @@ use crate::{
 	lookup::Lookup,
 	nibble::{nibble_ops, BackingByteVec, NibbleSlice, NibbleVec},
 	node::{
-		decode_hash, CachedValueOwned, Node as EncodedNode, NodeHandle as EncodedNodeHandle,
-		NodeKey, Value as EncodedValue, ValueOwned,
+		decode_hash, node_key_dyn_size, CachedValueOwned, Node as EncodedNode,
+		NodeHandle as EncodedNodeHandle, NodeKey, Value as EncodedValue,
 	},
 	node_codec::NodeCodec,
 	rstd::{boxed::Box, convert::TryFrom, mem, ops::Index, result, vec::Vec, VecDeque},
@@ -182,15 +182,6 @@ impl<'a, L: TrieLayout> From<EncodedValue<'a>> for Value<L> {
 	}
 }
 
-impl<L: TrieLayout> From<&ValueOwned<TrieHash<L>>> for Value<L> {
-	fn from(val: &ValueOwned<TrieHash<L>>) -> Self {
-		match val {
-			ValueOwned::Inline(data, hash) => Self::Inline(data.clone(), Some(*hash)),
-			ValueOwned::Node(hash) => Self::Node(*hash),
-		}
-	}
-}
-
 impl<L: TrieLayout> From<(Bytes, Option<u32>)> for Value<L> {
 	fn from((v, threshold): (Bytes, Option<u32>)) -> Self {
 		match v {
@@ -333,21 +324,6 @@ impl<L: TrieLayout> Node<L> {
 		Ok(handle)
 	}
 
-	// load an inline node into memory or get the hash to do the lookup later.
-	fn inline_or_hash_owned(child: &NodeHandle<L>, storage: &mut NodeStorage<L>) -> NodeHandle<L> {
-		match child {
-			NodeHandle::Hash(hash) => NodeHandle::Hash(*hash),
-			NodeHandle::Inline(node) => {
-				let child = Node::from_node_owned(&**node, storage);
-				NodeHandle::InMemory(storage.alloc(Stored::New(child)))
-			},
-			NodeHandle::InMemory(node) => {
-				let child = Node::from_node_owned(&storage[node].clone(), storage);
-				NodeHandle::InMemory(storage.alloc(Stored::New(child)))
-			},
-		}
-	}
-
 	// Decode a node from encoded bytes.
 	fn from_encoded<'a, 'b>(
 		node_hash: TrieHash<L>,
@@ -417,73 +393,6 @@ impl<L: TrieLayout> Node<L> {
 			},
 		};
 		Ok(node)
-	}
-
-	/// Decode a node from a [`Node`].
-	/// TODO this makes no sense: should be clone
-	fn from_node_owned(node_owned: &Node<L>, storage: &mut NodeStorage<L>) -> Self {
-		match node_owned {
-			Node::Empty => Node::Empty,
-			Node::Leaf(k, v) => Node::Leaf(k.clone(), v.clone()),
-			Node::Extension(key, cb) =>
-				Node::Extension(key.clone(), Self::inline_or_hash_owned(cb, storage)),
-			Node::Branch(encoded_children, val) => {
-				let mut child = |i: usize| {
-					encoded_children[i]
-						.as_ref()
-						.map(|child| Self::inline_or_hash_owned(child, storage))
-				};
-
-				let children = Box::new([
-					child(0),
-					child(1),
-					child(2),
-					child(3),
-					child(4),
-					child(5),
-					child(6),
-					child(7),
-					child(8),
-					child(9),
-					child(10),
-					child(11),
-					child(12),
-					child(13),
-					child(14),
-					child(15),
-				]);
-
-				Node::Branch(children, val.clone())
-			},
-			Node::NibbledBranch(k, encoded_children, val) => {
-				let mut child = |i: usize| {
-					encoded_children[i]
-						.as_ref()
-						.map(|child| Self::inline_or_hash_owned(child, storage))
-				};
-
-				let children = Box::new([
-					child(0),
-					child(1),
-					child(2),
-					child(3),
-					child(4),
-					child(5),
-					child(6),
-					child(7),
-					child(8),
-					child(9),
-					child(10),
-					child(11),
-					child(12),
-					child(13),
-					child(14),
-					child(15),
-				]);
-
-				Node::NibbledBranch(k.clone(), children, val.clone())
-			},
-		}
 	}
 
 	// TODO: parallelize
@@ -649,6 +558,44 @@ impl<L: TrieLayout> Node<L> {
 			Self::Branch(children, _) | Self::NibbledBranch(_, children, _) =>
 				ChildIter::Array(children, 0),
 		}
+	}
+
+	/// Returns the size in bytes of this node.
+	pub fn size_in_bytes(&self) -> usize {
+		let self_size = mem::size_of::<Self>();
+
+		fn childs_size<'a, L: 'a + TrieLayout>(
+			childs: impl Iterator<Item = &'a Option<NodeHandle<L>>>,
+		) -> usize {
+			// If a `child` isn't an inline node, its size is already taken account for by
+			// `self_size`.
+			childs
+				.filter_map(|c| c.as_ref())
+				.map(|c| c.as_inline().map_or(0, |n| n.size_in_bytes()))
+				.sum()
+		}
+
+		// As `self_size` only represents the static size of `Self`, we also need
+		// to add the size of any dynamically allocated data.
+		let dynamic_size = match self {
+			Self::Empty => 0,
+			Self::Leaf(nibbles, value) =>
+				node_key_dyn_size(nibbles) + value.data().map_or(0, |b| b.len()),
+			Self::Extension(nibbles, child) => {
+				// If the `child` isn't an inline node, its size is already taken account for by
+				// `self_size`.
+				node_key_dyn_size(nibbles) + child.as_inline().map_or(0, |n| n.size_in_bytes())
+			},
+			Self::Branch(childs, value) =>
+				childs_size(childs.iter()) +
+					value.as_ref().and_then(|v| v.data()).map_or(0, |b| b.len()),
+			Self::NibbledBranch(nibbles, childs, value) =>
+				node_key_dyn_size(nibbles) +
+					childs_size(childs.iter()) +
+					value.as_ref().and_then(|v| v.data()).map_or(0, |b| b.len()),
+		};
+
+		self_size + dynamic_size
 	}
 }
 
@@ -2011,7 +1958,7 @@ where
 			let node = cache.get_or_insert_node(hash, &mut || {
 				Ok(L::Codec::decode(&encoded)
 					.ok()
-					.and_then(|n| n.to_owned_node2::<L>().ok())
+					.and_then(|n| n.to_owned_node().ok())
 					.expect("Just encoded the node, so it should decode without any errors; qed"))
 			});
 
