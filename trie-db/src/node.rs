@@ -138,16 +138,14 @@ impl Node<'_> {
 		match self {
 			Self::Empty => Ok(NodeOwned::Empty),
 			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value())),
-			Self::Extension(n, h) =>
-				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle()?)),
+			Self::Extension(n, h) => Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle()?)),
 			Self::Branch(childs, data) => {
 				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
 				childs
 					.iter()
 					.enumerate()
 					.map(|(i, c)| {
-						childs_owned[i] =
-							c.as_ref().map(|c| c.to_owned_handle()).transpose()?;
+						childs_owned[i] = c.as_ref().map(|c| c.to_owned_handle()).transpose()?;
 						Ok(())
 					})
 					.collect::<Result<_, _, _>>()?;
@@ -163,8 +161,7 @@ impl Node<'_> {
 					.iter()
 					.enumerate()
 					.map(|(i, c)| {
-						childs_owned[i] =
-							c.as_ref().map(|c| c.to_owned_handle()).transpose()?;
+						childs_owned[i] = c.as_ref().map(|c| c.to_owned_handle()).transpose()?;
 						Ok(())
 					})
 					.collect::<Result<_, _, _>>()?;
