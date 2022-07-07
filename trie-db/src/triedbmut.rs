@@ -62,27 +62,6 @@ impl<L: TrieLayout> From<StorageHandle> for NodeHandle<L> {
 }
 
 impl<L: TrieLayout> NodeHandle<L> {
-	/// Returns `self` as a [`ChildReference`].
-	///
-	/// # Panic
-	///
-	/// This function panics if `self == Self::Inline(_)` and the inline node encoded length is
-	/// greater then the length of the hash.
-	fn as_child_reference(&self) -> ChildReference<TrieHash<L>> {
-		match self {
-			Self::Hash(h) => ChildReference::Hash(*h),
-			Self::Inline(n) => {
-				let encoded = n.to_encoded();
-				let mut store = TrieHash::<L>::default();
-				assert!(store.as_ref().len() > encoded.len(), "Invalid inline node handle");
-
-				store.as_mut()[..encoded.len()].copy_from_slice(&encoded);
-				ChildReference::Inline(store, encoded.len())
-			},
-			Self::InMemory(_) => unreachable!("Please use into_encoded"),
-		}
-	}
-
 	/// Returns `self` as inline node.
 	pub fn as_inline(&self) -> Option<&Node<L>> {
 		match self {
@@ -120,17 +99,6 @@ pub enum Value<L: TrieLayout> {
 }
 
 impl<L: TrieLayout> Value<L> {
-	/// Returns self as [`EncodedValue`].
-	pub fn as_value(&self) -> EncodedValue {
-		match self {
-			Self::Inline(data, _) => EncodedValue::Inline(&data),
-			Self::Node(hash) => EncodedValue::Node(hash.as_ref()),
-			Self::NewNode(Some(hash), _) => EncodedValue::Node(hash.as_ref()),
-			// TODO could still implement and even try &mut to update hash
-			Self::NewNode(_hash, _data) => unreachable!("Please use into_encoded"),
-		}
-	}
-
 	/// Returns the data stored in self.
 	pub fn data(&self) -> Option<&Bytes> {
 		match self {
@@ -206,10 +174,10 @@ impl<L: TrieLayout> Value<L> {
 	}
 
 	fn into_encoded<'a, F>(
-		&'a mut self,
+		&'a self,
 		partial: Option<&NibbleSlice>,
 		f: &mut F,
-	) -> EncodedValue<'a>
+	) -> (Option<EncodedValue<'a>>, Option<TrieHash<L>>)
 	where
 		F: FnMut(NodeToEncode<L>, Option<&NibbleSlice>, Option<u8>) -> ChildReference<TrieHash<L>>,
 	{
@@ -223,17 +191,24 @@ impl<L: TrieLayout> Value<L> {
 			if let Some(h) = hash.as_ref() {
 				debug_assert!(h == &new_hash);
 			} else {
-				*hash = Some(new_hash);
+				// TODO &mut ??
+				//				*hash = Some(new_hash);
 			}
 		}
 		let value = match &*self {
 			Value::Inline(value, _hash) => EncodedValue::Inline(&value),
 			Value::Node(hash) => EncodedValue::Node(hash.as_ref()),
 			Value::NewNode(Some(hash), _value) => EncodedValue::Node(hash.as_ref()),
-			Value::NewNode(None, _value) =>
-				unreachable!("New external value are always added before encoding anode"),
+			Value::NewNode(None, value) => {
+				if L::MAX_INLINE_VALUE.map(|max| value.len() < max as usize).unwrap_or(true) {
+					EncodedValue::Inline(&value)
+				} else {
+					let hash = L::Hash::hash(&value[..]);
+					return (None, Some(hash))
+				}
+			},
 		};
-		value
+		(Some(value), None)
 	}
 
 	fn in_memory_fetched_value(
@@ -398,48 +373,67 @@ impl<L: TrieLayout> Node<L> {
 	// TODO: parallelize
 	/// Here `child_cb` should process the first parameter to either insert an external
 	/// node value or to encode and add a new branch child node.
-	fn into_encoded<F>(self, mut child_cb: F) -> Vec<u8>
+	fn into_encoded<F>(&self, mut child_cb: F) -> Vec<u8>
 	where
 		F: FnMut(NodeToEncode<L>, Option<&NibbleSlice>, Option<u8>) -> ChildReference<TrieHash<L>>,
 	{
 		match self {
 			Node::Empty => L::Codec::empty_node().to_vec(),
-			Node::Leaf(partial, mut value) => {
+			Node::Leaf(partial, value) => {
 				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				let value = value.into_encoded::<F>(Some(&pr), &mut child_cb);
+				let v = value.into_encoded::<F>(Some(&pr), &mut child_cb);
+				let value = match (v.0, &v.1) {
+					(Some(value), None) => value,
+					(None, Some(hash)) => EncodedValue::Node(hash.as_ref()),
+					_ => unreachable!(),
+				};
 				L::Codec::leaf_node(pr.right_iter(), pr.len(), value)
 			},
 			Node::Extension(partial, child) => {
 				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
 				let it = pr.right_iter();
-				let c = child_cb(NodeToEncode::TrieNode(child), Some(&pr), None);
+				let c = child_cb(NodeToEncode::TrieNode(child.clone()), Some(&pr), None);
 				L::Codec::extension_node(it, pr.len(), c)
 			},
-			Node::Branch(mut children, mut value) => {
-				let value = value.as_mut().map(|v| v.into_encoded::<F>(None, &mut child_cb));
+			Node::Branch(children, value) => {
+				let value = value.as_ref().map(|v| v.into_encoded::<F>(None, &mut child_cb));
+				let value = value.as_ref().map(|v| match (v.0.clone(), &v.1) {
+					(Some(value), None) => value,
+					(None, Some(hash)) => EncodedValue::Node(hash.as_ref()),
+					_ => unreachable!(),
+				});
 				L::Codec::branch_node(
 					// map the `NodeHandle`s from the Branch to `ChildReferences`
-					children.iter_mut().map(Option::take).enumerate().map(|(i, maybe_child)| {
-						maybe_child.map(|child| {
-							child_cb(NodeToEncode::TrieNode(child), None, Some(i as u8))
+					children.iter().enumerate().map(|(i, maybe_child)| {
+						maybe_child.as_ref().map(|child| {
+							child_cb(NodeToEncode::TrieNode(child.clone()), None, Some(i as u8))
 						})
 					}),
 					value,
 				)
 			},
-			Node::NibbledBranch(partial, mut children, mut value) => {
+			Node::NibbledBranch(partial, children, value) => {
 				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				let value = value.as_mut().map(|v| v.into_encoded::<F>(Some(&pr), &mut child_cb));
+				let value = value.as_ref().map(|v| v.into_encoded::<F>(Some(&pr), &mut child_cb));
+				let value = value.as_ref().map(|v| match (v.0.clone(), &v.1) {
+					(Some(value), None) => value,
+					(None, Some(hash)) => EncodedValue::Node(hash.as_ref()),
+					_ => unreachable!(),
+				});
 				let it = pr.right_iter();
 				L::Codec::branch_node_nibbled(
 					it,
 					pr.len(),
 					// map the `NodeHandle`s from the Branch to `ChildReferences`
-					children.iter_mut().map(Option::take).enumerate().map(|(i, maybe_child)| {
+					children.iter().enumerate().map(|(i, maybe_child)| {
 						//let branch_index = [i as u8];
-						maybe_child.map(|child| {
+						maybe_child.as_ref().map(|child| {
 							let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
-							child_cb(NodeToEncode::TrieNode(child), Some(&pr), Some(i as u8))
+							child_cb(
+								NodeToEncode::TrieNode(child.clone()),
+								Some(&pr),
+								Some(i as u8),
+							)
 						})
 					}),
 					value,
@@ -449,36 +443,33 @@ impl<L: TrieLayout> Node<L> {
 	}
 
 	/// Convert to its encoded format.
-	/// TODO consider merge with into_encoded
 	pub fn to_encoded(&self) -> Vec<u8> {
-		match self {
-			Self::Empty => L::Codec::empty_node().to_vec(),
-			Self::Leaf(partial, value) => {
-				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				L::Codec::leaf_node(partial.right_iter(), partial.len(), value.as_value())
-			},
-			Self::Extension(partial, child) => {
-				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				L::Codec::extension_node(
-					partial.right_iter(),
-					partial.len(),
-					child.as_child_reference(),
-				)
-			},
-			Self::Branch(children, value) => L::Codec::branch_node(
-				children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference())),
-				value.as_ref().map(|v| v.as_value()),
-			),
-			Self::NibbledBranch(partial, children, value) => {
-				let partial = NibbleSlice::new_offset(&partial.1[..], partial.0);
-				L::Codec::branch_node_nibbled(
-					partial.right_iter(),
-					partial.len(),
-					children.iter().map(|child| child.as_ref().map(|c| c.as_child_reference())),
-					value.as_ref().map(|v| v.as_value()),
-				)
-			},
-		}
+		self.into_encoded(|node, _, _| {
+			let encoded;
+			let encoded = match node {
+				NodeToEncode::Node(encoded) => encoded,
+				NodeToEncode::TrieNode(child) => match child {
+					NodeHandle::Hash(hash) => return ChildReference::Hash(hash),
+					NodeHandle::Inline(node) => {
+						encoded = node.to_encoded();
+						&encoded[..]
+					},
+					NodeHandle::InMemory(..) => unreachable!("please use into_encoded"),
+				},
+			};
+			if encoded.len() >= L::Hash::LENGTH {
+				let hash = L::Hash::hash(encoded);
+				ChildReference::Hash(hash)
+			} else {
+				// it's a small value, so we cram it into a `TrieHash<L>`
+				// and tag with length
+				let mut h = <TrieHash<L>>::default();
+				let len = encoded.len();
+				h.as_mut()[..len].copy_from_slice(&encoded[..len]);
+
+				ChildReference::Inline(h, len)
+			}
+		})
 	}
 
 	/// Returns the key partial key of this node.
