@@ -399,7 +399,7 @@ where
 			loop {
 				let next_node = match node {
 					NodeOwned::Leaf(slice, value) => {
-						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						let pr = NibbleSlice::from(slice);
 						return if partial == pr {
 							let value = (*value).clone();
 							drop(node);
@@ -419,7 +419,7 @@ where
 						}
 					},
 					NodeOwned::Extension(slice, item) => {
-						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						let pr = slice.into();
 						if partial.starts_with(&pr) {
 							partial = partial.mid(pr.len());
 							key_nibbles += pr.len();
@@ -463,7 +463,7 @@ where
 							}
 						},
 					NodeOwned::NibbledBranch(slice, children, value) => {
-						let pr = NibbleSlice::new_offset(&slice.1[..], slice.0);
+						let pr = slice.into();
 						if !partial.starts_with(&pr) {
 							self.record(|| TrieAccess::NonExisting { full_key });
 

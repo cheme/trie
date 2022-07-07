@@ -38,7 +38,6 @@ impl<'a> NibbleSlice<'a> {
 	}
 
 	/// Create a new nibble slice with the given byte-slice with a nibble offset.
-	/// TODO implement From (usize, &[u8]) and remove this new_offset very redundant calls
 	pub fn new_offset(data: &'a [u8], offset: usize) -> Self {
 		Self::new_slice(data, offset)
 	}
@@ -50,11 +49,6 @@ impl<'a> NibbleSlice<'a> {
 	/// Get an iterator for the series of nibbles.
 	pub fn iter(&'a self) -> NibbleSliceIterator<'a> {
 		NibbleSliceIterator { p: self, i: 0 }
-	}
-
-	/// Get nibble slice from a `NodeKey`.
-	pub fn from_stored(i: &NodeKey) -> NibbleSlice {
-		NibbleSlice::new_offset(&i.1[..], i.0)
 	}
 
 	/// Helper function to create a owned `NodeKey` from this `NibbleSlice`.
@@ -281,6 +275,12 @@ impl<'a> NibbleSlice<'a> {
 	}
 }
 
+impl<'a> From<&'a NodeKey> for NibbleSlice<'a> {
+	fn from(key: &'a NodeKey) -> NibbleSlice<'a> {
+		NibbleSlice::new_offset(&key.1[..], key.0)
+	}
+}
+
 impl<'a> From<NibbleSlice<'a>> for NodeKey {
 	fn from(slice: NibbleSlice<'a>) -> NodeKey {
 		(slice.offset, slice.data.into())
@@ -397,8 +397,8 @@ mod tests {
 	fn from_encoded_pre() {
 		let n = NibbleSlice::new(D);
 		let stored: BackingByteVec = [0x01, 0x23, 0x45][..].into();
-		assert_eq!(n, NibbleSlice::from_stored(&(0, stored.clone())));
-		assert_eq!(n.mid(1), NibbleSlice::from_stored(&(1, stored)));
+		assert_eq!(n, NibbleSlice::from(&(0, stored.clone())));
+		assert_eq!(n.mid(1), NibbleSlice::from(&(1, stored)));
 	}
 
 	#[test]

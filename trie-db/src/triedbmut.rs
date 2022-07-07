@@ -377,7 +377,7 @@ impl<L: TrieLayout> Node<L> {
 		match self {
 			Node::Empty => L::Codec::empty_node().to_vec(),
 			Node::Leaf(partial, value) => {
-				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				let pr = partial.into();
 				let v = value.into_encoded::<F>(Some(&pr), &mut child_cb);
 				let value = match (v.0, &v.1) {
 					(Some(value), None) => value,
@@ -387,7 +387,7 @@ impl<L: TrieLayout> Node<L> {
 				L::Codec::leaf_node(pr.right_iter(), pr.len(), value)
 			},
 			Node::Extension(partial, child) => {
-				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				let pr = NibbleSlice::from(partial);
 				let it = pr.right_iter();
 				let c = child_cb(NodeToEncode::TrieNode(child.clone()), Some(&pr), None);
 				L::Codec::extension_node(it, pr.len(), c)
@@ -410,7 +410,7 @@ impl<L: TrieLayout> Node<L> {
 				)
 			},
 			Node::NibbledBranch(partial, children, value) => {
-				let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
+				let pr = partial.into();
 				let value = value.as_ref().map(|v| v.into_encoded::<F>(Some(&pr), &mut child_cb));
 				let value = value.as_ref().map(|v| match (v.0.clone(), &v.1) {
 					(Some(value), None) => value,
@@ -425,7 +425,7 @@ impl<L: TrieLayout> Node<L> {
 					children.iter().enumerate().map(|(i, maybe_child)| {
 						//let branch_index = [i as u8];
 						maybe_child.as_ref().map(|child| {
-							let pr = NibbleSlice::new_offset(&partial.1[..], partial.0);
+							let pr = partial.into();
 							child_cb(
 								NodeToEncode::TrieNode(child.clone()),
 								Some(&pr),
@@ -946,7 +946,7 @@ where
 			let (mid, child) = match node {
 				Node::Empty => return Ok(None),
 				Node::Leaf(ref key, ref value) =>
-					if NibbleSlice::from_stored(key) == partial {
+					if NibbleSlice::from(key) == partial {
 						return Ok(value.in_memory_fetched_value(
 							prefix,
 							self.db,
@@ -957,7 +957,7 @@ where
 						return Ok(None)
 					},
 				Node::Extension(ref slice, ref child) => {
-					let slice = NibbleSlice::from_stored(slice);
+					let slice = NibbleSlice::from(slice);
 					if partial.starts_with(&slice) {
 						(slice.len(), child)
 					} else {
@@ -979,7 +979,7 @@ where
 						}
 					},
 				Node::NibbledBranch(ref slice, ref children, ref value) => {
-					let slice = NibbleSlice::from_stored(slice);
+					let slice = NibbleSlice::from(slice);
 					if slice == partial {
 						return Ok(if let Some(v) = value.as_ref() {
 							v.in_memory_fetched_value(prefix, self.db, &self.recorder, full_key)?
@@ -1113,7 +1113,7 @@ where
 				debug_assert!(!L::USE_EXTENSION);
 				#[cfg(feature = "std")]
 				trace!(target: "trie", "branch: ROUTE,AUGMENT");
-				let existing_key = NibbleSlice::from_stored(&encoded);
+				let existing_key = NibbleSlice::from(&encoded);
 
 				let common = partial.common_prefix(&existing_key);
 				if common == existing_key.len() && common == partial.len() {
@@ -1205,7 +1205,7 @@ where
 				}
 			},
 			Node::Leaf(encoded, stored_value) => {
-				let existing_key = NibbleSlice::from_stored(&encoded);
+				let existing_key = NibbleSlice::from(&encoded);
 				let common = partial.common_prefix(&existing_key);
 				if common == existing_key.len() && common == partial.len() {
 					#[cfg(feature = "std")]
@@ -1317,7 +1317,7 @@ where
 			},
 			Node::Extension(encoded, child_branch) => {
 				debug_assert!(L::USE_EXTENSION);
-				let existing_key = NibbleSlice::from_stored(&encoded);
+				let existing_key = NibbleSlice::from(&encoded);
 				let common = partial.common_prefix(&existing_key);
 				if common == 0 {
 					#[cfg(feature = "std")]
@@ -1484,7 +1484,7 @@ where
 			},
 			(Node::NibbledBranch(encoded, mut children, value), false) => {
 				let (common, existing_length) = {
-					let existing_key = NibbleSlice::from_stored(&encoded);
+					let existing_key = NibbleSlice::from(&encoded);
 					(existing_key.common_prefix(&partial), existing_key.len())
 				};
 				if common == existing_length && common == partial.len() {
@@ -1549,7 +1549,7 @@ where
 				}
 			},
 			(Node::Leaf(encoded, value), _) => {
-				let existing_key = NibbleSlice::from_stored(&encoded);
+				let existing_key = NibbleSlice::from(&encoded);
 				if existing_key == partial {
 					// this is the node we were looking for. Let's delete it.
 					let mut key_val = key.clone();
@@ -1563,14 +1563,14 @@ where
 						target: "trie",
 						"restoring leaf wrong partial, partial={:?}, existing={:?}",
 						partial,
-						NibbleSlice::from_stored(&encoded),
+						NibbleSlice::from(&encoded),
 					);
 					Action::Restore(Node::Leaf(encoded, value))
 				}
 			},
 			(Node::Extension(encoded, child_branch), _) => {
 				let (common, existing_length) = {
-					let existing_key = NibbleSlice::from_stored(&encoded);
+					let existing_key = NibbleSlice::from(&encoded);
 					(existing_key.common_prefix(&partial), existing_key.len())
 				};
 				if common == existing_length {
@@ -1794,7 +1794,7 @@ where
 						so.push(n >> nibble_ops::BIT_PER_NIBBLE);
 					}
 					so.append_optional_slice_and_nibble(
-						Some(&NibbleSlice::from_stored(&partial)),
+						Some(&NibbleSlice::from(&partial)),
 						None,
 					);
 					let so = so.as_prefix();
@@ -1899,7 +1899,7 @@ where
 			Stored::New(node) => {
 				// Reconstructs the full key
 				let full_key = self.cache.as_ref().and_then(|_| {
-					node.partial_key().and_then(|k| Some(NibbleSlice::from_stored(k).into()))
+					node.partial_key().and_then(|k| Some(NibbleSlice::from(k).into()))
 				});
 
 				let mut k = NibbleVec::new();
@@ -1973,7 +1973,7 @@ where
 							let mut key = full_key.clone();
 							n.map(|n| key.push(n));
 							c.partial_key().map(|p| {
-								let pr = NibbleSlice::new_offset(&p.1[..], p.0);
+								let pr = p.into();
 								key.append_optional_slice_and_nibble(Some(&pr), None)
 							});
 
@@ -2045,7 +2045,7 @@ where
 						let full_key = self.cache.as_ref().and_then(|_| {
 							let mut prefix = prefix.clone();
 							if let Some(partial) = node.partial_key() {
-								prefix.append_partial(NibbleSlice::from_stored(partial).right());
+								prefix.append_partial(NibbleSlice::from(partial).right());
 							}
 							Some(prefix)
 						});
