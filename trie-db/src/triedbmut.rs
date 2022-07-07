@@ -2096,7 +2096,6 @@ where
 	}
 
 	// a hack to get the root node's handle
-	// TODO should not be needed anymore?
 	fn root_handle(&self) -> NodeHandle<L> {
 		match &self.root_handle {
 			NodeHandle::Hash(h) => NodeHandle::Hash(*h),
