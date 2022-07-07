@@ -20,10 +20,10 @@ use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
 	nibble_ops,
 	node::{
-		CachedValueOwned, NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan,
+		CachedValueOwned, NibbleSlicePlan, NodeHandlePlan, NodePlan, Value, ValuePlan,
 	},
 	trie_visit,
-	triedbmut::ChildReference,
+	triedbmut::{ChildReference, Node as NodeOwned},
 	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,
 	TrieHash, TrieLayout, TrieMut, TrieRoot,
 };
@@ -1097,7 +1097,7 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
 pub struct TestTrieCache<L: TrieLayout> {
 	/// In a real implementation we need to make sure that this is unique per trie root.
 	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
-	node_cache: HashMap<TrieHash<L>, NodeOwned<TrieHash<L>>>,
+	node_cache: HashMap<TrieHash<L>, NodeOwned<L>>,
 	node_value_cache: HashMap<TrieHash<L>, CachedValueOwned<TrieHash<L>>>,
 }
 
@@ -1123,7 +1123,7 @@ impl<L: TrieLayout> Default for TestTrieCache<L> {
 	}
 }
 
-impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
+impl<L: TrieLayout> trie_db::TrieCache<L> for TestTrieCache<L> {
 	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&trie_db::CachedValue<TrieHash<L>>> {
 		self.value_cache.get(key)
 	}
@@ -1136,11 +1136,11 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
 		&mut self,
 		hash: TrieHash<L>,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
-			NodeOwned<TrieHash<L>>,
+			NodeOwned<L>,
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
-	) -> trie_db::Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, trie_db::CError<L>> {
+	) -> trie_db::Result<&NodeOwned<L>, TrieHash<L>, trie_db::CError<L>> {
 		match self.node_cache.entry(hash) {
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
@@ -1168,7 +1168,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
 		}
 	}
 
-	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<L>> {
 		self.node_cache.get(hash)
 	}
 }

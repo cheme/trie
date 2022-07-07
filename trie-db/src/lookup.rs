@@ -16,14 +16,12 @@
 
 use crate::{
 	nibble::NibbleSlice,
-	node::{
-		decode_hash, CachedValueOwned, Node, NodeHandle, Value,
-	},
+	node::{decode_hash, CachedValueOwned, Node, NodeHandle, Value},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
+	triedbmut::{Node as NodeOwned, NodeHandle as NodeHandleOwned, Value as ValueOwned},
 	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
 	TrieError, TrieHash, TrieLayout, TrieRecorder,
-	triedbmut::{Node as NodeOwned, Value as ValueOwned, NodeHandle as NodeHandleOwned},
 };
 use hash_db::{HashDBRef, Hasher, Prefix};
 
@@ -123,6 +121,11 @@ where
 				}
 
 				Ok((value, hash))
+			},
+			ValueOwned::NewNode(Some(hash), data) => Ok((data, hash)),
+			ValueOwned::NewNode(None, data) => {
+				let hash = L::Hash::hash(&data[..]);
+				Ok((data, hash))
 			},
 		}
 	}
@@ -244,7 +247,12 @@ where
 
 						Ok((hash, None))
 					},
-				},
+					ValueOwned::NewNode(Some(hash), data) => Ok((hash, Some(data))),
+					ValueOwned::NewNode(None, data) => {
+						let hash = L::Hash::hash(&data[..]);
+						Ok((hash, Some(data)))
+					},
+				}
 			)?;
 
 			match &hash_and_value {
@@ -509,6 +517,9 @@ where
 					},
 					NodeHandleOwned::Inline(inline_node) => {
 						node = &inline_node;
+					},
+					NodeHandleOwned::InMemory(..) => {
+						unreachable!()
 					},
 				}
 			}

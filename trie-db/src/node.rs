@@ -73,7 +73,6 @@ impl NodeHandle<'_> {
 			},
 		}
 	}
-
 }
 
 /// Owned version of [`NodeHandleOwned`].
@@ -304,7 +303,10 @@ impl Node<'_> {
 					})
 					.collect::<Result<_, _, _>>()?;
 
-				Ok(NodeOwned::Branch(Box::new(childs_owned), data.as_ref().map(|d| d.to_owned_value2::<L>())))
+				Ok(NodeOwned::Branch(
+					Box::new(childs_owned),
+					data.as_ref().map(|d| d.to_owned_value2::<L>()),
+				))
 			},
 			Self::NibbledBranch(n, childs, data) => {
 				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
@@ -326,8 +328,6 @@ impl Node<'_> {
 			},
 		}
 	}
-
-
 }
 
 /// Owned version of [`Node`].

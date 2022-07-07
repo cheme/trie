@@ -15,7 +15,7 @@
 //! Trie query recorder.
 
 use memory_db::{HashKey, MemoryDB};
-use reference_trie::{NoExtensionLayout, RefHasher, RefTrieDBBuilder, RefTrieDBMutBuilder};
+use reference_trie::{ExtensionLayout, RefHasher, RefTrieDBBuilder, RefTrieDBMutBuilder};
 use trie_db::{Recorder, Trie, TrieMut};
 
 #[test]
@@ -36,7 +36,7 @@ fn trie_record() {
 	}
 
 	{
-		let mut recorder = Recorder::<NoExtensionLayout>::new();
+		let mut recorder = Recorder::<ExtensionLayout>::new();
 		let trie = RefTrieDBBuilder::new(&db, &root).with_recorder(&mut recorder).build();
 
 		trie.get(b"pirate").unwrap().unwrap();
@@ -61,7 +61,7 @@ fn trie_record() {
 	}
 
 	{
-		let mut recorder = Recorder::<NoExtensionLayout>::new();
+		let mut recorder = Recorder::<ExtensionLayout>::new();
 		let trie = RefTrieDBBuilder::new(&db, &root).with_recorder(&mut recorder).build();
 		trie.get(b"letter").unwrap().unwrap();
 

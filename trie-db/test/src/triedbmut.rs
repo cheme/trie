@@ -505,7 +505,10 @@ fn return_old_values_internal<T: TrieLayout>() {
 	for &(ref key, ref value) in &x {
 		assert!(t.insert(key, value).unwrap() == None);
 		if threshold.map(|t| value.len() < t as usize).unwrap_or(true) {
-			assert_eq!(t.insert(key, value).unwrap(), Some(Value::Inline(value.clone().into(), None)));
+			assert_eq!(
+				t.insert(key, value).unwrap(),
+				Some(Value::Inline(value.clone().into(), None))
+			);
 		} else {
 			assert!(matches!(t.insert(key, value).unwrap(), Some(Value::NewNode(..))));
 		}

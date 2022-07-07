@@ -39,7 +39,7 @@ use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
-use node::{CachedValueOwned};
+use node::CachedValueOwned;
 use triedbmut::Node as NodeOwned;
 
 pub mod node;
