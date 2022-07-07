@@ -38,6 +38,7 @@ impl<'a> NibbleSlice<'a> {
 	}
 
 	/// Create a new nibble slice with the given byte-slice with a nibble offset.
+	/// TODO implement From (usize, &[u8]) and remove this new_offset very redundant calls
 	pub fn new_offset(data: &'a [u8], offset: usize) -> Self {
 		Self::new_slice(data, offset)
 	}

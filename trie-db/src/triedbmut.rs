@@ -81,6 +81,14 @@ impl<L: TrieLayout> NodeHandle<L> {
 			},
 		}
 	}
+
+	/// Returns `self` as inline node.
+	pub fn as_inline(&self) -> Option<&Node<L>> {
+		match self {
+			Self::Hash(_) => None,
+			Self::Inline(node) => Some(&*node),
+		}
+	}
 }
 
 fn empty_children<L: TrieLayout>() -> Box<[Option<NodeHandle<L>>; nibble_ops::NIBBLE_LENGTH]> {
@@ -114,6 +122,25 @@ impl<L: TrieLayout> Value<L> {
 		match self {
 			Self::Inline(data, _) => EncodedValue::Inline(&data),
 			Self::Node(hash) => EncodedValue::Node(hash.as_ref()),
+		}
+	}
+
+	/// Returns the data stored in self.
+	pub fn data(&self) -> Option<&Bytes> {
+		match self {
+			Self::Inline(data, _) => Some(data),
+			Self::Node(_) => None,
+		}
+	}
+
+	/// Returns the hash of the data stored in self.
+	/// TODO return non option
+	/// TODO &mut and lazy update for inline hash
+	pub fn data_hash(&self) -> Option<TrieHash<L>> {
+		match self {
+			Self::Inline(_, Some(hash)) => Some(*hash),
+			Self::Inline(node, None) => Some(L::Hash::hash(node)),
+			Self::Node(hash) => Some(*hash),
 		}
 	}
 }
@@ -551,6 +578,74 @@ impl<L: TrieLayout> Node<L> {
 			Self::Branch(_, _) => None,
 			Self::NibbledBranch(key, _, _) => Some(key),
 			Self::Extension(key, _) => Some(key),
+		}
+	}
+
+	/// Returns the data attached to this node.
+	pub fn data(&self) -> Option<&Bytes> {
+		match &self {
+			Self::Empty => None,
+			Self::Leaf(_, value) => value.data(),
+			Self::Extension(_, _) => None,
+			Self::Branch(_, value) => value.as_ref().and_then(|v| v.data()),
+			Self::NibbledBranch(_, _, value) => value.as_ref().and_then(|v| v.data()),
+		}
+	}
+
+	/// Returns the hash of the data attached to this node.
+	pub fn data_hash(&self) -> Option<TrieHash<L>> {
+		match &self {
+			Self::Empty => None,
+			Self::Leaf(_, value) => value.data_hash(),
+			Self::Extension(_, _) => None,
+			Self::Branch(_, value) => value.as_ref().and_then(|v| v.data_hash()),
+			Self::NibbledBranch(_, _, value) => value.as_ref().and_then(|v| v.data_hash()),
+		}
+	}
+
+	/// Returns an iterator over all existing children with their optional nibble.
+	pub fn child_iter(&self) -> impl Iterator<Item = (Option<u8>, &NodeHandle<L>)> {
+		enum ChildIter<'a, L: TrieLayout> {
+			Empty,
+			Single(&'a NodeHandle<L>, bool),
+			Array(&'a [Option<NodeHandle<L>>; nibble_ops::NIBBLE_LENGTH], usize),
+		}
+
+		impl<'a, L: TrieLayout> Iterator for ChildIter<'a, L> {
+			type Item = (Option<u8>, &'a NodeHandle<L>);
+
+			fn next(&mut self) -> Option<Self::Item> {
+				loop {
+					match self {
+						Self::Empty => break None,
+						Self::Single(child, returned) =>
+							break if *returned {
+								None
+							} else {
+								*returned = true;
+								Some((None, child))
+							},
+						Self::Array(childs, index) =>
+							if *index >= childs.len() {
+								break None
+							} else {
+								*index += 1;
+
+								// Ignore non-existing childs.
+								if let Some(ref child) = childs[*index - 1] {
+									break Some((Some(*index as u8 - 1), child))
+								}
+							},
+					}
+				}
+			}
+		}
+
+		match self {
+			Self::Leaf(_, _) | Self::Empty => ChildIter::Empty,
+			Self::Extension(_, child) => ChildIter::Single(child, false),
+			Self::Branch(children, _) | Self::NibbledBranch(_, children, _) =>
+				ChildIter::Array(children, 0),
 		}
 	}
 }
@@ -1934,7 +2029,10 @@ where
 							let mut key = full_key.clone();
 							n.map(|n| key.push(n));
 							c.partial_key()
-								.map(|p| key.append_optional_slice_and_nibble(Some(&p), None));
+								.map(|p| {
+									let pr = NibbleSlice::new_offset(&p.1[..], p.0);
+									key.append_optional_slice_and_nibble(Some(&pr), None)
+								});
 
 							if let Some((hash, data)) =
 								c.data().and_then(|d| c.data_hash().map(|h| (h, d)))
@@ -1945,6 +2043,7 @@ where
 
 							// TODO should we cache only the queried value and new value.
 							// Caching all unrelated to query value seems overkill.
+							// -> then get rid of fn child_iter too
 							cache_child_values::<L>(c, values_to_cache, key);
 						},
 					);

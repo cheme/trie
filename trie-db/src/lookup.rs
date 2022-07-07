@@ -17,13 +17,13 @@
 use crate::{
 	nibble::NibbleSlice,
 	node::{
-		decode_hash, CachedValueOwned, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value,
-		ValueOwned,
+		decode_hash, CachedValueOwned, Node, NodeHandle, Value,
 	},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
 	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
 	TrieError, TrieHash, TrieLayout, TrieRecorder,
+	triedbmut::{Node as NodeOwned, Value as ValueOwned, NodeHandle as NodeHandleOwned},
 };
 use hash_db::{HashDBRef, Hasher, Prefix};
 
@@ -89,17 +89,20 @@ where
 	///
 	/// Returns the bytes representing the value and its hash.
 	fn load_owned_value(
-		v: ValueOwned<TrieHash<L>>,
+		v: ValueOwned<L>,
 		prefix: Prefix,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
 		recorder: &mut Option<&mut dyn TrieRecorder<L>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
 			// TODO inline value cache by key record should be here
 			// for inline too
-			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
+			ValueOwned::Inline(value, hash) => {
+				let hash = hash.unwrap_or_else(|| L::Hash::hash(&value[..]));
+				Ok((value, hash))
+			},
 			ValueOwned::Node(hash) => {
 				let node = cache.get_or_insert_value(hash, &mut || {
 					let value = db
@@ -201,7 +204,7 @@ where
 		mut self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L>,
 	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
 		let value_cache_allowed = self
 			.recorder
@@ -223,6 +226,7 @@ where
 				cache,
 				|value, _, full_key, _, _, recorder| match value {
 					ValueOwned::Inline(value, hash) => {
+						let hash = hash.unwrap_or_else(|| L::Hash::hash(&value[..]));
 						if let Some(recorder) = recorder.as_mut() {
 							recorder.record(TrieAccess::Value {
 								hash,
@@ -264,7 +268,7 @@ where
 		mut self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L>,
 	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
 		let trie_nodes_recorded =
 			self.recorder.as_ref().map(|r| r.trie_nodes_recorded_for_key(full_key));
@@ -346,9 +350,9 @@ where
 		&mut self,
 		nibble_key: NibbleSlice,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L>,
 		load_value_owned: impl Fn(
-			ValueOwned<TrieHash<L>>,
+			ValueOwned<L>,
 			Prefix,
 			&[u8],
 			&mut dyn crate::TrieCache<L>,
@@ -377,7 +381,7 @@ where
 					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
 				};
 
-				decoded.to_owned_node::<L>()
+				decoded.to_owned_node2::<L>()
 			})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });
