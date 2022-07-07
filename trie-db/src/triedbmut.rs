@@ -109,16 +109,13 @@ impl<L: TrieLayout> Value<L> {
 	}
 
 	/// Returns the hash of the data stored in self.
-	/// TODO return non option
-	/// TODO &mut and lazy update for inline hash
-	pub fn data_hash(&self) -> Option<TrieHash<L>> {
+	pub fn data_hash(&self) -> TrieHash<L> {
 		match self {
-			Self::Inline(_, Some(hash)) => Some(*hash),
-			Self::Inline(node, None) => Some(L::Hash::hash(node)),
-			Self::Node(hash) => Some(*hash),
-			Self::NewNode(Some(hash), _data) => Some(*hash),
-			// TODO could still implement and even try &mut to update hash
-			Self::NewNode(_hash, _data) => unreachable!("Please use into_encoded"),
+			Self::Inline(_, Some(hash)) => *hash,
+			Self::Inline(node, None) => L::Hash::hash(node),
+			Self::Node(hash) => *hash,
+			Self::NewNode(Some(hash), _data) => *hash,
+			Self::NewNode(_hash, data) => L::Hash::hash(data),
 		}
 	}
 }
@@ -497,11 +494,11 @@ impl<L: TrieLayout> Node<L> {
 	/// Returns the hash of the data attached to this node.
 	pub fn data_hash(&self) -> Option<TrieHash<L>> {
 		match &self {
-			Self::Empty => None, // TODO should return a hash of empty node
-			Self::Leaf(_, value) => value.data_hash(),
-			Self::Extension(_, _) => None, // TODO
-			Self::Branch(_, value) => value.as_ref().and_then(|v| v.data_hash()),
-			Self::NibbledBranch(_, _, value) => value.as_ref().and_then(|v| v.data_hash()),
+			Self::Empty => None,
+			Self::Leaf(_, value) => Some(value.data_hash()),
+			Self::Extension(_, _) => None,
+			Self::Branch(_, value) => value.as_ref().map(|v| v.data_hash()),
+			Self::NibbledBranch(_, _, value) => value.as_ref().map(|v| v.data_hash()),
 		}
 	}
 
