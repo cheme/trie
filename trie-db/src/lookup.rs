@@ -102,7 +102,7 @@ where
 				Ok((value, hash))
 			},
 			ValueOwned::Node(hash) => {
-				let node = cache.get_or_insert_value(hash, &mut || {
+				let node = cache.get_or_insert_value(hash, &mut |_| {
 					let value = db
 						.get(&hash, prefix)
 						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
@@ -374,7 +374,7 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let mut node = cache.get_or_insert_node(hash, &mut || {
+			let mut node = cache.get_or_insert_node(hash, &mut |_| {
 				let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
 					Some(value) => value,
 					None =>

@@ -220,6 +220,190 @@ impl RecordedForKey {
 	}
 }
 
+/// Context is binding together `Recorder` and `Cache`.
+pub struct Context<'a, L: TrieLayout> {
+	cache: Option<&'a mut dyn TrieCache<L>>,
+	recorder: Option<&'a mut dyn TrieRecorder<L>>,
+	// TODO this is a change: only cache queried values.
+	// -> remove if cache_value_for_key is less called.
+	// or make it work with a get_with api.
+	//	cache_value_by_key: Option<&'a [u8]>,
+	cached_node: Option<NodeOwned<L>>,
+	cached_value: Option<CachedValueOwned<TrieHash<L>>>,
+}
+
+impl<'a, L: TrieLayout> Context<'a, L> {
+	// TODO rem
+	fn lookup_value_for_key(&mut self, key: &'a [u8]) -> Option<&CachedValue<TrieHash<L>>> {
+		if let Some(cache) = self.cache.as_mut() {
+			//			self.cache_value_by_key = Some(key);
+			let can_use = if let Some(recorder) = self.recorder.as_ref() {
+				!matches!(recorder.trie_nodes_recorded_for_key(key), RecordedForKey::None)
+			} else {
+				true
+			};
+			if can_use {
+				return cache.lookup_value_for_key(key)
+			}
+		}
+		None
+	}
+
+	/// Cache the given `value` for the given `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of caching `value` for the current
+	/// trie root.
+	///
+	/// This recored a direct access. TODO TrieAccess::Value and TrieAccess::Cache and
+	/// TrieAccess::NonExisting
+	/// TODO should be call from trie node access??
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<TrieHash<L>>) {
+		//		if Some(key) == self.cache_value_by_key {
+		if let Some(recorder) = self.recorder.as_mut() {
+			// Others value access are added on trie node access.
+			if matches!(&value, CachedValue::NonExisting) {
+				recorder.record(TrieAccess::NonExisting { full_key: key });
+				// TODO for inline value we would need to call this too. -> probably add a bool
+			}
+		}
+
+		if let Some(cache) = self.cache.as_mut() {
+			cache.cache_value_for_key(key, value);
+		} else {
+			// TODO only make sense with a switch to get_with_api
+			// self.cached_value = Some(value);
+		}
+		//		}
+		//		self.cache_value_by_key = None;
+	}
+
+	/// Get or insert a [`NodeOwned`].
+	///
+	/// The cache implementation should look up based on the given `hash` if the node is already
+	/// known. If the node is not yet known, the given `fetch_node` function can be used to fetch
+	/// the particular node.
+	///
+	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
+	///
+	/// This recored a NodeOwned trie access. TODO TrieAccess::NodeOwned
+	///
+	/// TODO return Cow instead of &Node so the non caching implementation could be less awkward.
+	/// TODO have a separate method for value
+	fn get_or_insert_node(
+		&mut self,
+		full_key: Option<&[u8]>,
+		hash: TrieHash<L>,
+		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<L>, TrieHash<L>, CError<L>>,
+	) -> Result<&NodeOwned<L>, TrieHash<L>, CError<L>> {
+		let recorder = &mut self.recorder;
+		let mut fetch_node = |mut cache: Option<&mut dyn TrieCache<L>>| {
+			let node = fetch_node()?;
+			if let Some(full_key) = full_key {
+				if let Some(hash) = node.data_hash() {
+					if let Some(data) = node.data() {
+						let value = CachedValue::Existing { hash, data: data.clone().into() };
+						if let Some(cache) = cache.as_mut() {
+							cache.cache_value_for_key(full_key, value);
+						}
+						// TODO recorder should set accessed Value (no api for it that do not record a value
+						// node)
+/*						if let Some(recorder) = recorder {
+							recorder.record(TrieAccess::Value {
+								hash,
+								full_key,
+								value: (&data[..]).into(),
+							});
+						}*/
+					} else {
+						let value = CachedValue::ExistingHash(hash);
+						if let Some(cache) = cache.as_mut() {
+							cache.cache_value_for_key(full_key, value);
+						}
+						if let Some(recorder) = recorder {
+							recorder.record(TrieAccess::Hash { full_key });
+						}
+					}
+				}
+				if let Some(recorder) = recorder {
+					recorder.record(TrieAccess::NodeOwned { hash, node_owned: &node });
+				}
+			}
+			Ok(node)
+		};
+
+		let node = if let Some(cache) = self.cache.as_mut() {
+			cache.get_or_insert_node(hash, &mut fetch_node)?
+		} else {
+			let node = fetch_node(None)?;
+			self.cached_node = Some(node);
+			self.cached_node.as_ref().expect("Init above")
+		};
+
+		Ok(node)
+	}
+
+	fn get_or_insert_value(
+		&mut self,
+		full_key: &[u8],
+		hash: TrieHash<L>,
+		fetch_node: &mut dyn FnMut()
+			-> Result<CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>>,
+	) -> Result<&CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		let recorder = &mut self.recorder;
+		let mut fetch_node = |mut cache: Option<&mut dyn TrieCache<L>>| {
+			let node = fetch_node()?;
+			let hash = &node.1;
+			let data = &node.0;
+			let value = CachedValue::Existing { hash: *hash, data: data.clone().into() };
+			if let Some(cache) = cache.as_mut() {
+				cache.cache_value_for_key(full_key, value);
+			}
+			if let Some(recorder) = recorder {
+				recorder.record(TrieAccess::Value {
+					hash: *hash,
+					full_key,
+					value: (&data[..]).into(),
+				});
+			}
+			Ok(node)
+		};
+
+		let node = if let Some(cache) = self.cache.as_mut() {
+			cache.get_or_insert_value(hash, &mut fetch_node)?
+		} else {
+			let node = fetch_node(None)?;
+			self.cached_value = Some(node);
+			self.cached_value.as_ref().expect("Init above")
+		};
+
+		Ok(node)
+	}
+
+	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
+	///
+	/// This recored a NodeOwned trie access. TODO remove TrieAccess::NodeOwned
+	/// TODO remove (get_or_insert_node should be enough).
+	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<L>> {
+		if let Some(cache) = self.cache.as_mut() {
+			cache.get_node(hash)
+		} else {
+			None
+		}
+	}
+
+	/// Record the given [`TrieAccess`].
+	///
+	/// TODO remove
+	fn record<'b>(&mut self, access: TrieAccess<'b, L>) {
+		if let Some(recorder) = self.recorder.as_mut() {
+			recorder.record(access);
+		}
+	}
+}
+
 /// A trie recorder that can be used to record all kind of trie accesses.
 pub trait TrieRecorder<L: TrieLayout> {
 	/// Record the given [`TrieAccess`].
@@ -621,12 +805,6 @@ impl<H> From<Option<H>> for CachedValue<H> {
 	}
 }
 
-/// Cached item.
-pub enum CachedNode<L: TrieLayout> {
-	Node(NodeOwned<L>),
-	Value(CachedValueOwned<TrieHash<L>>),
-}
-
 /// A cache that can be used to speed-up certain operations when accessing the trie.
 pub trait TrieCache<L: TrieLayout> {
 	/// Lookup value for the given `key`.
@@ -663,7 +841,7 @@ pub trait TrieCache<L: TrieLayout> {
 	fn get_or_insert_node(
 		&mut self,
 		hash: TrieHash<L>,
-		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<L>, TrieHash<L>, CError<L>>,
+		fetch_node: &mut dyn FnMut(Option<&mut dyn TrieCache<L>>) -> Result<NodeOwned<L>, TrieHash<L>, CError<L>>,
 	) -> Result<&NodeOwned<L>, TrieHash<L>, CError<L>>;
 
 	/// Get or insert a [`CachedValueOwned`].
@@ -676,7 +854,7 @@ pub trait TrieCache<L: TrieLayout> {
 	fn get_or_insert_value(
 		&mut self,
 		hash: TrieHash<L>,
-		fetch_node: &mut dyn FnMut()
+		fetch_node: &mut dyn FnMut(Option<&mut dyn TrieCache<L>>)
 			-> Result<CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>>,
 	) -> Result<&CachedValueOwned<TrieHash<L>>, TrieHash<L>, CError<L>>;
 

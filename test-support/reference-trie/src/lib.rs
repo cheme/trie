@@ -1133,37 +1133,33 @@ impl<L: TrieLayout> trie_db::TrieCache<L> for TestTrieCache<L> {
 	fn get_or_insert_node(
 		&mut self,
 		hash: TrieHash<L>,
-		fetch_node: &mut dyn FnMut() -> trie_db::Result<
+		fetch_node: &mut dyn FnMut(Option<&mut dyn trie_db::TrieCache<L>>) -> trie_db::Result<
 			NodeOwned<L>,
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
 	) -> trie_db::Result<&NodeOwned<L>, TrieHash<L>, trie_db::CError<L>> {
-		match self.node_cache.entry(hash) {
-			Entry::Occupied(e) => Ok(e.into_mut()),
-			Entry::Vacant(e) => {
-				let node = (*fetch_node)()?;
-				Ok(e.insert(node))
-			},
+		if !self.node_cache.contains_key(&hash) {
+			let node = (*fetch_node)(Some(&mut *self))?;
+			self.node_cache.insert(hash, node);
 		}
+		Ok(self.node_cache.get(&hash).unwrap())
 	}
 
 	fn get_or_insert_value(
 		&mut self,
 		hash: TrieHash<L>,
-		fetch_node: &mut dyn FnMut() -> trie_db::Result<
+		fetch_node: &mut dyn FnMut(Option<&mut dyn trie_db::TrieCache<L>>) -> trie_db::Result<
 			CachedValueOwned<TrieHash<L>>,
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
 	) -> trie_db::Result<&CachedValueOwned<TrieHash<L>>, TrieHash<L>, trie_db::CError<L>> {
-		match self.node_value_cache.entry(hash) {
-			Entry::Occupied(e) => Ok(e.into_mut()),
-			Entry::Vacant(e) => {
-				let node = (*fetch_node)()?;
-				Ok(e.insert(node))
-			},
+		if !self.node_value_cache.contains_key(&hash) {
+			let node = (*fetch_node)(Some(&mut *self))?;
+			self.node_value_cache.insert(hash, node);
 		}
+		Ok(self.node_value_cache.get(&hash).unwrap())
 	}
 
 	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<L>> {

@@ -1793,10 +1793,7 @@ where
 					if let Some(n) = k2.1 {
 						so.push(n >> nibble_ops::BIT_PER_NIBBLE);
 					}
-					so.append_optional_slice_and_nibble(
-						Some(&NibbleSlice::from(&partial)),
-						None,
-					);
+					so.append_optional_slice_and_nibble(Some(&NibbleSlice::from(&partial)), None);
 					let so = so.as_prefix();
 					(k2.0, Some(so.0.into()), so.1)
 				};
@@ -1943,7 +1940,7 @@ where
 	fn cache_node(&mut self, hash: TrieHash<L>, encoded: &[u8], full_key: Option<NibbleVec>) {
 		// If we have a cache, cache our node directly.
 		if let Some(cache) = self.cache.as_mut() {
-			let node = cache.get_or_insert_node(hash, &mut || {
+			let node = cache.get_or_insert_node(hash, &mut |_| {
 				Ok(L::Codec::decode(&encoded)
 					.ok()
 					.and_then(|n| n.to_owned_node().ok())
@@ -2010,7 +2007,7 @@ where
 
 			// `get_or_insert` should always return `Ok`, but be safe.
 			let value = if let Ok(value) = cache
-				.get_or_insert_value(hash, &mut || Ok(CachedValueOwned(value.clone(), hash)))
+				.get_or_insert_value(hash, &mut |_| Ok(CachedValueOwned(value.clone(), hash)))
 				.map(|n| n.0.clone())
 			{
 				Some(value)
