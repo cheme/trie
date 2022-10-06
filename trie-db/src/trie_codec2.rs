@@ -141,6 +141,14 @@ where
 
 	let mut stack =
 		Vec::<(Rc<OwnedNode<DBValue>>, [Option<NodeHandlePlan>; NIBBLE_LENGTH], usize)>::new();
+
+	let key_pop = |cursor_depth: &mut usize, depth, output: &mut _| {
+		let op = Op::<TrieHash<L>>::KeyPop((*cursor_depth - depth) as u16);
+		println!("{:?}", op);
+		op.encode_to(output);
+		*cursor_depth = depth;
+	};
+
 	while let Some(item) = iter.next() {
 //		println!("{:?}", item);
 		match item {
@@ -164,11 +172,8 @@ where
 							while ix < NIBBLE_LENGTH as usize {
 								if let Some(NodeHandlePlan::Hash(plan)) = &children[ix] {
 									if !pop_written {
-										let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - depth) as u16);
-										println!("{:?}", op);
-										op.encode_to(&mut output);
+										key_pop(&mut cursor_depth, depth, &mut output);
 										pop_written = true;
-										cursor_depth = depth;
 									}
 									// inline are ignored: will be processed by next iterator calls
 									let mut hash: TrieHash<L> = Default::default();
@@ -182,10 +187,7 @@ where
 						}
 					}
 					if cursor_depth > common_depth {
-						let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - common_depth) as u16);
-						println!("{:?}", op);
-						op.encode_to(&mut output);
-						cursor_depth = common_depth;
+						key_pop(&mut cursor_depth, common_depth, &mut output);
 					}
 				}
 
@@ -215,10 +217,7 @@ where
 					_ => None,
 				} {
 					if common_depth < cursor_depth {
-						let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - common_depth) as u16);
-						println!("{:?}", op);
-						op.encode_to(&mut output);
-						cursor_depth = common_depth;
+						key_pop(&mut cursor_depth, common_depth, &mut output);
 					}
 					let descend = prefix.right_of(cursor_depth);
 					let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
@@ -269,15 +268,6 @@ where
 						at = prefix;
 					},
 				}
-				/*	match node.node_plan() {
-					NodePlan::Empty => (),
-					NodePlan::Leaf { value, .. } => {},
-					NodePlan::Extension { .. } => (),
-					NodePlan::NibbledBranch { value: Some(value), .. } |
-					NodePlan::Branch { value: Some(value), .. } => {},
-					NodePlan::NibbledBranch { value: None, .. } |
-					NodePlan::Branch { value: None, .. } => (NIBBLE_LENGTH, None),
-				};*/
 			},
 
 			Err(err) => match *err {
@@ -304,11 +294,8 @@ where
 		while ix < NIBBLE_LENGTH as usize {
 			if let Some(NodeHandlePlan::Hash(plan)) = &children[ix] {
 				if !pop_written {
-					let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - depth) as u16);
-					println!("{:?}", op);
-					op.encode_to(&mut output);
+					key_pop(&mut cursor_depth, depth, &mut output);
 					pop_written = true;
-					cursor_depth = depth;
 				}
 				// inline are ignored: will be processed by next iterator calls
 				let mut hash: TrieHash<L> = Default::default();

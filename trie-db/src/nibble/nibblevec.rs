@@ -266,7 +266,6 @@ impl NibbleVec {
 	pub fn right_of(&self, at: usize) -> (Vec<u8>, u8) {
 		let mut ix = at / nibble_ops::NIBBLE_PER_BYTE;
 		let shift = at % nibble_ops::NIBBLE_PER_BYTE != 0;
-		let inner = &self.inner;
 
 		let (left_s, right_s) = nibble_ops::SPLIT_SHIFTS;
 		let mut dest: Vec<u8> = Default::default();
@@ -279,7 +278,9 @@ impl NibbleVec {
 		if shift {
 			loop {
 				if ix + 1 == self.inner.len() {
-					dest.push(self.inner[ix] << left_s);
+					if mask != u8::MAX {
+						dest.push(self.inner[ix] << left_s);
+					}
 					break
 				} else {
 					dest.push(self.inner[ix] << left_s | self.inner[ix + 1] >> right_s);
