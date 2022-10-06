@@ -28,7 +28,7 @@ type MemoryDB<T> = memory_db::MemoryDB<
 fn test_encode_compact<L: TrieLayout>(
 	entries: Vec<(&'static [u8], &'static [u8])>,
 	keys: Vec<&'static [u8]>,
-) -> (<L::Hash as Hasher>::Out, Vec<Vec<u8>>, Vec<(&'static [u8], Option<DBValue>)>) {
+) -> (<L::Hash as Hasher>::Out, Vec<u8>, Vec<(&'static [u8], Option<DBValue>)>) {
 	// Populate DB with full trie from entries.
 	let (db, root) = {
 		let mut db = <MemoryDB<L>>::default();
@@ -70,7 +70,7 @@ fn test_encode_compact<L: TrieLayout>(
 }
 
 fn test_decode_compact<L: TrieLayout>(
-	encoded: &[Vec<u8>],
+	encoded: &[u8],
 	items: Vec<(&'static [u8], Option<DBValue>)>,
 	expected_root: <L::Hash as Hasher>::Out,
 	expected_used: usize,
@@ -114,7 +114,7 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 		],
 	);
 
-	encoded.push(Vec::new()); // Add an extra item to ensure it is not read.
+	encoded.push(5u8); // Add an extra item to ensure it is not read.
 	test_decode_compact::<T>(&encoded, items, root, encoded.len() - 1);
 }
 

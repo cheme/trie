@@ -57,6 +57,7 @@ mod lookup;
 mod nibble;
 mod node_codec;
 mod trie_codec;
+mod trie_codec2;
 
 pub use self::{
 	fatdb::{FatDB, FatDBIterator},
@@ -73,7 +74,11 @@ pub use crate::{
 	iter_build::{trie_visit, ProcessEncodedNode, TrieBuilder, TrieRoot, TrieRootUnhashed},
 	iterator::TrieDBNodeIterator,
 	node_codec::{NodeCodec, Partial},
-	trie_codec::{decode_compact, decode_compact_from_iter, encode_compact},
+	trie_codec::{
+		decode_compact as decode_compact2, decode_compact_from_iter as decode_compact_from_iter2,
+		encode_compact as encode_compact2,
+	},
+	trie_codec2::{decode_compact, decode_compact_from_iter, encode_compact},
 };
 pub use hash_db::{HashDB, HashDBRef, Hasher};
 

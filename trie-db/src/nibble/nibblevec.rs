@@ -261,6 +261,37 @@ impl NibbleVec {
 			}
 		})
 	}
+
+	/// Return an iterator over `Partial` bytes representation, and a mask for last byte.
+	pub fn right_of(&self, at: usize) -> (Vec<u8>, u8) {
+		let mut ix = at / nibble_ops::NIBBLE_PER_BYTE;
+		let shift = at % nibble_ops::NIBBLE_PER_BYTE != 0;
+		let inner = &self.inner;
+
+		let (left_s, right_s) = nibble_ops::SPLIT_SHIFTS;
+		let mut dest: Vec<u8> = Default::default();
+		let mask = if (self.len - at) % nibble_ops::NIBBLE_PER_BYTE != 0 {
+			!(u8::MAX >> right_s)
+		} else {
+			u8::MAX
+		};
+
+		if shift {
+			loop {
+				if ix + 1 == self.inner.len() {
+					dest.push(self.inner[ix] << left_s);
+					break
+				} else {
+					dest.push(self.inner[ix] << left_s | self.inner[ix + 1] >> right_s);
+				}
+				ix += 1;
+			}
+		} else {
+			dest.extend_from_slice(&self.inner[ix..]);
+		}
+
+		(dest, mask)
+	}
 }
 
 impl<'a> From<NibbleSlice<'a>> for NibbleVec {

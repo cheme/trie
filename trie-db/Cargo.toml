@@ -13,6 +13,7 @@ smallvec = "1.0.0"
 hash-db = { path = "../hash-db", default-features = false, version = "0.15.2"}
 hashbrown = { version = "0.12.0", default-features = false, features = ["ahash"] }
 rustc-hex = { version = "2.1.0", default-features = false, optional = true }
+codec = { package = "parity-scale-codec", version = "3.0.0", default-features = false, features = ["derive"] } # TODO remove (only to proto encoding but not appropriate).
 
 [features]
 default = ["std"]

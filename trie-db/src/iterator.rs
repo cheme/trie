@@ -411,9 +411,9 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 					);
 					crumb.increment();
 					return Some(Ok((
-						self.key_nibbles.clone(),
-						crumb.hash.clone(),
-						crumb.node.clone(),
+						self.key_nibbles.clone(), // TODO should just iter on reference here.
+						crumb.hash.clone(),       // Same
+						crumb.node.clone(),       // Same (actually it is a Rc)
 					)))
 				},
 				IterStep::PopTrail => {
