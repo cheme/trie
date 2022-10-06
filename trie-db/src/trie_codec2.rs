@@ -23,7 +23,6 @@
 //! partial trie.
 
 use crate::{
-	nibble::BackingByteVec,
 	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec},
@@ -36,7 +35,7 @@ use hash_db::{HashDB, Prefix};
 /// Representation of each encoded action
 /// for building the proof.
 /// TODO ref variant for encoding ??
-#[derive(Encode, Decode)]
+#[derive(Encode, Decode, Debug)]
 enum Op<H> {
 	// key content followed by a mask for last byte.
 	// If mask erase some content the content need to
@@ -58,6 +57,7 @@ enum Op<H> {
 	ValueForceHashed(DBValue),
 }
 
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct Enc<H>(pub H);
 
@@ -83,144 +83,6 @@ impl<H: AsMut<[u8]> + Default> Decode for Enc<H> {
 	}
 }
 
-struct EncoderStackEntry<C: NodeCodec> {
-	/// The prefix is the nibble path to the node in the trie.
-	prefix: NibbleVec,
-	/// Node in memory content.
-	node: Rc<OwnedNode<DBValue>>,
-	/// The next entry in the stack is a child of the preceding entry at this index. For branch
-	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
-	child_index: usize,
-	/// Flags indicating whether each child is omitted in the encoded node.
-	omit_children: Vec<bool>,
-	/// Skip value if value node is after.
-	omit_value: bool,
-	/// The encoding of the subtrie nodes rooted at this entry, which is built up in
-	/// `encode_compact`.
-	output_index: usize,
-	_marker: PhantomData<C>,
-}
-
-impl<C: NodeCodec> EncoderStackEntry<C> {
-	/// Given the prefix of the next child node, identify its index and advance `child_index` to
-	/// that. For a given entry, this must be called sequentially only with strictly increasing
-	/// child prefixes. Returns an error if the child prefix is not a child of this entry or if
-	/// called with children out of order.
-	///
-	/// Preconditions:
-	/// - self.prefix + partial must be a prefix of child_prefix.
-	/// - if self.node is a branch, then child_prefix must be longer than self.prefix + partial.
-	fn advance_child_index(
-		&mut self,
-		child_prefix: &NibbleVec,
-	) -> result::Result<(), &'static str> {
-		match self.node.node_plan() {
-			NodePlan::Empty | NodePlan::Leaf { .. } =>
-				return Err("empty and leaf nodes have no children"),
-			NodePlan::Extension { .. } =>
-				if self.child_index != 0 {
-					return Err("extension node cannot have multiple children")
-				},
-			NodePlan::Branch { .. } => {
-				if child_prefix.len() <= self.prefix.len() {
-					return Err("child_prefix does not contain prefix")
-				}
-				let child_index = child_prefix.at(self.prefix.len()) as usize;
-				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix")
-				}
-				self.child_index = child_index;
-			},
-			NodePlan::NibbledBranch { partial, .. } => {
-				if child_prefix.len() <= self.prefix.len() + partial.len() {
-					return Err("child_prefix does not contain prefix and node partial")
-				}
-				let child_index = child_prefix.at(self.prefix.len() + partial.len()) as usize;
-				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix")
-				}
-				self.child_index = child_index;
-			},
-		}
-		Ok(())
-	}
-
-	/// Generates the encoding of the subtrie rooted at this entry.
-	fn encode_node(&mut self) -> Result<Vec<u8>, C::HashOut, C::Error> {
-		let node_data = self.node.data();
-		let mut modified_node_plan;
-		let node_plan = if self.omit_value {
-			modified_node_plan = self.node.node_plan().clone();
-			if let Some(value) = modified_node_plan.value_plan_mut() {
-				// 0 length value.
-				*value = ValuePlan::Inline(0..0);
-			}
-			&modified_node_plan
-		} else {
-			self.node.node_plan()
-		};
-		let mut encoded = match node_plan {
-			NodePlan::Empty | NodePlan::Leaf { .. } => node_data.to_vec(),
-			NodePlan::Extension { partial, child: _ } =>
-				if !self.omit_children[0] {
-					node_data.to_vec()
-				} else {
-					let partial = partial.build(node_data);
-					let empty_child = ChildReference::Inline(C::HashOut::default(), 0);
-					C::extension_node(partial.right_iter(), partial.len(), empty_child)
-				},
-			NodePlan::Branch { value, children } => C::branch_node(
-				Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-				value.as_ref().map(|v| v.build(node_data)),
-			),
-			NodePlan::NibbledBranch { partial, value, children } => {
-				let partial = partial.build(node_data);
-				C::branch_node_nibbled(
-					partial.right_iter(),
-					partial.len(),
-					Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
-					value.as_ref().map(|v| v.build(node_data)),
-				)
-			},
-		};
-
-		if self.omit_value {
-			if let Some(header) = C::ESCAPE_HEADER {
-				encoded.insert(0, header);
-			} else {
-				return Err(Box::new(TrieError::InvalidStateRoot(Default::default())))
-			}
-		}
-		Ok(encoded)
-	}
-
-	/// Generate the list of child references for a branch node with certain children omitted.
-	///
-	/// Preconditions:
-	/// - omit_children has size NIBBLE_LENGTH.
-	/// - omit_children[i] is only true if child_handles[i] is Some
-	fn branch_children(
-		node_data: &[u8],
-		child_handles: &[Option<NodeHandlePlan>; NIBBLE_LENGTH],
-		omit_children: &[bool],
-	) -> Result<[Option<ChildReference<C::HashOut>>; NIBBLE_LENGTH], C::HashOut, C::Error> {
-		let empty_child = ChildReference::Inline(C::HashOut::default(), 0);
-		let mut children = [None; NIBBLE_LENGTH];
-		for i in 0..NIBBLE_LENGTH {
-			children[i] = if omit_children[i] {
-				Some(empty_child)
-			} else if let Some(child_plan) = &child_handles[i] {
-				let child_ref = child_plan.build(node_data).try_into().map_err(|hash| {
-					Box::new(TrieError::InvalidHash(C::HashOut::default(), hash))
-				})?;
-				Some(child_ref)
-			} else {
-				None
-			};
-		}
-		Ok(children)
-	}
-}
 
 /// Detached value if included does write a reserved header,
 /// followed by node encoded with 0 length value and the value
@@ -270,13 +132,14 @@ where
 	let mut iter = TrieDBNodeIterator::new(db)?;
 
 	let mut at = NibbleVec::new();
+	let mut prev = NibbleVec::new();
 
 	let mut stack =
 		Vec::<(usize, Rc<OwnedNode<DBValue>>, [Option<NodeHandlePlan>; NIBBLE_LENGTH])>::new();
 	while let Some(item) = iter.next() {
 		match item {
 			Ok((prefix, _node_hash, node)) => {
-				if at.len() > prefix.len() {
+				if prefix.len() > at.len() {
 					let descend = delta_prefix(&prefix, &at);
 					let at_descend = prefix.at(at.len());
 					if let Some((ix, node, children)) = stack.last_mut() {
@@ -286,6 +149,7 @@ where
 								let mut hash: TrieHash<L> = Default::default();
 								hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
 								let op = Op::HashChild(Enc(hash), *ix as u8);
+								println!("{:?}", op);
 								op.encode_to(&mut output);
 							}
 							*ix += 1;
@@ -295,9 +159,11 @@ where
 					// TODO Note that we should have variant of iterator (or just a next fn)
 					// that pass key delta, not build key.
 					let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+					println!("{:?}", op);
 					op.encode_to(&mut output);
 				} else {
-					let op = Op::<TrieHash<L>>::KeyPop((prefix.len() - at.len()) as u16);
+					let op = Op::<TrieHash<L>>::KeyPop((at.len() - prefix.len()) as u16);
+					println!("{:?}", op);
 					op.encode_to(&mut output);
 					if let Some((mut ix, node, children)) = stack.pop() {
 						while ix < NIBBLE_LENGTH as usize {
@@ -306,6 +172,7 @@ where
 								let mut hash: TrieHash<L> = Default::default();
 								hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
 								let op = Op::HashChild(Enc(hash), ix as u8);
+								println!("{:?}", op);
 								op.encode_to(&mut output);
 							}
 							ix += 1;
@@ -349,6 +216,7 @@ where
 							}
 						},
 					};
+					println!("{:?}", op);
 					op.encode_to(&mut output);
 				}
 				match node_plan {
@@ -359,6 +227,7 @@ where
 						// TODO pop could sometime just be infered (eg if there is hash in parent
 						// branch.
 						let op = Op::<TrieHash<L>>::KeyPop((prefix.len() - at.len()) as u16);
+						println!("{:?}", op);
 						op.encode_to(&mut output);
 					},
 					NodePlan::NibbledBranch { children, .. } |
@@ -414,6 +283,7 @@ where
 				let mut hash: TrieHash<L> = Default::default();
 				hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
 				let op = Op::HashChild(Enc(hash), ix as u8);
+				println!("{:?}", op);
 				op.encode_to(&mut output);
 			}
 			ix += 1;
