@@ -40,13 +40,18 @@ enum Op<H> {
 	// key content followed by a mask for last byte.
 	// If mask erase some content the content need to
 	// be set at 0 (or error).
+	// Two consecutive `KeyPush` are invalid.
 	KeyPush(Vec<u8>, u8), // TODO could use BackingByteVec (but Vec for new as it scale encode)
 	// Last call to pop is implicit (up to root), defining
 	// one will result in an error.
+	// Two consecutive `KeyPush` are invalid.
 	// TODO should be compact encoding of number.
 	KeyPop(u16),
 	// u8 is child index, shorthand for key push one nibble followed by key pop.
+	// `HashChild` is only after another `HashChild` or after a `KeyPop`.
+	// (written when the branch got poped from stack).
 	HashChild(Enc<H>, u8),
+	// All value variant are only after a `KeyPush` or at first position.
 	HashValue(Enc<H>),
 	Value(DBValue),
 	// Only to build old value
@@ -132,54 +137,75 @@ where
 	let mut iter = TrieDBNodeIterator::new(db)?;
 
 	let mut at = NibbleVec::new();
-	let mut prev = NibbleVec::new();
+	let mut cursor_depth = 0;
 
 	let mut stack =
-		Vec::<(usize, Rc<OwnedNode<DBValue>>, [Option<NodeHandlePlan>; NIBBLE_LENGTH])>::new();
+		Vec::<(Rc<OwnedNode<DBValue>>, [Option<NodeHandlePlan>; NIBBLE_LENGTH], usize)>::new();
 	while let Some(item) = iter.next() {
+//		println!("{:?}", item);
 		match item {
-			Ok((prefix, _node_hash, node)) => {
-				if prefix.len() > at.len() {
-					let descend = delta_prefix(&prefix, &at);
-					let at_descend = prefix.at(at.len());
-					if let Some((ix, node, children)) = stack.last_mut() {
-						while *ix < at_descend as usize {
-							if let Some(NodeHandlePlan::Hash(plan)) = &children[*ix] {
-								// inline are ignored: will be processed by next iterator calls
-								let mut hash: TrieHash<L> = Default::default();
-								hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
-								let op = Op::HashChild(Enc(hash), *ix as u8);
-								println!("{:?}", op);
-								op.encode_to(&mut output);
-							}
-							*ix += 1;
-						}
-						*ix += 1;
+			Ok((mut prefix, _node_hash, node)) => {
+				let common_depth = crate::nibble_ops::biggest_depth(at.inner(), prefix.inner());
+				
+
+				if common_depth < at.len() {
+					if at.len() > cursor_depth {
+						let descend = at.right_of(cursor_depth);
+						let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+						println!("{:?}", op);
+						op.encode_to(&mut output);
+						cursor_depth = at.len();
 					}
-					// TODO Note that we should have variant of iterator (or just a next fn)
-					// that pass key delta, not build key.
-					let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
-					println!("{:?}", op);
-					op.encode_to(&mut output);
-				} else {
-					let op = Op::<TrieHash<L>>::KeyPop((at.len() - prefix.len()) as u16);
-					println!("{:?}", op);
-					op.encode_to(&mut output);
-					if let Some((mut ix, node, children)) = stack.pop() {
-						while ix < NIBBLE_LENGTH as usize {
-							if let Some(NodeHandlePlan::Hash(plan)) = &children[ix] {
-								// inline are ignored: will be processed by next iterator calls
-								let mut hash: TrieHash<L> = Default::default();
-								hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
-								let op = Op::HashChild(Enc(hash), ix as u8);
-								println!("{:?}", op);
-								op.encode_to(&mut output);
+
+					while stack.last().map(|s| s.2 > common_depth).unwrap_or(false) {
+						if let Some((node, children, depth)) = stack.pop() {
+							let mut pop_written = (cursor_depth - depth) == 0;
+							let mut ix = 0;
+							while ix < NIBBLE_LENGTH as usize {
+								if let Some(NodeHandlePlan::Hash(plan)) = &children[ix] {
+									if !pop_written {
+										let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - depth) as u16);
+										println!("{:?}", op);
+										op.encode_to(&mut output);
+										pop_written = true;
+										cursor_depth = depth;
+									}
+									// inline are ignored: will be processed by next iterator calls
+									let mut hash: TrieHash<L> = Default::default();
+									hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
+									let op = Op::HashChild(Enc(hash), ix as u8);
+									println!("{:?}", op);
+									op.encode_to(&mut output);
+								}
+								ix += 1;
 							}
-							ix += 1;
 						}
+					}
+					if cursor_depth > common_depth {
+						let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - common_depth) as u16);
+						println!("{:?}", op);
+						op.encode_to(&mut output);
+						cursor_depth = common_depth;
 					}
 				}
+
+				if let Some((_node, children, _depth)) = stack.last_mut() {
+					let at_child = prefix.at(prefix.len() - 1) as usize;
+					debug_assert!(children[at_child].is_some());
+					children[at_child] = None;
+				}
+
+				
 				let node_plan = node.node_plan();
+
+				match &node_plan {
+					NodePlan::Leaf { partial,  .. }
+					| NodePlan::NibbledBranch { partial, .. } => {
+						let partial = partial.build(node.data());
+						prefix.append_optional_slice_and_nibble(Some(&partial), None);
+					},
+					_ => (),
+				}
 				if let Some(value) = match &node_plan {
 					// would just need to stack empty array of child.
 					NodePlan::Extension { .. } => unimplemented!(),
@@ -188,6 +214,18 @@ where
 						value.clone(),
 					_ => None,
 				} {
+					if common_depth < cursor_depth {
+						let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - common_depth) as u16);
+						println!("{:?}", op);
+						op.encode_to(&mut output);
+						cursor_depth = common_depth;
+					}
+					let descend = prefix.right_of(cursor_depth);
+					let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+					println!("{:?}", op);
+					op.encode_to(&mut output);
+					cursor_depth = prefix.len();
+
 					let op = match &value {
 						ValuePlan::Inline(range) => {
 							let value = node.data()[range.clone()].to_vec();
@@ -223,17 +261,11 @@ where
 					// would just need to stack empty array of child.
 					NodePlan::Extension { .. } => unimplemented!(),
 					NodePlan::Empty { .. } => (),
-					NodePlan::Leaf { .. } => {
-						// TODO pop could sometime just be infered (eg if there is hash in parent
-						// branch.
-						let op = Op::<TrieHash<L>>::KeyPop((prefix.len() - at.len()) as u16);
-						println!("{:?}", op);
-						op.encode_to(&mut output);
-					},
+					NodePlan::Leaf { .. } => (),
 					NodePlan::NibbledBranch { children, .. } |
 					NodePlan::Branch { children, .. } => {
 						// node is rc
-						stack.push((0, node.clone(), children.clone()));
+						stack.push((node.clone(), children.clone(), prefix.len()));
 						at = prefix;
 					},
 				}
@@ -248,24 +280,6 @@ where
 				};*/
 			},
 
-			/*
-							stack.push(EncoderStackEntry {
-								prefix,
-								node,
-								child_index: 0,
-								omit_children: vec![false; children_len],
-								omit_value: detached_value.is_some(),
-								output_index: output.len(),
-								_marker: PhantomData::default(),
-							});
-							// Insert a placeholder into output which will be replaced when this new entry is
-							// popped from the stack.
-							output.push(Vec::new());
-							if let Some(value) = detached_value {
-								output.push(value);
-							}
-						},
-			*/
 			Err(err) => match *err {
 				// If we hit an IncompleteDatabaseError, just ignore it and continue encoding the
 				// incomplete trie. This encoding must support partial tries, which can be used for
@@ -276,9 +290,26 @@ where
 		}
 	}
 
-	while let Some((mut ix, node, children)) = stack.pop() {
+	if at.len() > cursor_depth {
+		let descend = at.right_of(cursor_depth);
+		let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+		println!("{:?}", op);
+		op.encode_to(&mut output);
+		cursor_depth = at.len();
+	}
+
+	while let Some((node, children, depth)) = stack.pop() {
+		let mut pop_written = (cursor_depth - depth) == 0;
+		let mut ix = 0;
 		while ix < NIBBLE_LENGTH as usize {
 			if let Some(NodeHandlePlan::Hash(plan)) = &children[ix] {
+				if !pop_written {
+					let op = Op::<TrieHash<L>>::KeyPop((cursor_depth - depth) as u16);
+					println!("{:?}", op);
+					op.encode_to(&mut output);
+					pop_written = true;
+					cursor_depth = depth;
+				}
 				// inline are ignored: will be processed by next iterator calls
 				let mut hash: TrieHash<L> = Default::default();
 				hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
