@@ -23,9 +23,9 @@
 //! partial trie.
 
 use crate::{
-	nibble_ops::NIBBLE_LENGTH,
+	nibble_ops::NIBBLE_LENGTH, nibble::LeftNibbleSlice,
 	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
-	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, result, vec, vec::Vec},
+	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, vec, vec::Vec},
 	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBNodeIterator,
 	TrieError, TrieHash, TrieLayout,
 };
@@ -63,6 +63,15 @@ enum Op<H> {
 }
 
 #[derive(Debug)]
+enum Change<'a, H> {
+	Value(&'a NibbleVec, DBValue),
+	ValueForceInline(&'a NibbleVec, DBValue),
+	ValueForceHashed(&'a NibbleVec, DBValue),
+	ValueHash(&'a NibbleVec, H),
+	ChildHash(&'a NibbleVec, H, u8),
+}
+
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct Enc<H>(pub H);
 
@@ -81,13 +90,12 @@ impl<H: AsRef<[u8]>> Encode for Enc<H> {
 }
 
 impl<H: AsMut<[u8]> + Default> Decode for Enc<H> {
-	fn decode<I: codec::Input>(input: &mut I) -> std::result::Result<Self, codec::Error> {
+	fn decode<I: codec::Input>(input: &mut I) -> core::result::Result<Self, codec::Error> {
 		let mut dest = H::default();
 		input.read(dest.as_mut())?;
 		Ok(Enc(dest))
 	}
 }
-
 
 /// Detached value if included does write a reserved header,
 /// followed by node encoded with 0 length value and the value
@@ -110,11 +118,6 @@ fn detached_value<L: TrieLayout>(
 		_ => return None,
 	}
 	Some(fetched)
-}
-
-fn delta_prefix(new: &NibbleVec, old: &NibbleVec) -> (Vec<u8>, u8) {
-	// no check for common prefix this is part of iterator property.
-	new.right_of(old.len())
 }
 
 /// Generates a compact representation of the partial trie stored in the given DB. The encoding
@@ -149,20 +152,23 @@ where
 		*cursor_depth = depth;
 	};
 
+	let key_push = |cursor_depth: &mut usize, prefix: &NibbleVec, output: &mut _| {
+		let descend = prefix.right_of(*cursor_depth);
+		let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+		println!("{:?}", op);
+		op.encode_to(output);
+		*cursor_depth = prefix.len();
+	};
+
 	while let Some(item) = iter.next() {
-//		println!("{:?}", item);
+		//		println!("{:?}", item);
 		match item {
 			Ok((mut prefix, _node_hash, node)) => {
 				let common_depth = crate::nibble_ops::biggest_depth(at.inner(), prefix.inner());
-				
 
 				if common_depth < at.len() {
 					if at.len() > cursor_depth {
-						let descend = at.right_of(cursor_depth);
-						let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
-						println!("{:?}", op);
-						op.encode_to(&mut output);
-						cursor_depth = at.len();
+						key_push(&mut cursor_depth, &at, &mut output);
 					}
 
 					while stack.last().map(|s| s.2 > common_depth).unwrap_or(false) {
@@ -197,12 +203,10 @@ where
 					children[at_child] = None;
 				}
 
-				
 				let node_plan = node.node_plan();
 
 				match &node_plan {
-					NodePlan::Leaf { partial,  .. }
-					| NodePlan::NibbledBranch { partial, .. } => {
+					NodePlan::Leaf { partial, .. } | NodePlan::NibbledBranch { partial, .. } => {
 						let partial = partial.build(node.data());
 						prefix.append_optional_slice_and_nibble(Some(&partial), None);
 					},
@@ -219,11 +223,7 @@ where
 					if common_depth < cursor_depth {
 						key_pop(&mut cursor_depth, common_depth, &mut output);
 					}
-					let descend = prefix.right_of(cursor_depth);
-					let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
-					println!("{:?}", op);
-					op.encode_to(&mut output);
-					cursor_depth = prefix.len();
+					key_push(&mut cursor_depth, &prefix, &mut output);
 
 					let op = match &value {
 						ValuePlan::Inline(range) => {
@@ -281,11 +281,7 @@ where
 	}
 
 	if at.len() > cursor_depth {
-		let descend = at.right_of(cursor_depth);
-		let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
-		println!("{:?}", op);
-		op.encode_to(&mut output);
-		cursor_depth = at.len();
+		key_push(&mut cursor_depth, &at, &mut output);
 	}
 
 	while let Some((node, children, depth)) = stack.pop() {
@@ -309,6 +305,37 @@ where
 	}
 
 	Ok(output)
+}
+
+struct AdapterReadCompact<I>(NibbleVec, I);
+
+impl<H, I: Iterator<Item = Op<H>>> AdapterReadCompact<I> {
+	fn next<'a>(&'a mut self) -> Option<Change<'a, H>> {
+		loop {
+			match self.1.next()? {
+				Op::KeyPush(partial, mask) => {
+					self.0.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask))
+				},
+				Op::KeyPop(nb_nibble) => {
+					self.0.drop_lasts(nb_nibble.into());
+				},
+				Op::HashChild(Enc(hash), child_ix) =>
+					return Some(Change::ChildHash(&self.0, hash, child_ix)),
+				Op::HashValue(Enc(hash)) => return Some(Change::ValueHash(&self.0, hash)),
+				Op::Value(value) => return Some(Change::Value(&self.0, value)),
+				Op::ValueForceInline(value) =>
+					return Some(Change::ValueForceInline(&self.0, value)),
+				Op::ValueForceHashed(value) =>
+					return Some(Change::ValueForceHashed(&self.0, value)),
+			}
+		}
+	}
+}
+
+impl<H, I: Iterator<Item = Op<H>>> From<I> for AdapterReadCompact<I> {
+	fn from(i: I) -> Self {
+		AdapterReadCompact(NibbleVec::new(), i)
+	}
 }
 
 struct DecoderStackEntry<'a, C: NodeCodec> {
@@ -445,12 +472,19 @@ impl<'a, C: NodeCodec> DecoderStackEntry<'a, C> {
 /// references.
 pub fn decode_compact<L, DB>(
 	db: &mut DB,
-	encoded: &[u8],
+	mut encoded: &[u8],
 ) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
 where
 	L: TrieLayout,
 	DB: HashDB<L::Hash, DBValue>,
 {
+	let read = &mut encoded;
+	let mut ops_iter = AdapterReadCompact::from(core::iter::from_fn(move || -> Option<Op<TrieHash<L>>> {
+		Op::decode(read).ok()
+	}));
+	while let Some(change) = ops_iter.next() {
+		println!("{:?}", change);
+	}
 	unimplemented!()
 	//	decode_compact_from_iter::<L, DB, _>(db, encoded.iter().map(Vec::as_slice))
 }
