@@ -23,11 +23,12 @@
 //! partial trie.
 
 use crate::{
-	nibble_ops::NIBBLE_LENGTH, nibble::LeftNibbleSlice,
+	nibble::LeftNibbleSlice,
+	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, rc::Rc, vec, vec::Vec},
-	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBNodeIterator,
-	TrieError, TrieHash, TrieLayout,
+	CError, ChildReference, CompactDecoderError, DBValue, NibbleVec, NodeCodec, Result, TrieDB,
+	TrieDBNodeIterator, TrieError, TrieHash, TrieLayout,
 };
 use codec::{Decode, Encode};
 use hash_db::{HashDB, Prefix};
@@ -48,8 +49,6 @@ enum Op<H> {
 	// TODO should be compact encoding of number.
 	KeyPop(u16),
 	// u8 is child index, shorthand for key push one nibble followed by key pop.
-	// `HashChild` is only after another `HashChild` or after a `KeyPop`.
-	// (written when the branch got poped from stack).
 	HashChild(Enc<H>, u8),
 	// All value variant are only after a `KeyPush` or at first position.
 	HashValue(Enc<H>),
@@ -60,6 +59,9 @@ enum Op<H> {
 	ValueForceInline(DBValue),
 	// Same
 	ValueForceHashed(DBValue),
+	// This is not strictly necessary, only if the proof is not sized, otherwhise if we know the
+	// stream will end it can be skipped.
+	EndProof,
 }
 
 #[derive(Debug)]
@@ -304,37 +306,53 @@ where
 		}
 	}
 
+	// TODO make it optional from parameter
+	let op = Op::<TrieHash<L>>::EndProof;
+	println!("{:?}", op);
+	op.encode_to(&mut output);
+
 	Ok(output)
 }
 
-struct AdapterReadCompact<I>(NibbleVec, I);
+struct AdapterReadCompact<L, I>(NibbleVec, I, bool, core::marker::PhantomData<L>);
 
-impl<H, I: Iterator<Item = Op<H>>> AdapterReadCompact<I> {
-	fn next<'a>(&'a mut self) -> Option<Change<'a, H>> {
+impl<L: TrieLayout, I: Iterator<Item = Result<Op<TrieHash<L>>, TrieHash<L>, CError<L>>>>
+	AdapterReadCompact<L, I>
+{
+	fn next<'a>(&'a mut self) -> Option<Result<Change<'a, TrieHash<L>>, TrieHash<L>, CError<L>>> {
+		if self.2 {
+			return None
+		}
 		loop {
 			match self.1.next()? {
-				Op::KeyPush(partial, mask) => {
-					self.0.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask))
-				},
-				Op::KeyPop(nb_nibble) => {
+				Ok(Op::KeyPush(partial, mask)) =>
+					self.0.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask)),
+				Ok(Op::KeyPop(nb_nibble)) => {
 					self.0.drop_lasts(nb_nibble.into());
 				},
-				Op::HashChild(Enc(hash), child_ix) =>
-					return Some(Change::ChildHash(&self.0, hash, child_ix)),
-				Op::HashValue(Enc(hash)) => return Some(Change::ValueHash(&self.0, hash)),
-				Op::Value(value) => return Some(Change::Value(&self.0, value)),
-				Op::ValueForceInline(value) =>
-					return Some(Change::ValueForceInline(&self.0, value)),
-				Op::ValueForceHashed(value) =>
-					return Some(Change::ValueForceHashed(&self.0, value)),
+				Ok(Op::HashChild(Enc(hash), child_ix)) =>
+					return Some(Ok(Change::ChildHash(&self.0, hash, child_ix))),
+				Ok(Op::HashValue(Enc(hash))) => return Some(Ok(Change::ValueHash(&self.0, hash))),
+				Ok(Op::Value(value)) => return Some(Ok(Change::Value(&self.0, value))),
+				Ok(Op::ValueForceInline(value)) =>
+					return Some(Ok(Change::ValueForceInline(&self.0, value))),
+				Ok(Op::ValueForceHashed(value)) =>
+					return Some(Ok(Change::ValueForceHashed(&self.0, value))),
+				Ok(Op::EndProof) => {
+					self.2 = true;
+					return None
+				},
+				Err(e) => return Some(Err(e)),
 			}
 		}
 	}
 }
 
-impl<H, I: Iterator<Item = Op<H>>> From<I> for AdapterReadCompact<I> {
+impl<L: TrieLayout, I: Iterator<Item = Result<Op<TrieHash<L>>, TrieHash<L>, CError<L>>>> From<I>
+	for AdapterReadCompact<L, I>
+{
 	fn from(i: I) -> Self {
-		AdapterReadCompact(NibbleVec::new(), i)
+		AdapterReadCompact(NibbleVec::new(), i, false, core::marker::PhantomData)
 	}
 }
 
@@ -479,10 +497,85 @@ where
 	DB: HashDB<L::Hash, DBValue>,
 {
 	let read = &mut encoded;
-	let mut ops_iter = AdapterReadCompact::from(core::iter::from_fn(move || -> Option<Op<TrieHash<L>>> {
-		Op::decode(read).ok()
+	let mut is_prev_push_key = false;
+	let mut is_prev_pop_key = false;
+	let mut first = true;
+	let mut is_prev_hash_child: Option<u8> = None;
+	let mut ops_iter = AdapterReadCompact::<L, _>::from(core::iter::from_fn(move || {
+		if read.len() == 0 {
+			if is_prev_pop_key {
+				return Some(Err(Box::new(TrieError::CompactDecoderError(
+					CompactDecoderError::PopAtLast,
+				))))
+			}
+			return None
+		} else {
+			match Op::<TrieHash<L>>::decode(read) {
+				Ok(op) => {
+					match &op {
+						Op::KeyPush(..) => {
+							if is_prev_push_key {
+								return Some(Err(Box::new(TrieError::CompactDecoderError(
+									CompactDecoderError::ConsecutivePushKeys,
+								))))
+							}
+							is_prev_push_key = true;
+							is_prev_pop_key = false;
+							is_prev_hash_child = None;
+							first = false;
+						},
+						Op::KeyPop(..) => {
+							if is_prev_pop_key {
+								return Some(Err(Box::new(TrieError::CompactDecoderError(
+									CompactDecoderError::ConsecutivePopKeys,
+								))))
+							}
+							is_prev_push_key = false;
+							is_prev_pop_key = true;
+							is_prev_hash_child = None;
+							first = false;
+						},
+						Op::HashChild(_, ix) => {
+							if let Some(prev_ix) = is_prev_hash_child.as_ref() {
+								if prev_ix >= ix {
+									return Some(Err(Box::new(TrieError::CompactDecoderError(
+										CompactDecoderError::NotConsecutiveHash,
+									))))
+								}
+							}
+							// child ix on an existing content would be handle by iter_build.
+							is_prev_push_key = false;
+							is_prev_pop_key = false;
+							is_prev_hash_child = Some(*ix);
+						},
+						Op::Value(_) | Op::ValueForceInline(_) | Op::ValueForceHashed(_) => {
+							if !(is_prev_push_key || first) {
+								return Some(Err(Box::new(TrieError::CompactDecoderError(
+									CompactDecoderError::ValueNotAfterPush,
+								))))
+							}
+							is_prev_push_key = false;
+							is_prev_pop_key = false;
+							is_prev_hash_child = None;
+							first = false;
+						},
+						_ => {
+							is_prev_push_key = false;
+							is_prev_pop_key = false;
+							is_prev_hash_child = None;
+							first = false;
+						},
+					}
+					Some(Ok(op))
+				},
+				Err(_e) => Some(Err(Box::new(TrieError::CompactDecoderError(
+					CompactDecoderError::DecodingFailure,
+				)))),
+			}
+		}
 	}));
 	while let Some(change) = ops_iter.next() {
+		let change = change?;
 		println!("{:?}", change);
 	}
 	unimplemented!()

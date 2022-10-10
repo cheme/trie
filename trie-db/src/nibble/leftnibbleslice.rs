@@ -30,10 +30,7 @@ pub struct LeftNibbleSlice<'a> {
 
 impl<'a> From<&'a NibbleVec> for LeftNibbleSlice<'a> {
 	fn from(v: &'a NibbleVec) -> Self {
-		LeftNibbleSlice {
-			bytes: v.inner.as_slice(),
-			len: v.len,
-		}
+		LeftNibbleSlice { bytes: v.inner.as_slice(), len: v.len }
 	}
 }
 

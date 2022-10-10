@@ -106,6 +106,19 @@ pub enum TrieError<T, E> {
 	DecoderError(T, E),
 	/// Hash is not value.
 	InvalidHash(T, Vec<u8>),
+	/// Compact decoder fail.
+	CompactDecoderError(CompactDecoderError),
+}
+
+/// Error that happens when opening a trie compact proof.
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub enum CompactDecoderError {
+	DecodingFailure,
+	ConsecutivePushKeys,
+	ConsecutivePopKeys,
+	ValueNotAfterPush,
+	NotConsecutiveHash,
+	PopAtLast,
 }
 
 #[cfg(feature = "std")]
@@ -123,6 +136,9 @@ where
 				write!(f, "Value found in trie at incomplete key {:?} + {:?}", bytes, extra),
 			TrieError::DecoderError(ref hash, ref decoder_err) => {
 				write!(f, "Decoding failed for hash {:?}; err: {:?}", hash, decoder_err)
+			},
+			TrieError::CompactDecoderError(ref decoder_err) => {
+				write!(f, "Decoding compacte failed for err: {:?}", decoder_err)
 			},
 			TrieError::InvalidHash(ref hash, ref data) => write!(
 				f,
