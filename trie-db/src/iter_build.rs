@@ -18,12 +18,13 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{nibble_ops, NibbleSlice},
+	nibble::{nibble_ops, NibbleSlice, NibbleVec},
 	node::Value,
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
+	trie_codec2::{AdapterReadCompact, Change, Op},
 	triedbmut::ChildReference,
-	DBValue, TrieHash, TrieLayout,
+	CError, CompactDecoderError, DBValue, Result, TrieHash, TrieLayout,
 };
 use hash_db::{HashDB, Hasher, Prefix};
 
@@ -47,10 +48,49 @@ type ArrayNode<T> = [CacheNode<TrieHash<T>>; 16];
 /// Note that it is not memory optimal (all depth are allocated even if some are empty due
 /// to node partial).
 /// Three field are used, a cache over the children, an optional associated value and the depth.
-struct CacheAccum<T: TrieLayout, V>(Vec<(ArrayNode<T>, Option<V>, usize)>);
+struct CacheAccum<T: TrieLayout, V>(Vec<(ArrayNode<T>, ValueSet<TrieHash<T>, V>, usize)>);
 
 /// Initially allocated cache depth.
 const INITIAL_DEPTH: usize = 10;
+
+enum ValueSet<H, V> {
+	None,
+	Standard(V),
+	HashOnly(H),
+	ForceInline(V),
+	ForceHashed(V),
+	BranchHash(H, u8),
+}
+
+impl<H, V> From<Option<V>> for ValueSet<H, V> {
+	fn from(value: Option<V>) -> Self {
+		match value {
+			Some(v) => ValueSet::Standard(v),
+			None => ValueSet::None,
+		}
+	}
+}
+
+impl<'a, H, V> From<Change<'a, H, V>> for ValueSet<H, V> {
+	fn from(change: Change<'a, H, V>) -> Self {
+		match change {
+			Change::Value(_, v) => ValueSet::Standard(v),
+			Change::ValueForceInline(_, v) => ValueSet::ForceInline(v),
+			Change::ValueForceHashed(_, v) => ValueSet::ForceHashed(v),
+			Change::ValueHash(_, h) => ValueSet::HashOnly(h),
+			Change::ChildHash(_, h, i) => ValueSet::BranchHash(h, i),
+		}
+	}
+}
+
+impl<H, V> ValueSet<H, V> {
+	fn as_ref(&self) -> Option<&V> {
+		match self {
+			ValueSet::Standard(v) | ValueSet::ForceInline(v) | ValueSet::ForceHashed(v) => Some(v),
+			ValueSet::HashOnly(..) | ValueSet::BranchHash(..) | ValueSet::None => None,
+		}
+	}
+}
 
 impl<T, V> CacheAccum<T, V>
 where
@@ -63,19 +103,43 @@ where
 	}
 
 	#[inline(always)]
-	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
+	fn set_cache_change<'a>(
+		&mut self,
+		depth: usize,
+		change: (NibbleVec, ValueSet<TrieHash<T>, V>),
+	) -> Result<(), TrieHash<T>, CError<T>> {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), None.into(), depth));
 		}
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
-		self.0[last].1 = value;
+		let mut item = &mut self.0[last];
+		match change.1 {
+			ValueSet::BranchHash(h, i) => {
+				if item.0[i as usize].is_some() {
+					return Err(CompactDecoderError::HashChildNotOmitted.into())
+				}
+				item.0[i as usize] = Some(ChildReference::Hash(h));
+			},
+			value => item.1 = value,
+		}
+		Ok(())
+	}
+
+	#[inline(always)]
+	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
+		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
+			self.0.push((new_vec_slice_buffer(), None.into(), depth));
+		}
+		let last = self.0.len() - 1;
+		debug_assert!(self.0[last].2 <= depth);
+		self.0[last].1 = value.into();
 	}
 
 	#[inline(always)]
 	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), None.into(), depth));
 		}
 
 		let last = self.0.len() - 1;
@@ -135,6 +199,52 @@ where
 		} else {
 			hashed = callback.process_inner_hashed_value((k2.as_ref(), None), v2.as_ref());
 			Value::Node(hashed.as_ref())
+		};
+		let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
+		let hash = callback.process(pr.left(), encoded, false);
+
+		// insert hash in branch (first level branch only at this point)
+		self.set_node(target_depth, nibble_value as usize, Some(hash));
+	}
+
+	fn flush_value_change<'a>(
+		&mut self,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		target_depth: usize,
+		change: &(NibbleVec, ValueSet<TrieHash<T>, V>),
+	) {
+		let k2 = change.0.inner();
+		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
+		// is it a branch value (two candidate same ix)
+		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
+		let pr = NibbleSlice::new_offset(
+			&k2.as_ref()[..],
+			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
+		);
+
+		let hashed;
+		let value = match &change.1 {
+			ValueSet::Standard(v) =>
+				if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
+					value
+				} else {
+					hashed = callback.process_inner_hashed_value((k2.as_ref(), None), v.as_ref());
+					Value::Node(hashed.as_ref())
+				},
+			ValueSet::ForceInline(v) =>
+				if let Some(value) = Value::new_inline(v.as_ref(), None) {
+					value
+				} else {
+					unreachable!()
+				},
+			ValueSet::ForceHashed(v) => {
+				hashed = callback.process_inner_hashed_value((k2.as_ref(), None), v.as_ref());
+				Value::Node(hashed.as_ref())
+			},
+			ValueSet::HashOnly(h) => {
+				Value::Node(h.as_ref()) // TODO may have following hash and fail? ont if leaf
+			},
+			ValueSet::BranchHash(..) | ValueSet::None => return,
 		};
 		let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
 		let hash = callback.process(pr.left(), encoded, false);
@@ -258,6 +368,78 @@ where
 		);
 		callback.process(pr.left(), encoded, is_root)
 	}
+}
+
+/// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.
+/// This is the main entry point of this module.
+/// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
+/// branch to root), this differs from standard byte array ordering a bit.
+pub(crate) fn trie_visit_with_hashes<'a, T, I, B, F>(
+	mut iter_input: AdapterReadCompact<T, B, I>,
+	callback: &mut F,
+) -> Result<(), TrieHash<T>, CError<T>>
+where
+	T: TrieLayout,
+	I: Iterator<Item = Result<Op<TrieHash<T>, B>, TrieHash<T>, CError<T>>>,
+	B: AsRef<[u8]>,
+	F: ProcessEncodedNode<TrieHash<T>>,
+{
+	let mut depth_queue = CacheAccum::<T, B>::new();
+	if let Some(previous_value) = iter_input.next() {
+		let previous_value = previous_value?;
+		let k = previous_value.key().clone();
+		let v: ValueSet<TrieHash<T>, B> = previous_value.into();
+		let mut previous_value = (k, v);
+		// depth of last item
+		let mut last_depth = 0;
+
+		let mut single = true;
+		while let Some(next) = iter_input.next() {
+			let change = next?;
+			single = false;
+
+			let k = change.key();
+			let common_depth = nibble_ops::biggest_depth(previous_value.0.inner(), k.inner());
+			let common_depth = if common_depth > previous_value.0.len() {
+				previous_value.0.len()
+			} else if common_depth > k.len() {
+				k.len()
+			} else {
+				common_depth
+			};
+
+			// 0 is a reserved value : could use option
+			let depth_item = common_depth;
+			if common_depth == previous_value.0.len() {
+				// the new key include the previous one : branch value case
+				// just stored value at branch depth
+				depth_queue.set_cache_change(common_depth, previous_value)?;
+			} else if depth_item >= last_depth {
+				// put previous with next (common branch previous value can be flush)
+				depth_queue.flush_value_change(callback, depth_item, &previous_value);
+			} else if depth_item < last_depth {
+				// do not put with next, previous is last of a branch
+				depth_queue.flush_value_change(callback, last_depth, &previous_value);
+				let ref_branches = previous_value.0;
+				depth_queue.flush_branch(callback, ref_branches.inner(), depth_item, false);
+			}
+
+			previous_value = (k.clone(), change.into());
+			last_depth = depth_item;
+		}
+		// last pendings
+		if single {
+			// one single element corner case
+			depth_queue.flush_value_change(callback, last_depth, &previous_value);
+			let k2 = previous_value.0;
+			depth_queue.flush_branch(callback, k2.inner(), k2.len(), false);
+		}
+	} else {
+		// nothing null root corner case
+		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true);
+	}
+
+	Ok(())
 }
 
 /// Function visiting trie from key value inputs with a `ProccessEncodedNode` callback.

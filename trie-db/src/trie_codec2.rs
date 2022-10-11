@@ -36,8 +36,11 @@ use hash_db::{HashDB, Prefix};
 /// Representation of each encoded action
 /// for building the proof.
 /// TODO ref variant for encoding ??
+/// TODO V as parameter is a bit useless, here to help adapt
+/// to iter_build, but likely the iter_build api should be
+/// change instead.
 #[derive(Encode, Decode, Debug)]
-enum Op<H> {
+pub(crate) enum Op<H, V> {
 	// key content followed by a mask for last byte.
 	// If mask erase some content the content need to
 	// be set at 0 (or error).
@@ -52,25 +55,37 @@ enum Op<H> {
 	HashChild(Enc<H>, u8),
 	// All value variant are only after a `KeyPush` or at first position.
 	HashValue(Enc<H>),
-	Value(DBValue),
+	Value(V),
 	// Only to build old value
 	// representation if trie layout
 	// MAX_INLINE_VALUE was switched.
-	ValueForceInline(DBValue),
+	ValueForceInline(V),
 	// Same
-	ValueForceHashed(DBValue),
+	ValueForceHashed(V),
 	// This is not strictly necessary, only if the proof is not sized, otherwhise if we know the
 	// stream will end it can be skipped.
 	EndProof,
 }
 
 #[derive(Debug)]
-enum Change<'a, H> {
-	Value(&'a NibbleVec, DBValue),
-	ValueForceInline(&'a NibbleVec, DBValue),
-	ValueForceHashed(&'a NibbleVec, DBValue),
+pub(crate) enum Change<'a, H, V> {
+	Value(&'a NibbleVec, V),
+	ValueForceInline(&'a NibbleVec, V),
+	ValueForceHashed(&'a NibbleVec, V),
 	ValueHash(&'a NibbleVec, H),
 	ChildHash(&'a NibbleVec, H, u8),
+}
+
+impl<'a, H, V> Change<'a, H, V> {
+	pub fn key(&self) -> &'a NibbleVec {
+		match self {
+			Change::Value(k, _) |
+			Change::ValueForceInline(k, _) |
+			Change::ValueForceHashed(k, _) |
+			Change::ValueHash(k, _) |
+			Change::ChildHash(k, ..) => k,
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -148,7 +163,7 @@ where
 		Vec::<(Rc<OwnedNode<DBValue>>, [Option<NodeHandlePlan>; NIBBLE_LENGTH], usize)>::new();
 
 	let key_pop = |cursor_depth: &mut usize, depth, output: &mut _| {
-		let op = Op::<TrieHash<L>>::KeyPop((*cursor_depth - depth) as u16);
+		let op = Op::<TrieHash<L>, DBValue>::KeyPop((*cursor_depth - depth) as u16);
 		println!("{:?}", op);
 		op.encode_to(output);
 		*cursor_depth = depth;
@@ -156,7 +171,7 @@ where
 
 	let key_push = |cursor_depth: &mut usize, prefix: &NibbleVec, output: &mut _| {
 		let descend = prefix.right_of(*cursor_depth);
-		let op = Op::<TrieHash<L>>::KeyPush(descend.0, descend.1);
+		let op = Op::<TrieHash<L>, DBValue>::KeyPush(descend.0, descend.1);
 		println!("{:?}", op);
 		op.encode_to(output);
 		*cursor_depth = prefix.len();
@@ -167,6 +182,13 @@ where
 		match item {
 			Ok((mut prefix, _node_hash, node)) => {
 				let common_depth = crate::nibble_ops::biggest_depth(at.inner(), prefix.inner());
+				let common_depth = if common_depth > at.len() {
+					at.len()
+				} else if common_depth > prefix.len() {
+					prefix.len()
+				} else {
+					common_depth
+				};
 
 				if common_depth < at.len() {
 					if at.len() > cursor_depth {
@@ -186,7 +208,7 @@ where
 									// inline are ignored: will be processed by next iterator calls
 									let mut hash: TrieHash<L> = Default::default();
 									hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
-									let op = Op::HashChild(Enc(hash), ix as u8);
+									let op = Op::<_, DBValue>::HashChild(Enc(hash), ix as u8);
 									println!("{:?}", op);
 									op.encode_to(&mut output);
 								}
@@ -232,9 +254,9 @@ where
 							let value = node.data()[range.clone()].to_vec();
 							if Some(value.len() as u32) >= L::MAX_INLINE_VALUE {
 								// should be a external node, force it
-								Op::<TrieHash<L>>::ValueForceInline(value)
+								Op::<TrieHash<L>, DBValue>::ValueForceInline(value)
 							} else {
-								Op::<TrieHash<L>>::Value(value)
+								Op::<TrieHash<L>, DBValue>::Value(value)
 							}
 						},
 						ValuePlan::Node(hash) => {
@@ -243,15 +265,15 @@ where
 							{
 								if Some(value.len() as u32) < L::MAX_INLINE_VALUE {
 									// should be inline, may result from change of threshold value
-									Op::<TrieHash<L>>::ValueForceHashed(value)
+									Op::<TrieHash<L>, DBValue>::ValueForceHashed(value)
 								} else {
-									Op::<TrieHash<L>>::Value(value)
+									Op::<TrieHash<L>, DBValue>::Value(value)
 								}
 							} else {
 								let hash_bytes = &node.data()[hash.clone()];
 								let mut hash = TrieHash::<L>::default();
 								hash.as_mut().copy_from_slice(hash_bytes);
-								Op::<TrieHash<L>>::HashValue(Enc(hash))
+								Op::<TrieHash<L>, DBValue>::HashValue(Enc(hash))
 							}
 						},
 					};
@@ -298,7 +320,7 @@ where
 				// inline are ignored: will be processed by next iterator calls
 				let mut hash: TrieHash<L> = Default::default();
 				hash.as_mut().copy_from_slice(&node.data()[plan.clone()]);
-				let op = Op::HashChild(Enc(hash), ix as u8);
+				let op = Op::<_, DBValue>::HashChild(Enc(hash), ix as u8);
 				println!("{:?}", op);
 				op.encode_to(&mut output);
 			}
@@ -307,19 +329,26 @@ where
 	}
 
 	// TODO make it optional from parameter
-	let op = Op::<TrieHash<L>>::EndProof;
+	let op = Op::<TrieHash<L>, DBValue>::EndProof;
 	println!("{:?}", op);
 	op.encode_to(&mut output);
 
 	Ok(output)
 }
 
-struct AdapterReadCompact<L, I>(NibbleVec, I, bool, core::marker::PhantomData<L>);
+pub(crate) struct AdapterReadCompact<L, V, I>(
+	NibbleVec,
+	I,
+	bool,
+	core::marker::PhantomData<(L, V)>,
+);
 
-impl<L: TrieLayout, I: Iterator<Item = Result<Op<TrieHash<L>>, TrieHash<L>, CError<L>>>>
-	AdapterReadCompact<L, I>
+impl<L: TrieLayout, V, I: Iterator<Item = Result<Op<TrieHash<L>, V>, TrieHash<L>, CError<L>>>>
+	AdapterReadCompact<L, V, I>
 {
-	fn next<'a>(&'a mut self) -> Option<Result<Change<'a, TrieHash<L>>, TrieHash<L>, CError<L>>> {
+	pub fn next<'a>(
+		&'a mut self,
+	) -> Option<Result<Change<'a, TrieHash<L>, V>, TrieHash<L>, CError<L>>> {
 		if self.2 {
 			return None
 		}
@@ -348,8 +377,8 @@ impl<L: TrieLayout, I: Iterator<Item = Result<Op<TrieHash<L>>, TrieHash<L>, CErr
 	}
 }
 
-impl<L: TrieLayout, I: Iterator<Item = Result<Op<TrieHash<L>>, TrieHash<L>, CError<L>>>> From<I>
-	for AdapterReadCompact<L, I>
+impl<L: TrieLayout, V, I: Iterator<Item = Result<Op<TrieHash<L>, V>, TrieHash<L>, CError<L>>>>
+	From<I> for AdapterReadCompact<L, V, I>
 {
 	fn from(i: I) -> Self {
 		AdapterReadCompact(NibbleVec::new(), i, false, core::marker::PhantomData)
@@ -501,23 +530,19 @@ where
 	let mut is_prev_pop_key = false;
 	let mut first = true;
 	let mut is_prev_hash_child: Option<u8> = None;
-	let mut ops_iter = AdapterReadCompact::<L, _>::from(core::iter::from_fn(move || {
+	let ops_iter = AdapterReadCompact::<L, DBValue, _>::from(core::iter::from_fn(move || {
 		if read.len() == 0 {
 			if is_prev_pop_key {
-				return Some(Err(Box::new(TrieError::CompactDecoderError(
-					CompactDecoderError::PopAtLast,
-				))))
+				return Some(Err(CompactDecoderError::PopAtLast.into()))
 			}
 			return None
 		} else {
-			match Op::<TrieHash<L>>::decode(read) {
+			match Op::<TrieHash<L>, _>::decode(read) {
 				Ok(op) => {
 					match &op {
 						Op::KeyPush(..) => {
 							if is_prev_push_key {
-								return Some(Err(Box::new(TrieError::CompactDecoderError(
-									CompactDecoderError::ConsecutivePushKeys,
-								))))
+								return Some(Err(CompactDecoderError::ConsecutivePushKeys.into()))
 							}
 							is_prev_push_key = true;
 							is_prev_pop_key = false;
@@ -526,9 +551,7 @@ where
 						},
 						Op::KeyPop(..) => {
 							if is_prev_pop_key {
-								return Some(Err(Box::new(TrieError::CompactDecoderError(
-									CompactDecoderError::ConsecutivePopKeys,
-								))))
+								return Some(Err(CompactDecoderError::ConsecutivePopKeys.into()))
 							}
 							is_prev_push_key = false;
 							is_prev_pop_key = true;
@@ -538,9 +561,7 @@ where
 						Op::HashChild(_, ix) => {
 							if let Some(prev_ix) = is_prev_hash_child.as_ref() {
 								if prev_ix >= ix {
-									return Some(Err(Box::new(TrieError::CompactDecoderError(
-										CompactDecoderError::NotConsecutiveHash,
-									))))
+									return Some(Err(CompactDecoderError::NotConsecutiveHash.into()))
 								}
 							}
 							// child ix on an existing content would be handle by iter_build.
@@ -550,9 +571,7 @@ where
 						},
 						Op::Value(_) | Op::ValueForceInline(_) | Op::ValueForceHashed(_) => {
 							if !(is_prev_push_key || first) {
-								return Some(Err(Box::new(TrieError::CompactDecoderError(
-									CompactDecoderError::ValueNotAfterPush,
-								))))
+								return Some(Err(CompactDecoderError::ValueNotAfterPush.into()))
 							}
 							is_prev_push_key = false;
 							is_prev_pop_key = false;
@@ -568,18 +587,24 @@ where
 					}
 					Some(Ok(op))
 				},
-				Err(_e) => Some(Err(Box::new(TrieError::CompactDecoderError(
-					CompactDecoderError::DecodingFailure,
-				)))),
+				Err(_e) => Some(Err(CompactDecoderError::DecodingFailure.into())),
 			}
 		}
 	}));
+	/*
 	while let Some(change) = ops_iter.next() {
 		let change = change?;
 		println!("{:?}", change);
 	}
-	unimplemented!()
-	//	decode_compact_from_iter::<L, DB, _>(db, encoded.iter().map(Vec::as_slice))
+	*/
+	let mut trie_builder = crate::iter_build::TrieBuilder::<L, DB>::new(db);
+	crate::iter_build::trie_visit_with_hashes(ops_iter, &mut trie_builder)?;
+
+	if let Some(root) = trie_builder.root {
+		Ok((root, 0))
+	} else {
+		Err(CompactDecoderError::DecodingFailure.into())
+	}
 }
 
 /// Variant of 'decode_compact' that accept an iterator of encoded nodes as input.

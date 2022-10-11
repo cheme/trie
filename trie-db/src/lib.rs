@@ -119,6 +119,13 @@ pub enum CompactDecoderError {
 	ValueNotAfterPush,
 	NotConsecutiveHash,
 	PopAtLast,
+	HashChildNotOmitted,
+}
+
+impl<T, E> From<CompactDecoderError> for Box<TrieError<T, E>> {
+	fn from(error: CompactDecoderError) -> Self {
+		Box::new(TrieError::CompactDecoderError(error))
+	}
 }
 
 #[cfg(feature = "std")]
