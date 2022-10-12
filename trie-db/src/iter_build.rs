@@ -18,11 +18,11 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{nibble_ops, NibbleSlice, NibbleVec},
+	nibble::{nibble_ops, LeftNibbleSlice, NibbleSlice, NibbleVec},
 	node::Value,
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
-	trie_codec2::{AdapterReadCompact, Change, Op},
+	trie_codec2::{Enc, Op},
 	triedbmut::ChildReference,
 	CError, CompactDecoderError, DBValue, Result, TrieHash, TrieLayout,
 };
@@ -67,18 +67,6 @@ impl<H, V> From<Option<V>> for ValueSet<H, V> {
 		match value {
 			Some(v) => ValueSet::Standard(v),
 			None => ValueSet::None,
-		}
-	}
-}
-
-impl<'a, H, V> From<Change<'a, H, V>> for ValueSet<H, V> {
-	fn from(change: Change<'a, H, V>) -> Self {
-		match change {
-			Change::Value(_, v) => ValueSet::Standard(v),
-			Change::ValueForceInline(_, v) => ValueSet::ForceInline(v),
-			Change::ValueForceHashed(_, v) => ValueSet::ForceHashed(v),
-			Change::ValueHash(_, h) => ValueSet::HashOnly(h),
-			Change::ChildHash(_, h, i) => ValueSet::BranchHash(h, i),
 		}
 	}
 }
@@ -374,8 +362,8 @@ where
 /// This is the main entry point of this module.
 /// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
 /// branch to root), this differs from standard byte array ordering a bit.
-pub(crate) fn trie_visit_with_hashes<'a, T, I, B, F>(
-	mut iter_input: AdapterReadCompact<T, B, I>,
+pub(crate) fn trie_visit_compact<'a, T, I, B, F>(
+	mut input: I,
 	callback: &mut F,
 ) -> Result<(), TrieHash<T>, CError<T>>
 where
@@ -384,59 +372,97 @@ where
 	B: AsRef<[u8]>,
 	F: ProcessEncodedNode<TrieHash<T>>,
 {
-	let mut depth_queue = CacheAccum::<T, B>::new();
-	if let Some(previous_value) = iter_input.next() {
-		let previous_value = previous_value?;
-		let k = previous_value.key().clone();
-		let v: ValueSet<TrieHash<T>, B> = previous_value.into();
-		let mut previous_value = (k, v);
-		// depth of last item
-		let mut last_depth = 0;
+	let mut stack = CacheAccum::<T, B>::new();
+	let mut current_key = NibbleVec::new();
 
-		let mut single = true;
-		while let Some(next) = iter_input.next() {
-			let change = next?;
-			single = false;
+	let mut is_prev_push_key = false;
+	let mut is_prev_pop_key = false;
+	let mut first = true;
+	let mut is_prev_hash_child: Option<u8> = None;
 
-			let k = change.key();
-			let common_depth = nibble_ops::biggest_depth(previous_value.0.inner(), k.inner());
-			let common_depth = if common_depth > previous_value.0.len() {
-				previous_value.0.len()
-			} else if common_depth > k.len() {
-				k.len()
-			} else {
-				common_depth
-			};
-
-			// 0 is a reserved value : could use option
-			let depth_item = common_depth;
-			if common_depth == previous_value.0.len() {
-				// the new key include the previous one : branch value case
-				// just stored value at branch depth
-				depth_queue.set_cache_change(common_depth, previous_value)?;
-			} else if depth_item >= last_depth {
-				// put previous with next (common branch previous value can be flush)
-				depth_queue.flush_value_change(callback, depth_item, &previous_value);
-			} else if depth_item < last_depth {
-				// do not put with next, previous is last of a branch
-				depth_queue.flush_value_change(callback, last_depth, &previous_value);
-				let ref_branches = previous_value.0;
-				depth_queue.flush_branch(callback, ref_branches.inner(), depth_item, false);
-			}
-
-			previous_value = (k.clone(), change.into());
-			last_depth = depth_item;
+	for result in input {
+		let op = result?;
+		// check ordering logic
+		match &op {
+			Op::KeyPush(..) => {
+				if is_prev_push_key {
+					return Err(CompactDecoderError::ConsecutivePushKeys.into())
+				}
+				is_prev_push_key = true;
+				is_prev_pop_key = false;
+				is_prev_hash_child = None;
+				first = false;
+			},
+			Op::KeyPop(..) => {
+				if is_prev_pop_key {
+					return Err(CompactDecoderError::ConsecutivePopKeys.into())
+				}
+				is_prev_push_key = false;
+				is_prev_pop_key = true;
+				is_prev_hash_child = None;
+				first = false;
+			},
+			Op::HashChild(_, ix) => {
+				if let Some(prev_ix) = is_prev_hash_child.as_ref() {
+					if prev_ix >= ix {
+						return Err(CompactDecoderError::NotConsecutiveHash.into())
+					}
+				}
+				// child ix on an existing content would be handle by iter_build.
+				is_prev_push_key = false;
+				is_prev_pop_key = false;
+				is_prev_hash_child = Some(*ix);
+			},
+			Op::Value(_) | Op::ValueForceInline(_) | Op::ValueForceHashed(_) => {
+				if !(is_prev_push_key || first) {
+					return Err(CompactDecoderError::ValueNotAfterPush.into())
+				}
+				is_prev_push_key = false;
+				is_prev_pop_key = false;
+				is_prev_hash_child = None;
+				first = false;
+			},
+			_ => {
+				is_prev_push_key = false;
+				is_prev_pop_key = false;
+				is_prev_hash_child = None;
+				first = false;
+			},
 		}
-		// last pendings
-		if single {
-			// one single element corner case
-			depth_queue.flush_value_change(callback, last_depth, &previous_value);
-			let k2 = previous_value.0;
-			depth_queue.flush_branch(callback, k2.inner(), k2.len(), false);
+
+		// act
+		match op {
+			Op::KeyPush(partial, mask) =>
+				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask)),
+			Op::KeyPop(nb_nibble) => {
+				current_key.drop_lasts(nb_nibble.into());
+			},
+			Op::HashChild(Enc(hash), child_ix) => {
+				println!("ChildHash {:?}, {:?}, {:?}", current_key, child_ix, hash);
+				// TODO
+			},
+			Op::HashValue(Enc(hash)) => {
+				println!("ValueHash {:?}, {:?}", current_key, hash);
+				// TODO
+			},
+			Op::Value(value) => {
+				println!("Value {:?}, {:?}", current_key, value.as_ref());
+				// TODO
+			},
+			Op::ValueForceInline(value) => {
+				println!("ValueForceInline {:?}, {:?}", current_key, value.as_ref());
+				// TODO
+			},
+			Op::ValueForceHashed(value) => {
+				println!("ValueForceHashed {:?}, {:?}", current_key, value.as_ref());
+				// TODO
+			},
+			Op::EndProof => break,
 		}
-	} else {
-		// nothing null root corner case
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true);
+	}
+
+	if is_prev_pop_key {
+		return Err(CompactDecoderError::PopAtLast.into())
 	}
 
 	Ok(())
