@@ -136,7 +136,7 @@ where
 		full_key: &NibbleVec,
 		target_depth: Option<usize>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-	) -> Result<Option<TrieHash<T>>, TrieHash<T>, CError<T>> {
+	) -> Result<(), TrieHash<T>, CError<T>> {
 		let mut from_depth = full_key.len();
 		while self
 			.0
@@ -145,7 +145,7 @@ where
 			.unwrap_or(false)
 		{
 			let item = self.0.last().expect("Checked");
-			let is_root = self.0.is_empty();
+			let is_root = self.0.len() == 1;
 			let depth = item.2;
 			let delta = from_depth - depth;
 			let child_reference = if item.0.iter().any(|child| child.is_some()) {
@@ -177,6 +177,7 @@ where
 					self.0.last().map(|item| item.2 + 1).unwrap_or(0),
 					item.2,
 					&item.1,
+					is_root,
 				)
 			};
 			if let Some(item) = self.0.last_mut() {
@@ -185,15 +186,11 @@ where
 					return Err(CompactDecoderError::HashChildNotOmitted.into())
 				}
 				item.0[child_ix as usize] = Some(child_reference);
-			} else {
-				match child_reference {
-					ChildReference::Hash(h) | ChildReference::Inline(h, _) => return Ok(Some(h)),
-				}
 			}
 
 			from_depth = depth;
 		}
-		Ok(None)
+		Ok(())
 	}
 
 	#[inline(always)]
@@ -284,6 +281,7 @@ where
 		from_depth: usize,
 		to_depth: usize,
 		value: &ValueSet<TrieHash<T>, V>,
+		is_root: bool,
 	) -> ChildReference<TrieHash<T>> {
 		let k2 = &key_content[..to_depth / nibble_ops::NIBBLE_PER_BYTE];
 		let pr = NibbleSlice::new_offset(k2, from_depth);
@@ -313,7 +311,7 @@ where
 			ValueSet::BranchHash(..) | ValueSet::None => unreachable!("Not in cache accum"),
 		};
 		let encoded = T::Codec::leaf_node(pr.right_iter(), pr.len(), value);
-		callback.process(pr.left(), encoded, false)
+		callback.process(pr.left(), encoded, is_root)
 	}
 
 	fn flush_branch(
@@ -438,7 +436,7 @@ where
 /// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
 /// branch to root), this differs from standard byte array ordering a bit.
 pub(crate) fn trie_visit_compact<'a, T, I, B, F>(
-	mut input: I,
+	input: I,
 	callback: &mut F,
 ) -> Result<(), TrieHash<T>, CError<T>>
 where
@@ -532,6 +530,7 @@ where
 				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask))
 			},
 			Op::KeyPop(nb_nibble) => {
+				stack.stack_pop(&current_key, Some(current_key.len() - nb_nibble as usize), callback)?;
 				current_key.drop_lasts(nb_nibble.into());
 			},
 			Op::EndProof => break,
@@ -542,6 +541,8 @@ where
 	if is_prev_pop_key {
 		return Err(CompactDecoderError::PopAtLast.into())
 	}
+
+	stack.stack_pop(&current_key, None, callback)?;
 
 	Ok(())
 }
