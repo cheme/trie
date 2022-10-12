@@ -26,8 +26,8 @@ use crate::{
 	nibble_ops::NIBBLE_LENGTH,
 	node::{NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
 	rstd::{rc::Rc, vec::Vec},
-	CError, CompactDecoderError, DBValue, NibbleVec, Result, TrieDB,
-	TrieDBNodeIterator, TrieError, TrieHash, TrieLayout,
+	CError, CompactDecoderError, DBValue, NibbleVec, Result, TrieDB, TrieDBNodeIterator, TrieError,
+	TrieHash, TrieLayout,
 };
 use codec::{Decode, Encode};
 use hash_db::{HashDB, Prefix};
@@ -366,10 +366,10 @@ where
 	DB: HashDB<L::Hash, DBValue>,
 	I: IntoIterator<Item = &'a [u8]>,
 {
-let ops_iter = encoded.into_iter().map(|mut buf|
-				Op::<TrieHash<L>, DBValue>::decode(&mut buf)
-					.map_err(|_e| CompactDecoderError::DecodingFailure.into()),
-	);
+	let ops_iter = encoded.into_iter().map(|mut buf| {
+		Op::<TrieHash<L>, DBValue>::decode(&mut buf)
+			.map_err(|_e| CompactDecoderError::DecodingFailure.into())
+	});
 	let mut trie_builder = crate::iter_build::TrieBuilder::<L, DB>::new(db);
 	crate::iter_build::trie_visit_compact::<L, _, _, _>(ops_iter, &mut trie_builder)?;
 

@@ -62,6 +62,19 @@ enum ValueSet<H, V> {
 	BranchHash(H, u8),
 }
 
+impl<H, V> From<Op<H, V>> for ValueSet<H, V> {
+	fn from(op: Op<H, V>) -> Self {
+		match op {
+			Op::HashChild(Enc(hash), child_ix) => ValueSet::BranchHash(hash, child_ix),
+			Op::HashValue(Enc(hash)) => ValueSet::HashOnly(hash),
+			Op::Value(value) => ValueSet::Standard(value),
+			Op::ValueForceInline(value) => ValueSet::ForceInline(value),
+			Op::ValueForceHashed(value) => ValueSet::ForceHashed(value),
+			_ => ValueSet::None,
+		}
+	}
+}
+
 impl<H, V> From<Option<V>> for ValueSet<H, V> {
 	fn from(value: Option<V>) -> Self {
 		match value {
@@ -91,18 +104,21 @@ where
 	}
 
 	#[inline(always)]
-	fn set_cache_change<'a>(
+	fn stack_empty(&mut self, depth: usize) {
+		self.0.push((new_vec_slice_buffer(), None.into(), depth));
+	}
+
+	#[inline(always)]
+	fn set_cache_change(
 		&mut self,
-		depth: usize,
-		change: (NibbleVec, ValueSet<TrieHash<T>, V>),
+		change: ValueSet<TrieHash<T>, V>,
 	) -> Result<(), TrieHash<T>, CError<T>> {
-		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None.into(), depth));
+		if self.0.is_empty() {
+			self.stack_empty(0);
 		}
 		let last = self.0.len() - 1;
-		debug_assert!(self.0[last].2 <= depth);
 		let mut item = &mut self.0[last];
-		match change.1 {
+		match change {
 			ValueSet::BranchHash(h, i) => {
 				if item.0[i as usize].is_some() {
 					return Err(CompactDecoderError::HashChildNotOmitted.into())
@@ -112,6 +128,72 @@ where
 			value => item.1 = value,
 		}
 		Ok(())
+	}
+
+	#[inline(always)]
+	fn stack_pop(
+		&mut self,
+		full_key: &NibbleVec,
+		target_depth: Option<usize>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+	) -> Result<Option<TrieHash<T>>, TrieHash<T>, CError<T>> {
+		let mut from_depth = full_key.len();
+		while self
+			.0
+			.last()
+			.map(|item| target_depth.map(|target| item.2 > target).unwrap_or(true))
+			.unwrap_or(false)
+		{
+			let item = self.0.last().expect("Checked");
+			let is_root = self.0.is_empty();
+			let depth = item.2;
+			let delta = from_depth - depth;
+			let child_reference = if item.0.iter().any(|child| child.is_some()) {
+				let nkey = (delta > 1).then(|| (depth, delta - 1));
+				if T::USE_EXTENSION {
+					self.standard_extension(
+						&full_key.inner().as_ref()[..],
+						callback,
+						depth,
+						is_root,
+						nkey,
+					)
+				} else {
+					// encode branch
+					self.no_extension(
+						&full_key.inner().as_ref()[..],
+						callback,
+						depth,
+						is_root,
+						nkey,
+					)
+				}
+			} else {
+				// leaf with value
+				let item = self.0.pop().expect("Checked");
+				self.flush_value_change(
+					callback,
+					&full_key.inner().as_ref()[..],
+					self.0.last().map(|item| item.2 + 1).unwrap_or(0),
+					item.2,
+					&item.1,
+				)
+			};
+			if let Some(item) = self.0.last_mut() {
+				let child_ix = full_key.at(item.2);
+				if item.0[child_ix as usize].is_some() {
+					return Err(CompactDecoderError::HashChildNotOmitted.into())
+				}
+				item.0[child_ix as usize] = Some(child_reference);
+			} else {
+				match child_reference {
+					ChildReference::Hash(h) | ChildReference::Inline(h, _) => return Ok(Some(h)),
+				}
+			}
+
+			from_depth = depth;
+		}
+		Ok(None)
 	}
 
 	#[inline(always)]
@@ -198,20 +280,16 @@ where
 	fn flush_value_change<'a>(
 		&mut self,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-		target_depth: usize,
-		change: &(NibbleVec, ValueSet<TrieHash<T>, V>),
-	) {
-		let k2 = change.0.inner();
-		let nibble_value = nibble_ops::left_nibble_at(&k2.as_ref()[..], target_depth);
-		// is it a branch value (two candidate same ix)
-		let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], target_depth + 1);
-		let pr = NibbleSlice::new_offset(
-			&k2.as_ref()[..],
-			k2.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
-		);
+		key_content: &[u8],
+		from_depth: usize,
+		to_depth: usize,
+		value: &ValueSet<TrieHash<T>, V>,
+	) -> ChildReference<TrieHash<T>> {
+		let k2 = &key_content[..to_depth / nibble_ops::NIBBLE_PER_BYTE];
+		let pr = NibbleSlice::new_offset(k2, from_depth);
 
 		let hashed;
-		let value = match &change.1 {
+		let value = match value {
 			ValueSet::Standard(v) =>
 				if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
 					value
@@ -232,13 +310,10 @@ where
 			ValueSet::HashOnly(h) => {
 				Value::Node(h.as_ref()) // TODO may have following hash and fail? ont if leaf
 			},
-			ValueSet::BranchHash(..) | ValueSet::None => return,
+			ValueSet::BranchHash(..) | ValueSet::None => unreachable!("Not in cache accum"),
 		};
-		let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
-		let hash = callback.process(pr.left(), encoded, false);
-
-		// insert hash in branch (first level branch only at this point)
-		self.set_node(target_depth, nibble_value as usize, Some(hash));
+		let encoded = T::Codec::leaf_node(pr.right_iter(), pr.len(), value);
+		callback.process(pr.left(), encoded, false)
 	}
 
 	fn flush_branch(
@@ -430,34 +505,37 @@ where
 			},
 		}
 
-		// act
-		match op {
-			Op::KeyPush(partial, mask) =>
-				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask)),
-			Op::KeyPop(nb_nibble) => {
-				current_key.drop_lasts(nb_nibble.into());
-			},
+		// debug TODO make it log
+		match &op {
 			Op::HashChild(Enc(hash), child_ix) => {
 				println!("ChildHash {:?}, {:?}, {:?}", current_key, child_ix, hash);
-				// TODO
 			},
 			Op::HashValue(Enc(hash)) => {
 				println!("ValueHash {:?}, {:?}", current_key, hash);
-				// TODO
 			},
 			Op::Value(value) => {
 				println!("Value {:?}, {:?}", current_key, value.as_ref());
-				// TODO
 			},
 			Op::ValueForceInline(value) => {
 				println!("ValueForceInline {:?}, {:?}", current_key, value.as_ref());
-				// TODO
 			},
 			Op::ValueForceHashed(value) => {
 				println!("ValueForceHashed {:?}, {:?}", current_key, value.as_ref());
-				// TODO
+			},
+			_ => (),
+		}
+
+		// act
+		match op {
+			Op::KeyPush(partial, mask) => {
+				stack.stack_empty(current_key.len());
+				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask))
+			},
+			Op::KeyPop(nb_nibble) => {
+				current_key.drop_lasts(nb_nibble.into());
 			},
 			Op::EndProof => break,
+			op => stack.set_cache_change(op.into())?,
 		}
 	}
 
