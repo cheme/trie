@@ -134,22 +134,34 @@ where
 	fn stack_pop(
 		&mut self,
 		full_key: &NibbleVec,
-		target_depth: Option<usize>,
+		nb_nibble: Option<usize>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
 	) -> Result<(), TrieHash<T>, CError<T>> {
-		let mut from_depth = full_key.len();
+		let target_depth = nb_nibble.map(|n| full_key.len() - n);
 		while self
 			.0
 			.last()
 			.map(|item| target_depth.map(|target| item.2 > target).unwrap_or(true))
 			.unwrap_or(false)
 		{
-			let item = self.0.last().expect("Checked");
-			let is_root = self.0.len() == 1;
+			let item = self.0.pop().expect("Checked");
+			let mut from_depth = self.0.last().map(|item| item.2).unwrap_or(target_depth.unwrap_or(0));
+			if let Some(from) = target_depth {
+				if from > from_depth {
+					self.stack_empty(from);
+					from_depth = from;
+				}
+			}
 			let depth = item.2;
-			let delta = from_depth - depth;
+			let is_root = target_depth.is_none();
+			let inc = if is_root {
+				0
+			} else {
+				1
+			};
 			let child_reference = if item.0.iter().any(|child| child.is_some()) {
-				let nkey = (delta > 1).then(|| (depth, delta - 1));
+					let nkey = (depth > (from_depth + inc)).then(|| (from_depth + inc, depth - from_depth - inc));
+				self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should not pop instead)
 				if T::USE_EXTENSION {
 					self.standard_extension(
 						&full_key.inner().as_ref()[..],
@@ -170,16 +182,18 @@ where
 				}
 			} else {
 				// leaf with value
-				let item = self.0.pop().expect("Checked");
 				self.flush_value_change(
 					callback,
 					&full_key.inner().as_ref()[..],
-					self.0.last().map(|item| item.2 + 1).unwrap_or(0),
+					from_depth + inc,
 					item.2,
 					&item.1,
 					is_root,
 				)
 			};
+			if self.0.is_empty() && !is_root {
+				self.stack_empty(from_depth);
+			}
 			if let Some(item) = self.0.last_mut() {
 				let child_ix = full_key.at(item.2);
 				if item.0[child_ix as usize].is_some() {
@@ -187,8 +201,6 @@ where
 				}
 				item.0[child_ix as usize] = Some(child_reference);
 			}
-
-			from_depth = depth;
 		}
 		Ok(())
 	}
@@ -526,11 +538,11 @@ where
 		// act
 		match op {
 			Op::KeyPush(partial, mask) => {
+				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask));
 				stack.stack_empty(current_key.len());
-				current_key.append_slice(LeftNibbleSlice::new_with_mask(partial.as_slice(), mask))
 			},
 			Op::KeyPop(nb_nibble) => {
-				stack.stack_pop(&current_key, Some(current_key.len() - nb_nibble as usize), callback)?;
+				stack.stack_pop(&current_key, Some(nb_nibble as usize), callback)?;
 				current_key.drop_lasts(nb_nibble.into());
 			},
 			Op::EndProof => break,
