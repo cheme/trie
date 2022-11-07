@@ -366,7 +366,9 @@ where
 	if let Some(root) = trie_builder.root {
 		Ok((root, 0))
 	} else {
-		Err(CompactDecoderError::DecodingFailure.into())
+		// empty trie
+		use crate::node_codec::NodeCodec;
+		Ok((L::Codec::hashed_null_node(), 0))
 	}
 }
 

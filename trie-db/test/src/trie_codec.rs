@@ -47,6 +47,10 @@ fn test_encode_compact<L: TrieLayout>(
 	let items = {
 		let mut items = Vec::with_capacity(keys.len());
 		let trie = <TrieDBBuilder<L>>::new(&db, &root).with_recorder(&mut recorder).build();
+		if keys.is_empty() {
+			// always include at least root except if database is empty
+			let _ = trie.get(&[]).unwrap();
+		}
 		for key in keys {
 			let value = trie.get(key).unwrap();
 			items.push((key, value));
@@ -114,6 +118,9 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 		encoded.push(5u8); // Add an extra item to ensure it is not read.
 		test_decode_compact::<T>(&encoded, items, root, encoded.len() - 1);
 	};
+	test(vec![(b"dot", &[0; 32])], vec![]);
+	test(vec![], vec![b"d"]);
+	test(vec![], vec![]);
 	test(full_set.clone(), vec![b"dot"]);
 	test(full_set.clone(), vec![b""]);
 	test(full_set.clone(), vec![b"do"]);
@@ -133,8 +140,6 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 	test(vec![(b"dot", b"d")], vec![b"dotation"]);
 	test(vec![(b"dot", &[1; 35])], vec![b"a"]);
 	test(vec![(b"dot", &[0; 32])], vec![b""]);
-//	test(vec![], vec![b"d"]); TODO broken
-//	test(vec![(b"dot", &[0; 32])], vec![]); TODO broken
 }
 
 test_layouts!(
