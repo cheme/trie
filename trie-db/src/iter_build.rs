@@ -138,6 +138,7 @@ where
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
 	) -> Result<(), TrieHash<T>, CError<T>> {
 		let target_depth = nb_nibble.map(|n| full_key.len() - n);
+		let mut first = true;
 		while self
 			.0
 			.last()
@@ -159,18 +160,25 @@ where
 			let child_reference = if item.0.iter().any(|child| child.is_some()) {
 				let nkey = (depth > (from_depth + inc))
 					.then(|| (from_depth + inc, depth - from_depth - inc));
-				self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should not
-				   // pop instead)
 				if T::USE_EXTENSION {
+					let extension_only = first &&
+						matches!(&item.1, &ValueSet::None) &&
+						item.0.iter().filter(|child| child.is_some()).count() == 1;
+					self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should
+				   // not pop instead)
+				   // encode branch
 					self.standard_extension(
 						&full_key.inner().as_ref()[..],
 						callback,
 						depth,
 						is_root,
 						nkey,
+						extension_only,
 					)
 				} else {
-					// encode branch
+					self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should
+				   // not pop instead)
+				   // encode branch
 					self.no_extension(
 						&full_key.inner().as_ref()[..],
 						callback,
@@ -200,6 +208,7 @@ where
 				}
 				item.0[child_ix as usize] = Some(child_reference);
 			}
+			first = false;
 		}
 		Ok(())
 	}
@@ -345,7 +354,14 @@ where
 			let nkey = if slice_size > 0 { Some((offset, slice_size)) } else { None };
 
 			let h = if T::USE_EXTENSION {
-				self.standard_extension(&ref_branch.as_ref()[..], callback, lix, is_root, nkey)
+				self.standard_extension(
+					&ref_branch.as_ref()[..],
+					callback,
+					lix,
+					is_root,
+					nkey,
+					false,
+				)
 			} else {
 				// encode branch
 				self.no_extension(&ref_branch.as_ref()[..], callback, lix, is_root, nkey)
@@ -366,6 +382,7 @@ where
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
+		extension_only: bool,
 	) -> ChildReference<TrieHash<T>> {
 		let last = self.0.len() - 1;
 		assert_eq!(self.0[last].2, branch_d);
@@ -390,8 +407,13 @@ where
 		};
 
 		// encode branch
-		let encoded = T::Codec::branch_node(children.iter(), value);
-		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none());
+		let branch_hash = if !extension_only {
+			let encoded = T::Codec::branch_node(children.iter(), value);
+			callback.process(pr.left(), encoded, is_root && nkey.is_none())
+		} else {
+			// This is hacky but extension only store as first children
+			children[0].unwrap()
+		};
 
 		if let Some(nkeyix) = nkey {
 			let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
@@ -429,7 +451,11 @@ where
 				Value::Node(hashed.as_ref())
 			})
 		} else {
-			None
+			if let ValueSet::HashOnly(h) = &v {
+				Some(Value::Node(h.as_ref()))
+			} else {
+				None
+			}
 		};
 
 		let encoded = T::Codec::branch_node_nibbled(

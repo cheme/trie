@@ -93,22 +93,34 @@ fn test_decode_compact<L: TrieLayout>(
 
 test_layouts!(trie_compact_encoding_works, trie_compact_encoding_works_internal);
 fn trie_compact_encoding_works_internal<T: TrieLayout>() {
-	let (root, mut encoded, items) = test_encode_compact::<T>(
-		vec![
-			// "alfa" is at a hash-referenced leaf node.
-			(b"alfa", &[0; 32]),
-			// "bravo" is at an inline leaf node.
-			(b"bravo", b"bravo"),
-			// "do" is at a hash-referenced branch node.
-			(b"do", b"verb"),
-			// "dog" is at an inline leaf node.
-			(b"dog", b"puppy"),
-			// "doge" is at a hash-referenced leaf node.
-			(b"doge", &[0; 32]),
-			// extension node "o" (plus nibble) to next branch.
-			(b"horse", b"stallion"),
-			(b"house", b"building"),
-		],
+	let full_set: Vec<(&'static [u8], &'static [u8])> = vec![
+		// "alfa" is at a hash-referenced leaf node.
+		(b"alfa", &[0; 32]),
+		// "bravo" is at an inline leaf node.
+		(b"bravo", b"bravo"),
+		// "do" is at a hash-referenced branch node.
+		(b"do", b"verb"),
+		// "dog" is at an inline leaf node.
+		(b"dog", b"puppy"),
+		// "doge" is at a hash-referenced leaf node.
+		(b"doge", &[0; 33]),
+		// extension node "o" (plus nibble) to next branch.
+		(b"horse", b"stallion"),
+		(b"house", b"building"),
+	];
+	let test = |set: Vec<(&'static [u8], &'static [u8])>, query: Vec<&'static [u8]>| {
+		let (root, mut encoded, items) = test_encode_compact::<T>(set, query);
+
+		encoded.push(5u8); // Add an extra item to ensure it is not read.
+		test_decode_compact::<T>(&encoded, items, root, encoded.len() - 1);
+	};
+	test(full_set.clone(), vec![b"dot"]);
+	test(full_set.clone(), vec![b""]);
+	test(full_set.clone(), vec![b"do"]);
+	test(full_set.clone(), vec![b"do", b"house"]);
+	test(full_set.clone(), vec![b"dot"]);
+	test(
+		full_set.clone(),
 		vec![
 			b"do", b"dog", b"doge", b"bravo",
 			b"d",      // None, witness is extension node with omitted child
@@ -116,9 +128,13 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 			b"halp",   // None, witness is extension node with non-omitted child
 		],
 	);
-
-	encoded.push(5u8); // Add an extra item to ensure it is not read.
-	test_decode_compact::<T>(&encoded, items, root, encoded.len() - 1);
+	test(vec![(b"dot", b"d")], vec![b"dot"]);
+	test(vec![(b"dot", b"d")], vec![b"do"]);
+	test(vec![(b"dot", b"d")], vec![b"dotation"]);
+	test(vec![(b"dot", &[1; 35])], vec![b"a"]);
+	test(vec![(b"dot", &[0; 32])], vec![b""]);
+//	test(vec![], vec![b"d"]); TODO broken
+//	test(vec![(b"dot", &[0; 32])], vec![]); TODO broken
 }
 
 test_layouts!(
