@@ -145,7 +145,8 @@ where
 			.unwrap_or(false)
 		{
 			let item = self.0.pop().expect("Checked");
-			let mut from_depth = self.0.last().map(|item| item.2).unwrap_or(target_depth.unwrap_or(0));
+			let mut from_depth =
+				self.0.last().map(|item| item.2).unwrap_or(target_depth.unwrap_or(0));
 			if let Some(from) = target_depth {
 				if from > from_depth {
 					self.stack_empty(from);
@@ -154,14 +155,12 @@ where
 			}
 			let depth = item.2;
 			let is_root = target_depth.is_none();
-			let inc = if is_root {
-				0
-			} else {
-				1
-			};
+			let inc = if is_root { 0 } else { 1 };
 			let child_reference = if item.0.iter().any(|child| child.is_some()) {
-					let nkey = (depth > (from_depth + inc)).then(|| (from_depth + inc, depth - from_depth - inc));
-				self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should not pop instead)
+				let nkey = (depth > (from_depth + inc))
+					.then(|| (from_depth + inc, depth - from_depth - inc));
+				self.0.push(item); // TODO this looks bad (pop then push, branch or leaf function should or should not
+				   // pop instead)
 				if T::USE_EXTENSION {
 					self.standard_extension(
 						&full_key.inner().as_ref()[..],

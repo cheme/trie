@@ -199,16 +199,19 @@ where
 					}
 				}
 
-				if let Some((_node, children, _depth)) = stack.last_mut() {
+				let node_plan = node.node_plan();
+
+				if let Some((node, children, _depth)) = stack.last_mut() {
 					let at_child = prefix.at(prefix.len() - 1) as usize;
 					debug_assert!(children[at_child].is_some());
 					children[at_child] = None;
 				}
 
-				let node_plan = node.node_plan();
 
 				match &node_plan {
-					NodePlan::Leaf { partial, .. } | NodePlan::NibbledBranch { partial, .. } => {
+					NodePlan::Leaf { partial, .. } |
+					NodePlan::NibbledBranch { partial, .. } |
+					NodePlan::Extension { partial, .. } => {
 						let partial = partial.build(node.data());
 						prefix.append_optional_slice_and_nibble(Some(&partial), None);
 					},
@@ -230,7 +233,7 @@ where
 					let op = match &value {
 						ValuePlan::Inline(range) => {
 							let value = node.data()[range.clone()].to_vec();
-							if Some(value.len() as u32) >= L::MAX_INLINE_VALUE {
+							if L::MAX_INLINE_VALUE.map(|v| value.len() as u32 >= v).unwrap_or(false) {
 								// should be a external node, force it
 								Op::<TrieHash<L>, DBValue>::ValueForceInline(value)
 							} else {
