@@ -201,12 +201,19 @@ where
 
 				let node_plan = node.node_plan();
 
+				let mut prev_ext = false;
 				if let Some((node, children, _depth)) = stack.last_mut() {
-					let at_child = prefix.at(prefix.len() - 1) as usize;
-					debug_assert!(children[at_child].is_some());
-					children[at_child] = None;
+					if L::USE_EXTENSION && matches!(node.node_plan(), NodePlan::Extension { .. }) {
+						prev_ext = true;
+					} else {
+						let at_child = prefix.at(prefix.len() - 1) as usize;
+						debug_assert!(children[at_child].is_some());
+						children[at_child] = None;
+					}
 				}
-
+				if prev_ext {
+					stack.pop();
+				}
 
 				match &node_plan {
 					NodePlan::Leaf { partial, .. } |
@@ -219,7 +226,7 @@ where
 				}
 				if let Some(value) = match &node_plan {
 					// would just need to stack empty array of child.
-					NodePlan::Extension { .. } => unimplemented!(),
+					NodePlan::Extension { .. } => None,
 					NodePlan::Leaf { value, .. } => Some(value.clone()),
 					NodePlan::NibbledBranch { value, .. } | NodePlan::Branch { value, .. } =>
 						value.clone(),
@@ -233,7 +240,8 @@ where
 					let op = match &value {
 						ValuePlan::Inline(range) => {
 							let value = node.data()[range.clone()].to_vec();
-							if L::MAX_INLINE_VALUE.map(|v| value.len() as u32 >= v).unwrap_or(false) {
+							if L::MAX_INLINE_VALUE.map(|v| value.len() as u32 >= v).unwrap_or(false)
+							{
 								// should be a external node, force it
 								Op::<TrieHash<L>, DBValue>::ValueForceInline(value)
 							} else {
@@ -263,16 +271,21 @@ where
 				}
 				match node_plan {
 					// would just need to stack empty array of child.
-					NodePlan::Extension { .. } => unimplemented!(),
 					NodePlan::Empty { .. } => (),
 					NodePlan::Leaf { .. } => (),
 					NodePlan::NibbledBranch { children, .. } |
 					NodePlan::Branch { children, .. } => {
 						// node is rc
 						stack.push((node.clone(), children.clone(), prefix.len()));
-						at = prefix;
+					},
+					NodePlan::Extension { child, .. } => {
+						let mut children: [Option<NodeHandlePlan>; NIBBLE_LENGTH] =
+							Default::default();
+						children[0] = Some(child.clone());
+						stack.push((node.clone(), children, prefix.len()));
 					},
 				}
+				at = prefix;
 			},
 
 			Err(err) => match *err {
