@@ -461,7 +461,7 @@ fn test_recorder_with_cache_get_hash_internal<T: TrieLayout>() {
 	} else {
 		assert!(matches!(
 			cache.lookup_value_for_key(&key_value[1].0).unwrap(),
-			CachedValue::ExistingHash(hash) if *hash == T::Hash::hash(&key_value[1].1)
+			CachedValue::ExistingHash(hash, _) if *hash == T::Hash::hash(&key_value[1].1)
 		));
 	}
 

@@ -572,8 +572,9 @@ pub enum CachedValue<H> {
 	/// The value doesn't exist in the trie.
 	NonExisting,
 	/// We cached the hash, because we did not yet accessed the data.
-	ExistingHash(H),
+	ExistingHash(H, Option<usize>),
 	/// The value exists in the trie.
+	/// TODO also attach optional size
 	Existing {
 		/// The hash of the value.
 		hash: H,
@@ -583,6 +584,8 @@ pub enum CachedValue<H> {
 		/// that is also cached by the [`TrieCache`]. If this node is dropped,
 		/// this data will also not be "upgradeable" anymore.
 		data: BytesWeak,
+		/// Data size
+		size: usize,
 	},
 }
 
@@ -604,7 +607,18 @@ impl<H: Copy> CachedValue<H> {
 	/// Returns only `None` when the value doesn't exist.
 	pub fn hash(&self) -> Option<H> {
 		match self {
-			Self::ExistingHash(hash) | Self::Existing { hash, .. } => Some(*hash),
+			Self::ExistingHash(hash, ..) | Self::Existing { hash, .. } => Some(*hash),
+			Self::NonExisting => None,
+		}
+	}
+
+	/// Returns the size of the value.
+	///
+	/// Returns only `None` when the value doesn't exist.
+	pub fn size(&self) -> Option<Option<usize>> {
+		match self {
+			Self::Existing { size, .. } => Some(Some(*size)),
+			Self::ExistingHash(_, size) => Some(*size),
 			Self::NonExisting => None,
 		}
 	}
@@ -612,25 +626,29 @@ impl<H: Copy> CachedValue<H> {
 
 impl<H> From<(Bytes, H)> for CachedValue<H> {
 	fn from(value: (Bytes, H)) -> Self {
-		Self::Existing { hash: value.1, data: value.0.into() }
+		Self::Existing { hash: value.1, size: value.0.len(), data: value.0.into() }
 	}
 }
 
-impl<H> From<H> for CachedValue<H> {
-	fn from(value: H) -> Self {
-		Self::ExistingHash(value)
+impl<H> From<(H, Option<usize>)> for CachedValue<H> {
+	fn from(value: (H, Option<usize>)) -> Self {
+		Self::ExistingHash(value.0, value.1)
 	}
 }
 
 impl<H> From<Option<(Bytes, H)>> for CachedValue<H> {
 	fn from(value: Option<(Bytes, H)>) -> Self {
-		value.map_or(Self::NonExisting, |v| Self::Existing { hash: v.1, data: v.0.into() })
+		value.map_or(Self::NonExisting, |v| Self::Existing {
+			hash: v.1,
+			size: v.0.len(),
+			data: v.0.into(),
+		})
 	}
 }
 
-impl<H> From<Option<H>> for CachedValue<H> {
-	fn from(value: Option<H>) -> Self {
-		value.map_or(Self::NonExisting, |v| Self::ExistingHash(v))
+impl<H> From<Option<(H, Option<usize>)>> for CachedValue<H> {
+	fn from(value: Option<(H, Option<usize>)>) -> Self {
+		value.map_or(Self::NonExisting, |v| Self::ExistingHash(v.0, v.1))
 	}
 }
 

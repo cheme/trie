@@ -78,37 +78,47 @@ where
 			},
 		}
 	}
+	/*
+		fn contains(
+			self,
+			_v: Value,
+			_prefix: Prefix,
+			_depth: u32,
+		) -> Result<bool, TrieHash<L>, CError<L>> {
+			Ok(true)
+		}
 
-	fn contains(
-		self,
-		_v: Value,
-		_prefix: Prefix,
-		_depth: u32,
-	) -> Result<bool, TrieHash<L>, CError<L>> {
-		Ok(true)
-	}
+		fn load_size(
+			self,
+			v: Value,
+			prefix: Prefix,
+			full_key: &[u8],
+			db: &dyn HashDBRef<L::Hash, DBValue>,
+			recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
+		) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+			match v {
+				Value::Inline(value) => Ok(Some(value.len())),
+				Value::Node(_, Some(size)) => Ok(Some(size)),
+				Value::Node(hash, _) => {
+					let mut res = TrieHash::<L>::default();
+					res.as_mut().copy_from_slice(hash);
+					if let Some(value) = db.get(&res, prefix) {
+						if let Some(recorder) = recorder {
+							recorder.record(TrieAccess::Value {
+								hash: res,
+								value: value.as_slice().into(),
+								full_key,
+							});
+						}
 
-	fn size(
-		mut self,
-		v: Value,
-		prefix: Prefix,
-		depth: u32,
-	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
-		Ok(Some(match v {
-			Value::Inline(value) => value.len(),
-			Value::Node(_, Some(size)) => size,
-			Value::Node(hash, _) => {
-				let mut res = TrieHash::<L>::default();
-				res.as_mut().copy_from_slice(hash);
-				if let Some(value) = self.db.get(&res, prefix) {
-					self.query.record(&res, &value, depth);
-					value.len()
-				} else {
-					return Err(Box::new(TrieError::IncompleteDatabase(res)))
-				}
-			},
-		}))
-	}
+						Ok(Some(value.len()))
+					} else {
+						Err(Box::new(TrieError::IncompleteDatabase(res)))
+					}
+				},
+			}
+		}
+	*/
 
 	/// Load the given value.
 	///
@@ -126,7 +136,7 @@ where
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
 		match v {
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
-			ValueOwned::Node(hash) => {
+			ValueOwned::Node(hash, _size) => {
 				let node = cache.get_or_insert_node(hash, &mut || {
 					let value = db
 						.get(&hash, prefix)
@@ -182,6 +192,24 @@ where
 		}
 	}
 
+	/// Look up the given key. Check if value exists.
+	pub fn look_up_contains(
+		self,
+		full_key: &[u8],
+		key: NibbleSlice,
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+		Ok(self.look_up_hash(full_key, key)?.is_some())
+	}
+
+	/// Look up the given key. Check value size if it exists.
+	pub fn look_up_size(
+		self,
+		full_key: &[u8],
+		key: NibbleSlice,
+	) -> Result<Option<Option<usize>>, TrieHash<L>, CError<L>> {
+		Ok(self.look_up_hash(full_key, key)?.map(|r| r.1))
+	}
+
 	/// Look up the value hash for the given `nibble_key`.
 	///
 	/// The given `full_key` should be the full key to the data that is requested. This will
@@ -190,7 +218,7 @@ where
 		mut self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
-	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<(TrieHash<L>, Option<usize>)>, TrieHash<L>, CError<L>> {
 		match self.cache.take() {
 			Some(cache) => self.look_up_hash_with_cache(full_key, nibble_key, cache),
 			None => self.look_up_without_cache(
@@ -209,16 +237,16 @@ where
 								});
 							}
 
-							hash
+							(hash, Some(v.len()))
 						},
-						Value::Node(hash_bytes, _) => {
+						Value::Node(hash_bytes, size) => {
 							if let Some(recoder) = recorder.as_mut() {
 								recoder.record(TrieAccess::Hash { full_key });
 							}
 
 							let mut hash = TrieHash::<L>::default();
 							hash.as_mut().copy_from_slice(hash_bytes);
-							hash
+							(hash, size)
 						},
 					})
 				},
@@ -234,7 +262,7 @@ where
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
 		cache: &mut dyn crate::TrieCache<L::Codec>,
-	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<(TrieHash<L>, Option<usize>)>, TrieHash<L>, CError<L>> {
 		let value_cache_allowed = self
 			.recorder
 			.as_ref()
@@ -244,7 +272,11 @@ where
 			.unwrap_or(true);
 
 		let res = if let Some(hash) = value_cache_allowed
-			.then(|| cache.lookup_value_for_key(full_key).map(|v| v.hash()))
+			.then(|| {
+				cache
+					.lookup_value_for_key(full_key)
+					.map(|v| (v.hash().map(|h| (h, v.size().flatten()))))
+			})
 			.flatten()
 		{
 			hash
@@ -263,22 +295,23 @@ where
 							});
 						}
 
-						Ok((hash, Some(value.clone())))
+						Ok(((hash, Some(value.len())), Some(value.clone())))
 					},
-					ValueOwned::Node(hash) => {
+					ValueOwned::Node(hash, size) => {
 						if let Some(recoder) = recorder.as_mut() {
 							recoder.record(TrieAccess::Hash { full_key });
 						}
 
-						Ok((hash, None))
+						Ok(((hash, size), None))
 					},
 				},
 			)?;
 
 			match &hash_and_value {
-				Some((hash, Some(value))) =>
+				Some(((hash, _size), Some(value))) =>
 					cache.cache_value_for_key(full_key, (value.clone(), *hash).into()),
-				Some((hash, None)) => cache.cache_value_for_key(full_key, (*hash).into()),
+				Some(((hash, size), None)) =>
+					cache.cache_value_for_key(full_key, (*hash, *size).into()),
 				None => cache.cache_value_for_key(full_key, CachedValue::NonExisting),
 			}
 
@@ -330,11 +363,11 @@ where
 		let res = match value_cache_allowed.then(|| cache.lookup_value_for_key(full_key)).flatten()
 		{
 			Some(CachedValue::NonExisting) => None,
-			Some(CachedValue::ExistingHash(hash)) => {
+			Some(CachedValue::ExistingHash(hash, size)) => {
 				let data = Self::load_owned_value(
 					// If we only have the hash cached, this can only be a value node.
 					// For inline nodes we cache them directly as `CachedValue::Existing`.
-					ValueOwned::Node(*hash),
+					ValueOwned::Node(*hash, *size),
 					nibble_key.original_data_as_prefix(),
 					full_key,
 					cache,
@@ -705,22 +738,6 @@ where
 				}
 			}
 		}
-		Ok(Default::default())
-	}
-
-	/// Look up the given key. If the value is found, it will be passed to the given
-	/// function to decode or copy.
-	pub fn look_up(self, key: NibbleSlice) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
-		self.look_up_with(key, Self::decode)
-	}
-
-	/// Look up the given key. Check if value exists.
-	pub fn look_up_contains(self, key: NibbleSlice) -> Result<bool, TrieHash<L>, CError<L>> {
-		self.look_up_with(key, Self::contains)
-	}
-
-	/// Look up the given key. Check value size if it exists.
-	pub fn look_up_size(self, key: NibbleSlice) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
-		self.look_up_with(key, Self::size)
+		Ok(None)
 	}
 }

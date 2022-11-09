@@ -131,11 +131,11 @@ impl<'a> Value<'a> {
 	pub fn to_owned_value<L: TrieLayout>(&self) -> ValueOwned<TrieHash<L>> {
 		match self {
 			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), L::Hash::hash(data)),
-			Self::Node(hash) => {
+			Self::Node(hash, size) => {
 				let mut res = TrieHash::<L>::default();
 				res.as_mut().copy_from_slice(hash);
 
-				ValueOwned::Node(res)
+				ValueOwned::Node(res, size.clone())
 			},
 		}
 	}
@@ -148,7 +148,7 @@ pub enum ValueOwned<H> {
 	/// Value bytes as stored in a trie node and its hash.
 	Inline(Bytes, H),
 	/// Hash byte slice as stored in a trie node.
-	Node(H),
+	Node(H, Option<usize>),
 }
 
 impl<H: AsRef<[u8]> + Copy> ValueOwned<H> {
@@ -156,7 +156,7 @@ impl<H: AsRef<[u8]> + Copy> ValueOwned<H> {
 	pub fn as_value(&self) -> Value {
 		match self {
 			Self::Inline(data, _) => Value::Inline(&data),
-			Self::Node(hash) => Value::Node(hash.as_ref()),
+			Self::Node(hash, size) => Value::Node(hash.as_ref(), size.clone()),
 		}
 	}
 
@@ -164,7 +164,7 @@ impl<H: AsRef<[u8]> + Copy> ValueOwned<H> {
 	pub fn data_hash(&self) -> Option<H> {
 		match self {
 			Self::Inline(_, hash) => Some(*hash),
-			Self::Node(hash) => Some(*hash),
+			Self::Node(hash, _size) => Some(*hash),
 		}
 	}
 }
@@ -174,7 +174,15 @@ impl<H> ValueOwned<H> {
 	pub fn data(&self) -> Option<&Bytes> {
 		match self {
 			Self::Inline(data, _) => Some(data),
-			Self::Node(_) => None,
+			Self::Node(_, _) => None,
+		}
+	}
+
+	/// Returns the size of the data stored in self.
+	pub fn data_size(&self) -> Option<usize> {
+		match self {
+			Self::Inline(b, _) => Some(b.len()),
+			Self::Node(_, size) => size.clone(),
 		}
 	}
 }

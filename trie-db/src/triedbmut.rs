@@ -111,7 +111,7 @@ impl<L: TrieLayout> From<&ValueOwned<TrieHash<L>>> for Value<L> {
 	fn from(val: &ValueOwned<TrieHash<L>>) -> Self {
 		match val {
 			ValueOwned::Inline(data, _) => Self::Inline(data.clone()),
-			ValueOwned::Node(hash) => Self::Node(*hash),
+			ValueOwned::Node(hash, size) => Self::Node(*hash, size.clone()),
 		}
 	}
 }
@@ -185,7 +185,7 @@ impl<L: TrieLayout> Value<L> {
 		Ok(Some(match self {
 			Value::Inline(value) => value.to_vec(),
 			Value::NewNode(_, value) => value.to_vec(),
-			Value::Node(hash) =>
+			Value::Node(hash, _size) =>
 				if let Some(value) = db.get(hash, prefix) {
 					recorder.as_ref().map(|r| {
 						r.borrow_mut().record(TrieAccess::Value {
@@ -210,9 +210,8 @@ impl<L: TrieLayout> Value<L> {
 		Ok(Some(match self {
 			Value::Inline(value) => value.len(),
 			Value::NewNode(_, value) => value.len(),
-			Value::Node(_, Some(size), _) => *size,
-			Value::Node(_, _, Some(value)) => value.len(),
-			Value::Node(hash, _, None) =>
+			Value::Node(_, Some(size)) => *size,
+			Value::Node(hash, _) =>
 				if let Some(value) = db.get(hash, prefix) {
 					value.len()
 				} else {
@@ -961,25 +960,28 @@ where
 	}
 
 	// TODO avoid redundant ocde with fn lookup (pass fn -> R: Default)
-	fn lookup_contains<'x, 'key>(
-		&'x self,
-		mut partial: NibbleSlice<'key>,
-		_full_key: &'key [u8],
+	fn lookup_contains(
+		&self,
+		mut partial: NibbleSlice,
+		full_key: &[u8],
 		handle: &NodeHandle<TrieHash<L>>,
-	) -> Result<bool, TrieHash<L>, CError<L>>
-	where
-		'x: 'key,
-	{
+	) -> Result<bool, TrieHash<L>, CError<L>> {
 		let mut handle = handle;
 		loop {
 			let (mid, child) = match handle {
-				NodeHandle::Hash(hash) =>
+				NodeHandle::Hash(hash) => {
+					let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 					return Lookup::<L, _> {
 						db: &self.db,
 						query: |v: &[u8]| v.to_vec(),
 						hash: *hash,
+						cache: None,
+						recorder: recorder
+							.as_mut()
+							.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 					}
-					.look_up_contains(partial),
+					.look_up_contains(full_key, partial)
+				},
 				NodeHandle::InMemory(handle) => match &self.storage[handle] {
 					Node::Empty => return Ok(Default::default()),
 					Node::Leaf(key, _) =>
@@ -1037,26 +1039,34 @@ where
 	}
 
 	// TODO factor in mem part
-	fn lookup_size<'x, 'key>(
-		&'x self,
-		mut partial: NibbleSlice<'key>,
-		full_key: &'key [u8],
+	fn lookup_size(
+		&self,
+		mut partial: NibbleSlice,
+		full_key: &[u8],
 		handle: &NodeHandle<TrieHash<L>>,
-	) -> Result<Option<usize>, TrieHash<L>, CError<L>>
-	where
-		'x: 'key,
-	{
+	) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
 		let mut handle = handle;
 		let prefix = (full_key, None);
 		loop {
 			let (mid, child) = match handle {
-				NodeHandle::Hash(hash) =>
-					return Lookup::<L, _> {
+				NodeHandle::Hash(hash) => {
+					let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
+					let r = Lookup::<L, _> {
 						db: &self.db,
 						query: |v: &[u8]| v.to_vec(),
 						hash: *hash,
+						cache: None,
+						recorder: recorder
+							.as_mut()
+							.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 					}
-					.look_up_size(partial),
+					.look_up_size(full_key, partial.clone())?;
+					return match r {
+						Some(Some(s)) => Ok(Some(s)),
+						None => Ok(None),
+						Some(None) => Ok(self.lookup(full_key, partial, handle)?.map(|v| v.len())),
+					}
+				},
 				NodeHandle::InMemory(handle) => match &self.storage[handle] {
 					Node::Empty => return Ok(None),
 					Node::Leaf(key, value) =>

@@ -220,14 +220,15 @@ where
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
-		Lookup::<L, _> {
+		Ok(Lookup::<L, _> {
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
 			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 		}
-		.look_up_hash(key, NibbleSlice::new(key))
+		.look_up_hash(key, NibbleSlice::new(key))?
+		.map(|r| r.0))
 	}
 
 	fn get_with<Q: Query<L::Hash>>(
@@ -249,14 +250,38 @@ where
 	}
 
 	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
+		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
+
 		let query = |v: &[u8]| v.to_vec();
-		Lookup::<L, _> { db: self.db, query, hash: *self.root }
-			.look_up_contains(NibbleSlice::new(key))
+		Lookup::<L, _> {
+			db: self.db,
+			query,
+			hash: *self.root,
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
+			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+		}
+		.look_up_contains(key, NibbleSlice::new(key))
 	}
 
 	fn get_size(&self, key: &[u8]) -> Result<Option<usize>, TrieHash<L>, CError<L>> {
+		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
+		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 		let query = |v: &[u8]| v.to_vec();
-		Lookup::<L, _> { db: self.db, query, hash: *self.root }.look_up_size(NibbleSlice::new(key))
+		let r = Lookup::<L, _> {
+			db: self.db,
+			query,
+			hash: *self.root,
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
+			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+		}
+		.look_up_size(key, NibbleSlice::new(key))?;
+		match r {
+			Some(Some(s)) => return Ok(Some(s)),
+			None => return Ok(None),
+			_ => (),
+		};
+		self.get_with(key, |x: &[u8]| x.len())
 	}
 
 	fn iter<'a>(
