@@ -395,19 +395,30 @@ fn test_trie_codec_proof<L: TrieLayout>(entries: Vec<(Vec<u8>, Vec<u8>)>, keys: 
 	// Compactly encode the partial trie DB.
 	let compact_trie = {
 		let trie = TrieDBBuilder::<L>::new(&partial_db, &root).build();
+		println!("{:?}", trie);
 		encode_compact::<L>(&trie).unwrap()
 	};
 
-	let expected_used = compact_trie.len();
+	//let expected_used = compact_trie.len();
 	// Reconstruct the partial DB from the compact encoding.
 	let mut db = <MemoryDB<L::Hash, HashKey<_>, _>>::default();
-	let (root, used) = decode_compact::<L, _>(&mut db, &compact_trie).unwrap();
+	let (root, _used) = decode_compact::<L, _>(&mut db, &compact_trie).unwrap();
+	let trie = TrieDBBuilder::<L>::new(&db, &root).build();
+		println!("{:?}", trie);
 	assert_eq!(root, expected_root);
-	assert_eq!(used, expected_used);
+	//assert_eq!(used, expected_used);
 
 	// Check that lookups for all items succeed.
 	let trie = TrieDBBuilder::<L>::new(&db, &root).build();
 	for (key, expected_value) in items {
 		assert_eq!(trie.get(key.as_slice()).unwrap(), expected_value);
 	}
+}
+
+#[test]
+fn failing_trie_codec() {
+	let fuzz_input = &[0x0,0x0,0xa,0x1a,0x31,0x0,0xa,0x1a];
+
+	fuzz_that_trie_codec_proofs::<reference_trie::ExtensionLayout>(fuzz_input.as_slice());
+	//fuzz_that_trie_codec_proofs::<reference_trie::HashedValueNoExtThreshold>(fuzz_input.as_slice());
 }

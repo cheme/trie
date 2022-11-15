@@ -155,7 +155,7 @@ where
 				}
 			}
 			let depth = item.2;
-			let is_root = target_depth.is_none();
+			let is_root = target_depth.is_none() && self.0.is_empty();
 			let inc = if is_root { 0 } else { 1 };
 			let child_reference = if item.0.iter().any(|child| child.is_some()) {
 				let nkey = (depth > (from_depth + inc))
