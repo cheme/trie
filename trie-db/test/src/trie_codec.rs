@@ -140,6 +140,7 @@ fn trie_compact_encoding_works_internal<T: TrieLayout>() {
 	test(vec![(b"dot", b"d")], vec![b"dotation"]);
 	test(vec![(b"dot", &[1; 35])], vec![b"a"]);
 	test(vec![(b"dot", &[0; 32])], vec![b""]);
+	test(vec![(b"a", &[0; 32]), (b"d", &[1; 32])], vec![b"a", b"d"]);
 }
 
 test_layouts!(
