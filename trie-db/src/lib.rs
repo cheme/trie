@@ -119,6 +119,7 @@ pub enum CompactDecoderError {
 	ValueNotAfterPush,
 	NotConsecutiveHash,
 	PopAtLast,
+	PushAtLast,
 	HashChildNotOmitted,
 }
 

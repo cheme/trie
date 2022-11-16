@@ -419,6 +419,6 @@ fn test_trie_codec_proof<L: TrieLayout>(entries: Vec<(Vec<u8>, Vec<u8>)>, keys: 
 fn failing_trie_codec() {
 	let fuzz_input = &[0x0,0x0,0xa,0x1a,0x31,0x0,0xa,0x1a];
 
-	fuzz_that_trie_codec_proofs::<reference_trie::ExtensionLayout>(fuzz_input.as_slice());
-	//fuzz_that_trie_codec_proofs::<reference_trie::HashedValueNoExtThreshold>(fuzz_input.as_slice());
+	//fuzz_that_trie_codec_proofs::<reference_trie::ExtensionLayout>(fuzz_input.as_slice());
+	fuzz_that_trie_codec_proofs::<reference_trie::HashedValueNoExtThreshold>(fuzz_input.as_slice());
 }

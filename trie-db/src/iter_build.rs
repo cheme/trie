@@ -578,6 +578,9 @@ where
 	if is_prev_pop_key {
 		return Err(CompactDecoderError::PopAtLast.into())
 	}
+	if is_prev_push_key {
+		return Err(CompactDecoderError::PushAtLast.into())
+	}
 
 	stack.stack_pop(&current_key, None, callback)?;
 
