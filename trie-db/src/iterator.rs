@@ -327,23 +327,43 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	fn next_raw_item(
 		&mut self,
 		db: &TrieDB<L>,
+		at_start_value: bool,
 	) -> Option<
-		Result<(&NibbleVec, Option<&TrieHash<L>>, &Rc<OwnedNode<DBValue>>), TrieHash<L>, CError<L>>,
+		Result<
+			(&mut NibbleVec, Option<&TrieHash<L>>, &Rc<OwnedNode<DBValue>>),
+			TrieHash<L>,
+			CError<L>,
+		>,
 	> {
 		loop {
 			let crumb = self.trail.last_mut()?;
 			let node_data = crumb.node.data();
 
 			match (crumb.status, crumb.node.node_plan()) {
-				(Status::Entering, _) => {
+				(Status::Entering, node) => {
+					if at_start_value {
+						match &node {
+							NodePlan::NibbledBranch { partial, .. } |
+							NodePlan::Extension { partial, .. } |
+							NodePlan::Leaf { partial, .. } => {
+								let partial = partial.build(node_data);
+								self.key_nibbles.append_partial(partial.right());
+							},
+							_ => (),
+						}
+					}
 					// This is only necessary due to current borrow checker's limitation.
 					let crumb = self.trail.last_mut().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
 					crumb.increment();
-					return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
+					return Some(Ok((&mut self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
 				},
 				(Status::Exiting, node) => {
 					match node {
-						NodePlan::Empty | NodePlan::Leaf { .. } => {},
+						NodePlan::Empty => {},
+						NodePlan::Leaf { partial, .. } =>
+							if at_start_value {
+								self.key_nibbles.drop_lasts(partial.len());
+							},
 						NodePlan::Extension { partial, .. } => {
 							self.key_nibbles.drop_lasts(partial.len());
 						},
@@ -359,7 +379,9 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::At, NodePlan::Extension { partial: partial_plan, child }) => {
 					let partial = partial_plan.build(node_data);
-					self.key_nibbles.append_partial(partial.right());
+					if !at_start_value {
+						self.key_nibbles.append_partial(partial.right());
+					}
 
 					match db.get_raw_or_lookup(
 						crumb.hash.unwrap_or_default(),
@@ -382,7 +404,9 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::At, NodePlan::NibbledBranch { partial: partial_plan, .. }) => {
 					let partial = partial_plan.build(node_data);
-					self.key_nibbles.append_partial(partial.right());
+					if !at_start_value {
+						self.key_nibbles.append_partial(partial.right());
+					}
 					self.key_nibbles.push(0);
 					crumb.increment();
 				},
@@ -422,28 +446,21 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db) {
+		while let Some(raw_item) = self.next_raw_item(db, true) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
 			};
 
-			let mut prefix = prefix.clone();
 			let value = match node.node() {
-				Node::Leaf(partial, value) => {
-					prefix.append_partial(partial.right());
-					value
-				},
+				Node::Leaf(_, value) => value,
 				Node::Branch(_, value) => match value {
 					Some(value) => value,
 					None => continue,
 				},
-				Node::NibbledBranch(partial, _, value) => {
-					prefix.append_partial(partial.right());
-					match value {
-						Some(value) => value,
-						None => continue,
-					}
+				Node::NibbledBranch(_, _, value) => match value {
+					Some(value) => value,
+					None => continue,
 				},
 				_ => continue,
 			};
@@ -471,27 +488,22 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(&mut self, db: &TrieDB<L>) -> Option<TrieKeyItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db) {
+		while let Some(raw_item) = self.next_raw_item(db, true) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
 			};
 
-			let mut prefix = prefix.clone();
 			match node.node() {
-				Node::Leaf(partial, _) => {
-					prefix.append_partial(partial.right());
-				},
+				Node::Leaf(_, _) => {},
 				Node::Branch(_, value) =>
 					if value.is_none() {
 						continue
 					},
-				Node::NibbledBranch(partial, _, value) => {
-					prefix.append_partial(partial.right());
+				Node::NibbledBranch(_, _, value) =>
 					if value.is_none() {
 						continue
-					}
-				},
+					},
 				_ => continue,
 			};
 
@@ -573,7 +585,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 		Result<(NibbleVec, Option<TrieHash<L>>, Rc<OwnedNode<DBValue>>), TrieHash<L>, CError<L>>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		self.raw_iter.next_raw_item(self.db).map(|result| {
+		self.raw_iter.next_raw_item(self.db, false).map(|result| {
 			result.map(|(nibble, hash, node)| (nibble.clone(), hash.cloned(), node.clone()))
 		})
 	}
