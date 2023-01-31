@@ -62,18 +62,22 @@ impl<H: Hasher> Crumb<H> {
 pub struct TrieDBRawIterator<L: TrieLayout> {
 	trail: Vec<Crumb<L::Hash>>,
 	key_nibbles: NibbleVec,
+	at_start_value: bool,
 }
 
 impl<L: TrieLayout> TrieDBRawIterator<L> {
 	/// Create a new empty iterator.
-	pub fn empty() -> Self {
-		Self { trail: Vec::new(), key_nibbles: NibbleVec::new() }
+	pub fn empty(at_start_value: bool) -> Self {
+		Self { trail: Vec::new(), key_nibbles: NibbleVec::new(), at_start_value }
 	}
 
 	/// Create a new iterator.
-	pub fn new(db: &TrieDB<L>) -> Result<Self, TrieHash<L>, CError<L>> {
-		let mut r =
-			TrieDBRawIterator { trail: Vec::with_capacity(8), key_nibbles: NibbleVec::new() };
+	pub fn new(db: &TrieDB<L>, at_start_value: bool) -> Result<Self, TrieHash<L>, CError<L>> {
+		let mut r = TrieDBRawIterator {
+			trail: Vec::with_capacity(8),
+			key_nibbles: NibbleVec::new(),
+			at_start_value,
+		};
 		let (root_node, root_hash) = db.get_raw_or_lookup(
 			*db.root(),
 			NodeHandle::Hash(db.root().as_ref()),
@@ -85,8 +89,12 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
-	pub fn new_prefixed(db: &TrieDB<L>, prefix: &[u8]) -> Result<Self, TrieHash<L>, CError<L>> {
-		let mut iter = TrieDBRawIterator::new(db)?;
+	pub fn new_prefixed(
+		db: &TrieDB<L>,
+		prefix: &[u8],
+		at_start_value: bool,
+	) -> Result<Self, TrieHash<L>, CError<L>> {
+		let mut iter = TrieDBRawIterator::new(db, at_start_value)?;
 		iter.prefix(db, prefix)?;
 
 		Ok(iter)
@@ -99,14 +107,27 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 		db: &TrieDB<L>,
 		prefix: &[u8],
 		start_at: &[u8],
+		at_start_value: bool,
 	) -> Result<Self, TrieHash<L>, CError<L>> {
-		let mut iter = TrieDBRawIterator::new(db)?;
+		let mut iter = TrieDBRawIterator::new(db, at_start_value)?;
 		iter.prefix_then_seek(db, prefix, start_at)?;
 		Ok(iter)
 	}
 
 	/// Descend into a payload.
 	fn descend(&mut self, node: OwnedNode<DBValue>, node_hash: Option<TrieHash<L>>) {
+		if self.at_start_value {
+			match node.node_plan() {
+				NodePlan::NibbledBranch { partial, .. } |
+				NodePlan::Extension { partial, .. } |
+				NodePlan::Leaf { partial, .. } => {
+					let partial = partial.build(node.data());
+					self.key_nibbles.append_partial(partial.right());
+				},
+				_ => (),
+			}
+		}
+
 		self.trail
 			.push(Crumb { hash: node_hash, status: Status::Entering, node: Rc::new(node) });
 	}
@@ -327,7 +348,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	fn next_raw_item(
 		&mut self,
 		db: &TrieDB<L>,
-		at_start_value: bool,
 	) -> Option<
 		Result<
 			(&mut NibbleVec, Option<&TrieHash<L>>, &Rc<OwnedNode<DBValue>>),
@@ -340,18 +360,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 			let node_data = crumb.node.data();
 
 			match (crumb.status, crumb.node.node_plan()) {
-				(Status::Entering, node) => {
-					if at_start_value {
-						match &node {
-							NodePlan::NibbledBranch { partial, .. } |
-							NodePlan::Extension { partial, .. } |
-							NodePlan::Leaf { partial, .. } => {
-								let partial = partial.build(node_data);
-								self.key_nibbles.append_partial(partial.right());
-							},
-							_ => (),
-						}
-					}
+				(Status::Entering, _) => {
 					// This is only necessary due to current borrow checker's limitation.
 					let crumb = self.trail.last_mut().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
 					crumb.increment();
@@ -361,7 +370,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 					match node {
 						NodePlan::Empty => {},
 						NodePlan::Leaf { partial, .. } =>
-							if at_start_value {
+							if self.at_start_value {
 								self.key_nibbles.drop_lasts(partial.len());
 							},
 						NodePlan::Extension { partial, .. } => {
@@ -379,7 +388,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::At, NodePlan::Extension { partial: partial_plan, child }) => {
 					let partial = partial_plan.build(node_data);
-					if !at_start_value {
+					if !self.at_start_value {
 						self.key_nibbles.append_partial(partial.right());
 					}
 
@@ -404,7 +413,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::At, NodePlan::NibbledBranch { partial: partial_plan, .. }) => {
 					let partial = partial_plan.build(node_data);
-					if !at_start_value {
+					if !self.at_start_value {
 						self.key_nibbles.append_partial(partial.right());
 					}
 					self.key_nibbles.push(0);
@@ -446,7 +455,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db, true) {
+		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -488,7 +497,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(&mut self, db: &TrieDB<L>) -> Option<TrieKeyItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db, true) {
+		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -528,7 +537,7 @@ pub struct TrieDBNodeIterator<'a, 'cache, L: TrieLayout> {
 impl<'a, 'cache, L: TrieLayout> TrieDBNodeIterator<'a, 'cache, L> {
 	/// Create a new iterator.
 	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { raw_iter: TrieDBRawIterator::new(db)?, db })
+		Ok(Self { raw_iter: TrieDBRawIterator::new(db, false)?, db })
 	}
 
 	/// Restore an iterator from a raw iterator.
@@ -585,7 +594,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 		Result<(NibbleVec, Option<TrieHash<L>>, Rc<OwnedNode<DBValue>>), TrieHash<L>, CError<L>>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		self.raw_iter.next_raw_item(self.db, false).map(|result| {
+		self.raw_iter.next_raw_item(self.db).map(|result| {
 			result.map(|(nibble, hash, node)| (nibble.clone(), hash.cloned(), node.clone()))
 		})
 	}

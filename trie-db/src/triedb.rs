@@ -420,7 +420,7 @@ pub struct TrieDBKeyIterator<'a, 'cache, L: TrieLayout> {
 impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 	/// Create a new iterator.
 	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
+		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db, true)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
@@ -428,7 +428,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
 	) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
+		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix, true)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
@@ -439,7 +439,10 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 		prefix: &[u8],
 		start_at: &[u8],
 	) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at)? })
+		Ok(Self {
+			db,
+			raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at, true)?,
+		})
 	}
 
 	/// Restore an iterator from a raw iterator.
@@ -463,7 +466,7 @@ impl<'a, 'cache, L: TrieLayout> TrieIterator<L> for TrieDBIterator<'a, 'cache, L
 impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 	/// Create a new iterator.
 	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
+		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db, true)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
@@ -471,7 +474,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
 	) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
+		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix, true)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
@@ -482,7 +485,10 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 		prefix: &[u8],
 		start_at: &[u8],
 	) -> Result<TrieDBKeyIterator<'a, 'cache, L>, TrieHash<L>, CError<L>> {
-		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at)? })
+		Ok(Self {
+			db,
+			raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at, true)?,
+		})
 	}
 
 	/// Restore an iterator from a raw iterator.
