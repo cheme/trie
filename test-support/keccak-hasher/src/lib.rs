@@ -14,12 +14,28 @@
 
 //! Hasher implementation for the Keccak-256 hash
 
+use digest::{
+	consts::{U16, U32, U8},
+	Digest,
+};
 use hash256_std_hasher::Hash256StdHasher;
 use hash_db::Hasher;
 use tiny_keccak::{Hasher as _, Keccak};
 
 /// The `Keccak` hash output type.
 pub type KeccakHash = [u8; 32];
+
+type Blake2b256 = blake2::Blake2b<U32>;
+pub fn blake2_256_into(data: &[u8], dest: &mut [u8; 32]) {
+	dest.copy_from_slice(Blake2b256::digest(data).as_slice());
+}
+
+/// Do a Blake2 256-bit hash and return result.
+pub fn blake2_256(data: &[u8]) -> [u8; 32] {
+	let mut r = [0; 32];
+	blake2_256_into(data, &mut r);
+	r
+}
 
 /// Concrete `Hasher` impl for the Keccak-256 hash
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -31,13 +47,17 @@ impl Hasher for KeccakHasher {
 
 	const LENGTH: usize = 32;
 
+	fn hash(data: &[u8]) -> Self::Out {
+		blake2_256(data).into()
+	}
+	/*
 	fn hash(x: &[u8]) -> Self::Out {
 		let mut keccak = Keccak::v256();
 		keccak.update(x);
 		let mut out = [0u8; 32];
 		keccak.finalize(&mut out);
 		out
-	}
+	}*/
 }
 
 #[cfg(test)]
