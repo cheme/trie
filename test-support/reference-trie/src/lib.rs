@@ -48,7 +48,7 @@ macro_rules! test_layouts {
 		#[test]
 		fn $test() {
 			eprintln!("Running with layout `HashedValueNoExtThreshold`");
-			$test_internal::<$crate::HashedValueNoExtThreshold<1>>();
+			$test_internal::<$crate::HashedValueNoExtThreshold<1, ()>>(); // TODO switch to actual cache counter
 			eprintln!("Running with layout `HashedValueNoExt`");
 			$test_internal::<$crate::HashedValueNoExt>();
 			eprintln!("Running with layout `NoExtensionLayout`");
@@ -81,6 +81,7 @@ impl TrieLayout for ExtensionLayout {
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = RefHasher;
 	type Codec = ReferenceNodeCodec<RefHasher>;
+	type CacheConf = ();
 }
 
 impl TrieConfiguration for ExtensionLayout {}
@@ -107,6 +108,7 @@ impl<H: Hasher> TrieLayout for GenericNoExtensionLayout<H> {
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = H;
 	type Codec = ReferenceNodeCodecNoExt<H>;
+	type CacheConf = ();
 }
 
 /// Trie that allows empty values.
@@ -119,6 +121,7 @@ impl TrieLayout for AllowEmptyLayout {
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = RefHasher;
 	type Codec = ReferenceNodeCodec<RefHasher>;
+	type CacheConf = ();
 }
 
 impl<H: Hasher> TrieConfiguration for GenericNoExtensionLayout<H> {}
@@ -1116,7 +1119,7 @@ impl<L: TrieLayout> Default for TestTrieCache<L> {
 	}
 }
 
-impl<L: TrieLayout> trie_db::TrieCache<L::Codec> for TestTrieCache<L> {
+impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache<L> {
 	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&trie_db::CachedValue<TrieHash<L>>> {
 		self.value_cache.get(key)
 	}

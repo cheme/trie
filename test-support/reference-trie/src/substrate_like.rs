@@ -15,14 +15,15 @@
 //! Codec and layout configuration similar to upstream default substrate one.
 
 use super::{CodecError as Error, NodeCodec as NodeCodecT, *};
-use trie_db::node::Value;
+use core::marker::PhantomData;
+use trie_db::{node::Value, TrieCacheConf};
 
 /// No extension trie with no hashed value.
 pub struct HashedValueNoExt;
 
 /// No extension trie which stores value above a static size
 /// as external node.
-pub struct HashedValueNoExtThreshold<const C: u32>;
+pub struct HashedValueNoExtThreshold<const C: u32, CC>(PhantomData<CC>);
 
 impl TrieLayout for HashedValueNoExt {
 	const USE_EXTENSION: bool = false;
@@ -31,15 +32,17 @@ impl TrieLayout for HashedValueNoExt {
 
 	type Hash = RefHasher;
 	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher>;
+	type CacheConf = ();
 }
 
-impl<const C: u32> TrieLayout for HashedValueNoExtThreshold<C> {
+impl<const C: u32, CC: TrieCacheConf> TrieLayout for HashedValueNoExtThreshold<C, CC> {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = Some(C);
 
 	type Hash = RefHasher;
 	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher>;
+	type CacheConf = CC;
 }
 
 /// Constants specific to encoding with external value node support.

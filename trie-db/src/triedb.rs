@@ -33,7 +33,7 @@ use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 pub struct TrieDBBuilder<'db, 'cache, L: TrieLayout> {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
 	root: &'db TrieHash<L>,
-	cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
+	cache: Option<&'cache mut dyn TrieCache<L::Codec, L::CacheConf>>,
 	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
 }
 
@@ -49,7 +49,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 
 	/// Use the given `cache` for the db.
 	#[inline]
-	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec>) -> Self {
+	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec, L::CacheConf>) -> Self {
 		self.cache = Some(cache);
 		self
 	}
@@ -58,7 +58,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_optional_cache<'ocache: 'cache>(
 		mut self,
-		cache: Option<&'ocache mut dyn TrieCache<L::Codec>>,
+		cache: Option<&'ocache mut dyn TrieCache<L::Codec, L::CacheConf>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.cache = cache.map(|c| c as _);
@@ -123,7 +123,7 @@ where
 {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
 	root: &'db TrieHash<L>,
-	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec>>>,
+	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec, L::CacheConf>>>,
 	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>>>>,
 }
 
@@ -228,7 +228,7 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::CacheConf>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 		}
 		.look_up_hash(key, NibbleSlice::new(key))
@@ -246,7 +246,7 @@ where
 			db: self.db,
 			query,
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::CacheConf>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 		}
 		.look_up(key, NibbleSlice::new(key))

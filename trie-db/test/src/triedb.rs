@@ -635,7 +635,7 @@ fn test_cache_internal<T: TrieLayout>() {
 
 #[test]
 fn test_record_value() {
-	type Layout = HashedValueNoExtThreshold<33>;
+	type Layout = HashedValueNoExtThreshold<33, ()>;
 	// one root branch and two leaf, one with inline value, the other with node value.
 	let key_value = vec![(b"A".to_vec(), vec![1; 32]), (b"B".to_vec(), vec![1; 33])];
 

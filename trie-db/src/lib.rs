@@ -494,6 +494,8 @@ pub trait TrieLayout {
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
 	type Codec: NodeCodec<HashOut = <Self::Hash as Hasher>::Out>;
+	/// Cache configuration associated types.
+	type CacheConf: TrieCacheConf;
 }
 
 /// This trait associates a trie definition with preferred methods.
@@ -642,7 +644,7 @@ impl<H> From<Option<H>> for CachedValue<H> {
 /// different values under the same key, it up to the cache implementation to ensure that the
 /// correct value is returned. As each trie has a different root, this root can be used to
 /// differentiate values under the same key.
-pub trait TrieCache<NC: NodeCodec> {
+pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 	/// Lookup value for the given `key`.
 	///
 	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated
@@ -684,6 +686,19 @@ pub trait TrieCache<NC: NodeCodec> {
 	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
 }
 
+/// Trait containing all trie cache configuration.
+pub trait TrieCacheConf {
+	/// Opaque proof counter that can be use by cache.
+	type CountProofSize;
+	/// Opaque proof node local counter that can be use by cache.
+	type ParentCountProofSize;
+}
+
+/// Trie cache conf with no count proof size counting.
+impl TrieCacheConf for () {
+	type CountProofSize = ();
+	type ParentCountProofSize = ();
+}
 /// A container for storing bytes.
 ///
 /// This uses a reference counted pointer internally, so it is cheap to clone this object.

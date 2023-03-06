@@ -33,7 +33,7 @@ pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
 	/// Hash to start at
 	pub hash: TrieHash<L>,
 	/// Optional cache that should be used to speed up the lookup.
-	pub cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
+	pub cache: Option<&'cache mut dyn TrieCache<L::Codec, L::CacheConf>>,
 	/// Optional recorder that will be called to record all trie accesses.
 	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
 }
@@ -89,7 +89,7 @@ where
 		v: ValueOwned<TrieHash<L>>,
 		prefix: Prefix,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
 		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
@@ -190,7 +190,7 @@ where
 		mut self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
 		let value_cache_allowed = self
 			.recorder
@@ -243,7 +243,7 @@ where
 		mut self,
 		full_key: &[u8],
 		nibble_key: NibbleSlice,
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
 		let trie_nodes_recorded =
 			self.recorder.as_ref().map(|r| r.trie_nodes_recorded_for_key(full_key));
@@ -260,7 +260,7 @@ where
 		};
 
 		let lookup_data = |lookup: &mut Self,
-		                   cache: &mut dyn crate::TrieCache<L::Codec>|
+		                   cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>|
 		 -> Result<Option<Bytes>, TrieHash<L>, CError<L>> {
 			let data = lookup.look_up_with_cache_internal(
 				nibble_key,
@@ -324,12 +324,12 @@ where
 		&mut self,
 		nibble_key: NibbleSlice,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec>,
+		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 		load_value_owned: impl Fn(
 			ValueOwned<TrieHash<L>>,
 			Prefix,
 			&[u8],
-			&mut dyn crate::TrieCache<L::Codec>,
+			&mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 			&dyn HashDBRef<L::Hash, DBValue>,
 			&mut Option<&mut dyn TrieRecorder<TrieHash<L>>>,
 		) -> Result<R, TrieHash<L>, CError<L>>,
