@@ -228,6 +228,7 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
+			from_parent: None,
 			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::CacheConf>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 		}
@@ -246,6 +247,7 @@ where
 			db: self.db,
 			query,
 			hash: *self.root,
+			from_parent: None,
 			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::CacheConf>),
 			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
 		}

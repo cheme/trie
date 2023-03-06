@@ -743,7 +743,7 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 	}
 
 	// Root should now be cached.
-	assert!(cache.get_node(&root).is_some());
+	assert!(cache.get_node(&root, None).is_some());
 
 	// Add more data, but this time only to the overlay.
 	// While doing that we record all trie accesses to replay this operation.

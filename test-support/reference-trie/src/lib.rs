@@ -22,8 +22,8 @@ use trie_db::{
 	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
 	trie_visit,
 	triedbmut::ChildReference,
-	DBValue, NodeCodec, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder,
-	TrieHash, TrieLayout, TrieMut, TrieRoot,
+	DBValue, NodeCodec, ParentCountFor, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder,
+	TrieDBMutBuilder, TrieHash, TrieLayout, TrieMut, TrieRoot,
 };
 pub use trie_root::TrieStream;
 use trie_root::{Hasher, Value as TrieStreamValue};
@@ -1131,12 +1131,19 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 	fn get_or_insert_node(
 		&mut self,
 		hash: TrieHash<L>,
+		_from_parent: Option<(ParentCountFor<L>, usize)>,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
 			NodeOwned<TrieHash<L>>,
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
-	) -> trie_db::Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, trie_db::CError<L>> {
+	) -> trie_db::Result<
+		(&NodeOwned<TrieHash<L>>, ParentCountFor<L>),
+		TrieHash<L>,
+		trie_db::CError<L>,
+	> {
+		unimplemented!("TODO")
+		/*
 		match self.node_cache.entry(hash) {
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
@@ -1144,10 +1151,16 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 				Ok(e.insert(node))
 			},
 		}
+			*/
 	}
 
-	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
-		self.node_cache.get(hash)
+	fn get_node(
+		&mut self,
+		hash: &TrieHash<L>,
+		from_parent: Option<(ParentCountFor<L>, usize)>,
+	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
+		unimplemented!("TODO")
+		//self.node_cache.get(hash)
 	}
 }
 

@@ -696,7 +696,7 @@ pub trait TrieCacheConf {
 	/// Opaque proof counter that can be use by cache.
 	type CountProofSize;
 	/// Opaque proof node local counter that can be use by cache.
-	type ParentCountProofSize;
+	type ParentCountProofSize: Copy;
 }
 
 /// Accessor for parent child cache counter from a trie layout.

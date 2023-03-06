@@ -19,8 +19,8 @@ use crate::{
 	node::{decode_hash, Node, NodeHandle, NodeHandleOwned, NodeOwned, Value, ValueOwned},
 	node_codec::NodeCodec,
 	rstd::boxed::Box,
-	Bytes, CError, CachedValue, DBValue, Query, RecordedForKey, Result, TrieAccess, TrieCache,
-	TrieError, TrieHash, TrieLayout, TrieRecorder,
+	Bytes, CError, CachedValue, DBValue, ParentCountFor, Query, RecordedForKey, Result, TrieAccess,
+	TrieCache, TrieError, TrieHash, TrieLayout, TrieRecorder,
 };
 use hash_db::{HashDBRef, Hasher, Prefix};
 
@@ -32,6 +32,8 @@ pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
 	pub query: Q,
 	/// Hash to start at
 	pub hash: TrieHash<L>,
+	/// Counter for parent of the starting hash.
+	pub from_parent: Option<(ParentCountFor<L>, usize)>,
 	/// Optional cache that should be used to speed up the lookup.
 	pub cache: Option<&'cache mut dyn TrieCache<L::Codec, L::CacheConf>>,
 	/// Optional recorder that will be called to record all trie accesses.
@@ -87,6 +89,7 @@ where
 	/// Returns the bytes representing the value and its hash.
 	fn load_owned_value(
 		v: ValueOwned<TrieHash<L>>,
+		from_parent: Option<(ParentCountFor<L>, usize)>,
 		prefix: Prefix,
 		full_key: &[u8],
 		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
@@ -96,7 +99,7 @@ where
 		match v {
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
 			ValueOwned::Node(hash) => {
-				let node = cache.get_or_insert_node(hash, &mut || {
+				let (node, _count) = cache.get_or_insert_node(hash, from_parent, &mut || {
 					let value = db
 						.get(&hash, prefix)
 						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
@@ -210,7 +213,7 @@ where
 				nibble_key,
 				full_key,
 				cache,
-				|value, _, full_key, _, _, recorder| match value {
+				|value, _, _, full_key, _, _, recorder| match value {
 					ValueOwned::Inline(value, hash) => Ok((hash, Some(value.clone()))),
 					ValueOwned::Node(hash) => {
 						if let Some(recoder) = recorder.as_mut() {
@@ -282,6 +285,7 @@ where
 					// If we only have the hash cached, this can only be a value node.
 					// For inline nodes we cache them directly as `CachedValue::Existing`.
 					ValueOwned::Node(*hash),
+					None,
 					nibble_key.original_data_as_prefix(),
 					full_key,
 					cache,
@@ -327,6 +331,7 @@ where
 		cache: &mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
 		load_value_owned: impl Fn(
 			ValueOwned<TrieHash<L>>,
+			Option<(ParentCountFor<L>, usize)>,
 			Prefix,
 			&[u8],
 			&mut dyn crate::TrieCache<L::Codec, L::CacheConf>,
@@ -340,23 +345,24 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let mut node = cache.get_or_insert_node(hash, &mut || {
-				let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
-					Some(value) => value,
-					None =>
-						return Err(Box::new(match depth {
-							0 => TrieError::InvalidStateRoot(hash),
-							_ => TrieError::IncompleteDatabase(hash),
-						})),
-				};
+			let (mut node, count) =
+				cache.get_or_insert_node(hash, self.from_parent, &mut || {
+					let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
+						Some(value) => value,
+						None =>
+							return Err(Box::new(match depth {
+								0 => TrieError::InvalidStateRoot(hash),
+								_ => TrieError::IncompleteDatabase(hash),
+							})),
+					};
 
-				let decoded = match L::Codec::decode(&node_data[..]) {
-					Ok(node) => node,
-					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
-				};
+					let decoded = match L::Codec::decode(&node_data[..]) {
+						Ok(node) => node,
+						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+					};
 
-				decoded.to_owned_node::<L>()
-			})?;
+					decoded.to_owned_node::<L>()
+				})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });
 
@@ -370,6 +376,7 @@ where
 							drop(node);
 							load_value_owned(
 								value,
+								Some((count, 0)),
 								nibble_key.original_data_as_prefix(),
 								full_key,
 								cache,
@@ -398,6 +405,7 @@ where
 								drop(node);
 								load_value_owned(
 									value,
+									Some((count, 0)),
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,
@@ -436,6 +444,7 @@ where
 								drop(node);
 								load_value_owned(
 									value,
+									Some((count, 0)),
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,

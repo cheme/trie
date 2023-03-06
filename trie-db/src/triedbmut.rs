@@ -853,6 +853,7 @@ where
 		full_key: &[u8],
 		mut partial: NibbleSlice,
 		handle: &NodeHandle<TrieHash<L>>,
+		from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
 		let mut handle = handle;
 		let prefix = (full_key, None);
@@ -865,6 +866,7 @@ where
 						db: &self.db,
 						query: |v: &[u8]| v.to_vec(),
 						hash: *hash,
+						from_parent,
 						cache: None,
 						recorder: recorder
 							.as_mut()
@@ -1696,7 +1698,7 @@ where
 							alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start),
 							prefix_end,
 						);
-						let (stored, count) = match child {
+						let (stored, _count) = match child {
 							NodeHandle::InMemory(h) => (self.storage.destroy(h), None),
 							NodeHandle::Hash(h) => {
 								let (handle, count) = self.cache(
@@ -1936,7 +1938,7 @@ where
 			});
 
 			// `node` should always be `OK`, but let's play it safe.
-			let Ok((node, count)) = node else { return };
+			let Ok((node, _count)) = node else { return };
 
 			let mut values_to_cache = Vec::new();
 
@@ -2113,7 +2115,7 @@ where
 	where
 		'x: 'key,
 	{
-		self.lookup(key, NibbleSlice::new(key), &self.root_handle)
+		self.lookup(key, NibbleSlice::new(key), &self.root_handle, None)
 	}
 
 	fn insert(
