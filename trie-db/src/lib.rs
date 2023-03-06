@@ -694,13 +694,18 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 /// Trait containing all trie cache configuration.
 pub trait TrieCacheConf {
 	/// Opaque proof counter that can be use by cache.
-	type CountProofSize;
+	type CountProofSize: Default;
 	/// Opaque proof node local counter that can be use by cache.
-	type ParentCountProofSize: Copy;
+	/// It is `Default` only for covenience when no count is needed.
+	/// Require cheap clone and inside mutability.
+	type ParentCountProofSize: Default + Clone;
 }
 
 /// Accessor for parent child cache counter from a trie layout.
 pub type ParentCountFor<L> = <<L as TrieLayout>::CacheConf as TrieCacheConf>::ParentCountProofSize;
+
+/// Accessor for parent child cache counter from a trie layout.
+pub type CacheCountFor<L> = <<L as TrieLayout>::CacheConf as TrieCacheConf>::CountProofSize;
 
 /// Trie cache conf with no count proof size counting.
 impl TrieCacheConf for () {

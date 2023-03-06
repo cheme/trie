@@ -1427,7 +1427,12 @@ where
 					);
 					let prefix = *key;
 					key.advance(1);
-					match self.remove_at(child, node_count.map(|p| (p, idx)), key, old_val)? {
+					match self.remove_at(
+						child,
+						node_count.clone().map(|p| (p, idx)),
+						key,
+						old_val,
+					)? {
 						Some((new, changed)) => {
 							children[idx] = Some(new.into());
 							let branch = Node::Branch(children, value);
@@ -1491,7 +1496,12 @@ where
 						);
 						let prefix = *key;
 						key.advance(common + 1);
-						match self.remove_at(child, node_count.map(|p| (p, idx)), key, old_val)? {
+						match self.remove_at(
+							child,
+							node_count.clone().map(|p| (p, idx)),
+							key,
+							old_val,
+						)? {
 							Some((new, changed)) => {
 								children[idx] = Some(new.into());
 								let branch = Node::NibbledBranch(encoded, children, value);
@@ -1555,7 +1565,12 @@ where
 					trace!(target: "trie", "removing from extension child, partial={:?}", partial);
 					let prefix = *key;
 					key.advance(common);
-					match self.remove_at(child_branch, node_count.map(|p| (p, 0)), key, old_val)? {
+					match self.remove_at(
+						child_branch,
+						node_count.clone().map(|p| (p, 0)),
+						key,
+						old_val,
+					)? {
 						Some((new_child, changed)) => {
 							// if the child branch was unchanged, then the extension is too.
 							// otherwise, this extension may need fixing.

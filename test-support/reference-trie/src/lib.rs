@@ -16,14 +16,24 @@
 
 use hashbrown::{hash_map::Entry, HashMap};
 use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Output};
-use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
+use std::{
+	borrow::Borrow,
+	fmt,
+	iter::once,
+	marker::PhantomData,
+	ops::Range,
+	sync::{
+		atomic::{AtomicBool, AtomicU16, Ordering},
+		Arc,
+	},
+};
 use trie_db::{
 	nibble_ops,
 	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
 	trie_visit,
 	triedbmut::ChildReference,
-	DBValue, NodeCodec, ParentCountFor, Trie, TrieBuilder, TrieConfiguration, TrieDBBuilder,
-	TrieDBMutBuilder, TrieHash, TrieLayout, TrieMut, TrieRoot,
+	CacheCountFor, DBValue, NodeCodec, ParentCountFor, Trie, TrieBuilder, TrieCacheConf,
+	TrieConfiguration, TrieDBBuilder, TrieDBMutBuilder, TrieHash, TrieLayout, TrieMut, TrieRoot,
 };
 pub use trie_root::TrieStream;
 use trie_root::{Hasher, Value as TrieStreamValue};
@@ -1098,7 +1108,8 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
 pub struct TestTrieCache<L: TrieLayout> {
 	/// In a real implementation we need to make sure that this is unique per trie root.
 	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
-	node_cache: HashMap<TrieHash<L>, NodeOwned<TrieHash<L>>>,
+	node_cache: HashMap<TrieHash<L>, (NodeOwned<TrieHash<L>>, ParentCountFor<L>)>,
+	count: CacheCountFor<L>,
 }
 
 impl<L: TrieLayout> TestTrieCache<L> {
@@ -1115,11 +1126,92 @@ impl<L: TrieLayout> TestTrieCache<L> {
 
 impl<L: TrieLayout> Default for TestTrieCache<L> {
 	fn default() -> Self {
-		Self { value_cache: Default::default(), node_cache: Default::default() }
+		Self {
+			value_cache: Default::default(),
+			node_cache: Default::default(),
+			count: Default::default(),
+		}
 	}
 }
 
 impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache<L> {
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&trie_db::CachedValue<TrieHash<L>>> {
+		self.value_cache.get(key)
+	}
+
+	fn cache_value_for_key(&mut self, key: &[u8], value: trie_db::CachedValue<TrieHash<L>>) {
+		self.value_cache.insert(key.to_vec(), value);
+	}
+
+	fn get_or_insert_node(
+		&mut self,
+		hash: TrieHash<L>,
+		_from_parent: Option<(ParentCountFor<L>, usize)>,
+		fetch_node: &mut dyn FnMut() -> trie_db::Result<
+			NodeOwned<TrieHash<L>>,
+			TrieHash<L>,
+			trie_db::CError<L>,
+		>,
+	) -> trie_db::Result<
+		(&NodeOwned<TrieHash<L>>, ParentCountFor<L>),
+		TrieHash<L>,
+		trie_db::CError<L>,
+	> {
+		match self.node_cache.entry(hash) {
+			Entry::Occupied(e) => Ok(e.into_mut()),
+			Entry::Vacant(e) => {
+				let node = (*fetch_node)()?;
+				Ok(e.insert((node, Default::default())))
+			},
+		}
+		.map(|n| (&n.0, n.1.clone()))
+	}
+
+	fn get_node(
+		&mut self,
+		hash: &TrieHash<L>,
+		_from_parent: Option<(ParentCountFor<L>, usize)>,
+	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
+		self.node_cache.get(hash).map(|n| (&n.0, n.1.clone()))
+	}
+}
+
+/// Example trie cache implementation.
+///
+/// Should not be used for anything in production.
+pub struct TestTrieCacheCounted<L: TrieLayout> {
+	/// In a real implementation we need to make sure that this is unique per trie root.
+	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
+	node_cache: HashMap<TrieHash<L>, (NodeOwned<TrieHash<L>>, ParentCountFor<L>)>,
+	count: CacheCountFor<L>,
+}
+
+impl<L: TrieLayout> TestTrieCacheCounted<L> {
+	/// Clear the value cache.
+	pub fn clear_value_cache(&mut self) {
+		self.value_cache.clear();
+	}
+
+	/// Clear the node cache.
+	pub fn clear_node_cache(&mut self) {
+		self.node_cache.clear();
+	}
+}
+
+impl<L: TrieLayout> Default for TestTrieCacheCounted<L> {
+	fn default() -> Self {
+		Self {
+			value_cache: Default::default(),
+			node_cache: Default::default(),
+			count: Default::default(),
+		}
+	}
+}
+
+impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCacheCounted<L>
+where
+	L: TrieLayout<CacheConf = ExampleCounterConfig>,
+{
 	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&trie_db::CachedValue<TrieHash<L>>> {
 		self.value_cache.get(key)
 	}
@@ -1162,6 +1254,37 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 		unimplemented!("TODO")
 		//self.node_cache.get(hash)
 	}
+}
+
+pub struct ExampleCounterConfig;
+
+impl TrieCacheConf for ExampleCounterConfig {
+	type CountProofSize = ExampleCounter;
+	type ParentCountProofSize = ExampleCounterChild;
+}
+
+#[derive(Clone, Default)]
+pub struct ExampleCounter {
+	/// Number of individual nodes registered.
+	pub nodes_count: u32,
+	/// Total size of encoded registered nodes.
+	pub nodes_size: u32,
+	/// Number of detached (not inline) value registered.
+	pub detached_values_count: u32,
+	/// Total size of encoded registered detached values.
+	pub detached_values_size: u32,
+}
+
+#[derive(Clone, Default)]
+pub struct ExampleCounterChild {
+	/// Bitmap of children included in node size.
+	/// When accessing a child from cache, we remove one and
+	/// update nodes_size accordingly.
+	pub children_included: Arc<AtomicU16>,
+	/// Only count this node size on first access.
+	/// Not on real implementation, could be packed with
+	/// other fields under an AtomicU32.
+	pub included: Arc<AtomicBool>,
 }
 
 #[cfg(test)]

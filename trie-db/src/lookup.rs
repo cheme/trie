@@ -346,7 +346,7 @@ where
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
 			let (mut node, count) =
-				cache.get_or_insert_node(hash, self.from_parent, &mut || {
+				cache.get_or_insert_node(hash, self.from_parent.clone(), &mut || {
 					let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
 						Some(value) => value,
 						None =>
