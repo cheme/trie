@@ -679,11 +679,16 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 	fn get_or_insert_node(
 		&mut self,
 		hash: NC::HashOut,
+		from_parent: Option<(CC::ParentCountProofSize, usize)>,
 		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
-	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+	) -> Result<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize), NC::HashOut, NC::Error>;
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
-	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+	fn get_node(
+		&mut self,
+		hash: &NC::HashOut,
+		from_parent: Option<(CC::ParentCountProofSize, usize)>,
+	) -> Option<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize)>;
 }
 
 /// Trait containing all trie cache configuration.
@@ -694,11 +699,15 @@ pub trait TrieCacheConf {
 	type ParentCountProofSize;
 }
 
+/// Accessor for parent child cache counter from a trie layout.
+pub type ParentCountFor<L> = <<L as TrieLayout>::CacheConf as TrieCacheConf>::ParentCountProofSize;
+
 /// Trie cache conf with no count proof size counting.
 impl TrieCacheConf for () {
 	type CountProofSize = ();
 	type ParentCountProofSize = ();
 }
+
 /// A container for storing bytes.
 ///
 /// This uses a reference counted pointer internally, so it is cheap to clone this object.
