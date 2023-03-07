@@ -1264,7 +1264,7 @@ where
 			// TODO count removed hash instead (so estimate is not inside)
 			if is_value {
 				// only 31 due to sep node
-				self.count.nodes_size -= 31;
+				self.count.nodes_size -= 30;
 			} else {
 				// size gain in compact proof from removing a hash
 				// (previously 33bytes after 1bytes)
