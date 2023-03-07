@@ -681,20 +681,25 @@ fn test_record_value() {
 	}
 
 	assert_eq!(count, 2);
+
+	/* TODO restore
 	let compact_proof = {
 		let trie = <TrieDBBuilder<L>>::new(&partial_db, &root).build();
 		encode_compact::<L>(&trie).unwrap()
 	};
-
 	let size_compact = estimate_substrate_size_compact(&compact_proof);
 	let size_count = estimate_substrate_size_count(cache.current_count().unwrap());
-	panic!("{:?}", (size_compact, size_count));
+	*/
 
 	// Value access on node returns three items: a branch a leaf and a value node
 	let mut recorder = Recorder::<L>::new();
+	let mut cache = TestTrieCacheCounted::<L>::default();
 	let overlay = memdb.clone();
 	{
-		let trie = TrieDBBuilder::<L>::new(&overlay, &root).with_recorder(&mut recorder).build();
+		let trie = TrieDBBuilder::<L>::new(&overlay, &root)
+			.with_recorder(&mut recorder)
+			.with_cache(&mut cache)
+			.build();
 
 		trie.get(key_value[1].0.as_slice()).unwrap();
 	}
@@ -708,6 +713,14 @@ fn test_record_value() {
 
 	assert_eq!(count, 3);
 
+	let compact_proof = {
+		let trie = <TrieDBBuilder<L>>::new(&partial_db, &root).build();
+		encode_compact::<L>(&trie).unwrap()
+	};
+	let size_compact = estimate_substrate_size_compact(&compact_proof);
+	let size_count = estimate_substrate_size_count(cache.current_count().unwrap());
+
+	panic!("{:?}", (size_compact, size_count));
 	// Hash access would record two node (branch and leaf with value 32 len inline).
 	let mut recorder = Recorder::<L>::new();
 	let overlay = memdb.clone();

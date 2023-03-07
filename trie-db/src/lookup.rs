@@ -1,4 +1,4 @@
-// Copyright 2017, 2018 Parity Technologies
+// Copyright 2017, 2023 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -347,25 +347,24 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let (mut node, count) =
-				cache.get_or_insert_node(hash, from_parent, &mut || {
-					let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
-						Some(value) => value,
-						None =>
-							return Err(Box::new(match depth {
-								0 => TrieError::InvalidStateRoot(hash),
-								_ => TrieError::IncompleteDatabase(hash),
-							})),
-					};
+			let (mut node, count) = cache.get_or_insert_node(hash, from_parent, &mut || {
+				let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
+					Some(value) => value,
+					None =>
+						return Err(Box::new(match depth {
+							0 => TrieError::InvalidStateRoot(hash),
+							_ => TrieError::IncompleteDatabase(hash),
+						})),
+				};
 
-					let size = node_data.len();
-					let decoded = match L::Codec::decode(&node_data[..]) {
-						Ok(node) => node,
-						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
-					};
+				let size = node_data.len();
+				let decoded = match L::Codec::decode(&node_data[..]) {
+					Ok(node) => node,
+					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+				};
 
-					decoded.to_owned_node::<L>().map(|n| (n, size))
-				})?;
+				decoded.to_owned_node::<L>().map(|n| (n, size))
+			})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });
 
@@ -379,7 +378,7 @@ where
 							drop(node);
 							load_value_owned(
 								value,
-								Some((count, 0)),
+								Some((count, 16)),
 								nibble_key.original_data_as_prefix(),
 								full_key,
 								cache,
@@ -408,7 +407,7 @@ where
 								drop(node);
 								load_value_owned(
 									value,
-									Some((count, 0)),
+									Some((count, 16)),
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,
@@ -448,7 +447,7 @@ where
 								drop(node);
 								load_value_owned(
 									value,
-									Some((count, 0)),
+									Some((count, 16)),
 									nibble_key.original_data_as_prefix(),
 									full_key,
 									cache,

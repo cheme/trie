@@ -23,7 +23,7 @@ use std::{
 	marker::PhantomData,
 	ops::Range,
 	sync::{
-		atomic::{AtomicU16, Ordering},
+		atomic::{AtomicBool, AtomicU16, Ordering},
 		Arc,
 	},
 };
@@ -1233,12 +1233,15 @@ where
 		TrieHash<L>,
 		trie_db::CError<L>,
 	> {
-		let size_update = self.update_parent_size(from_parent);
+		let size_update = self.update_parent_size(from_parent.clone());
+		let mut is_value = false;
 		let result = match self.node_cache.entry(hash) {
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
 				let (node, size) = (*fetch_node)()?;
 				if let NodeOwned::Value(..) = &node {
+					debug_assert!(from_parent.as_ref().map(|p| p.1 == 16).unwrap_or(true));
+					is_value = true;
 					self.count.detached_values_count += 1;
 					self.count.detached_values_size += size as u32;
 				} else {
@@ -1248,16 +1251,25 @@ where
 				let bitmap: u16 = node.children_bitmap();
 				Ok(e.insert((
 					node,
-					ExampleCounterChild { children_included: Arc::new(AtomicU16::new(bitmap)) },
+					ExampleCounterChild {
+						children_included: Arc::new(AtomicU16::new(bitmap)),
+						value_included: Arc::new(AtomicBool::new(true)),
+					},
 				)))
 			},
 		}
 		.map(|n| (&n.0, n.1.clone()));
 
 		if result.is_ok() && size_update {
-			// size gain in compact proof from removing a hash
-			// (previously 33bytes after 1bytes)
-			self.count.nodes_size -= 32;
+			// TODO count removed hash instead (so estimate is not inside)
+			if is_value {
+				// only 31 due to sep node
+				self.count.nodes_size -= 31;
+			} else {
+				// size gain in compact proof from removing a hash
+				// (previously 33bytes after 1bytes)
+				self.count.nodes_size -= 32;
+			}
 		}
 
 		result
@@ -1283,11 +1295,24 @@ where
 {
 	fn update_parent_size(&mut self, from_parent: Option<(ParentCountFor<L>, usize)>) -> bool {
 		if let Some((parent, index)) = from_parent {
-			// atomic consistency is not required here: only one handle on mut cache
-			// could just use unsafe *mut u16 for example counter child.
-			if parent
+			// value node
+			if index == 16 &&
+				parent
+					.value_included
+					.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |already| {
+						if already {
+							Some(false)
+						} else {
+							None
+						}
+					})
+					.is_ok()
+			{
+				return true
+			} else if parent
 				.children_included
 				.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |bitmap| {
+					// could just use unsafe *mut u16 for example counter child.
 					if bitmap & (1 << index) > 0 {
 						Some(bitmap ^ (1 << index))
 					} else {
@@ -1297,7 +1322,7 @@ where
 				.is_ok()
 			{
 				return true
-			};
+			}
 		}
 		false
 	}
@@ -1328,6 +1353,8 @@ pub struct ExampleCounterChild {
 	/// When accessing a child from cache, we remove one and
 	/// update nodes_size accordingly.
 	pub children_included: Arc<AtomicU16>,
+	/// true until a value hash (index is 16) is accessed.
+	pub value_included: Arc<AtomicBool>,
 }
 
 #[cfg(test)]

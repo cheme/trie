@@ -351,6 +351,9 @@ where
 
 	/// Returns a bitmap of present child.
 	pub fn children_bitmap(&self) -> u16 {
+		if let Self::Extension(..) = self {
+			return 0u16 | 1 << 0
+		}
 		let mut bitmap = 0u16;
 		self.child_iter().for_each(|(index, _)| {
 			let index = index.unwrap_or(0) as usize;
