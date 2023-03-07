@@ -680,15 +680,25 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 		&mut self,
 		hash: NC::HashOut,
 		from_parent: Option<(CC::ParentCountProofSize, usize)>,
-		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
+		fetch_node: &mut dyn FnMut() -> Result<
+			(NodeOwned<NC::HashOut>, usize),
+			NC::HashOut,
+			NC::Error,
+		>,
 	) -> Result<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize), NC::HashOut, NC::Error>;
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
 	fn get_node(
 		&mut self,
 		hash: &NC::HashOut,
+		// TODO from_parent here is unused: since we need to keep
+		// all infos, then this is always use at first get_or_insert_node
+		// only.
 		from_parent: Option<(CC::ParentCountProofSize, usize)>,
 	) -> Option<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize)>;
+
+	/// If supported by implementation, return the current proof size count.
+	fn current_count(&self) -> Option<&CC::CountProofSize>;
 }
 
 /// Trait containing all trie cache configuration.

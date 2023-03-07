@@ -1946,10 +1946,16 @@ where
 		// If we have a cache, cache our node directly.
 		if let Some(cache) = self.cache.as_mut() {
 			let node = cache.get_or_insert_node(hash, from_parent, &mut || {
-				Ok(L::Codec::decode(&encoded)
-					.ok()
-					.and_then(|n| n.to_owned_node::<L>().ok())
-					.expect("Just encoded the node, so it should decode without any errors; qed"))
+				let size = encoded.len();
+				Ok((
+					L::Codec::decode(&encoded)
+						.ok()
+						.and_then(|n| n.to_owned_node::<L>().ok())
+						.expect(
+							"Just encoded the node, so it should decode without any errors; qed",
+						),
+					size,
+				))
 			});
 
 			// `node` should always be `OK`, but let's play it safe.
@@ -2013,7 +2019,8 @@ where
 			// `get_or_insert` should always return `Ok`, but be safe.
 			let value = if let Ok(value) = cache
 				.get_or_insert_node(hash, from_parent, &mut || {
-					Ok(NodeOwned::Value(value.clone(), hash))
+					let size = value.len();
+					Ok((NodeOwned::Value(value.clone(), hash), size))
 				})
 				.map(|n| n.0.data().cloned())
 			{

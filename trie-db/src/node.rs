@@ -349,6 +349,16 @@ where
 		}
 	}
 
+	/// Returns a bitmap of present child.
+	pub fn children_bitmap(&self) -> u16 {
+		let mut bitmap = 0u16;
+		self.child_iter().for_each(|(index, _)| {
+			let index = index.unwrap_or(0) as usize;
+			bitmap |= 1 << index;
+		});
+		bitmap
+	}
+
 	/// Returns the hash of the data attached to this node.
 	pub fn data_hash(&self) -> Option<H> {
 		match &self {

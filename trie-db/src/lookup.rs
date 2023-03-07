@@ -103,8 +103,9 @@ where
 					let value = db
 						.get(&hash, prefix)
 						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
+					let size = value.len();
 
-					Ok(NodeOwned::Value(value.into(), hash))
+					Ok((NodeOwned::Value(value.into(), hash), size))
 				})?;
 
 				let value = node
@@ -356,12 +357,13 @@ where
 							})),
 					};
 
+					let size = node_data.len();
 					let decoded = match L::Codec::decode(&node_data[..]) {
 						Ok(node) => node,
 						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
 					};
 
-					decoded.to_owned_node::<L>()
+					decoded.to_owned_node::<L>().map(|n| (n, size))
 				})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });

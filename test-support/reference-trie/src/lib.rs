@@ -23,7 +23,7 @@ use std::{
 	marker::PhantomData,
 	ops::Range,
 	sync::{
-		atomic::{AtomicBool, AtomicU16, Ordering},
+		atomic::{AtomicU16, Ordering},
 		Arc,
 	},
 };
@@ -1109,7 +1109,6 @@ pub struct TestTrieCache<L: TrieLayout> {
 	/// In a real implementation we need to make sure that this is unique per trie root.
 	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
 	node_cache: HashMap<TrieHash<L>, (NodeOwned<TrieHash<L>>, ParentCountFor<L>)>,
-	count: CacheCountFor<L>,
 }
 
 impl<L: TrieLayout> TestTrieCache<L> {
@@ -1126,11 +1125,7 @@ impl<L: TrieLayout> TestTrieCache<L> {
 
 impl<L: TrieLayout> Default for TestTrieCache<L> {
 	fn default() -> Self {
-		Self {
-			value_cache: Default::default(),
-			node_cache: Default::default(),
-			count: Default::default(),
-		}
+		Self { value_cache: Default::default(), node_cache: Default::default() }
 	}
 }
 
@@ -1148,7 +1143,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 		hash: TrieHash<L>,
 		_from_parent: Option<(ParentCountFor<L>, usize)>,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
-			NodeOwned<TrieHash<L>>,
+			(NodeOwned<TrieHash<L>>, usize),
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
@@ -1161,7 +1156,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
 				let node = (*fetch_node)()?;
-				Ok(e.insert((node, Default::default())))
+				Ok(e.insert((node.0, Default::default())))
 			},
 		}
 		.map(|n| (&n.0, n.1.clone()))
@@ -1173,6 +1168,10 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 		_from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
 		self.node_cache.get(hash).map(|n| (&n.0, n.1.clone()))
+	}
+
+	fn current_count(&self) -> Option<&CacheCountFor<L>> {
+		None
 	}
 }
 
@@ -1223,9 +1222,9 @@ where
 	fn get_or_insert_node(
 		&mut self,
 		hash: TrieHash<L>,
-		_from_parent: Option<(ParentCountFor<L>, usize)>,
+		from_parent: Option<(ParentCountFor<L>, usize)>,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
-			NodeOwned<TrieHash<L>>,
+			(NodeOwned<TrieHash<L>>, usize),
 			TrieHash<L>,
 			trie_db::CError<L>,
 		>,
@@ -1234,16 +1233,34 @@ where
 		TrieHash<L>,
 		trie_db::CError<L>,
 	> {
-		unimplemented!("TODO")
-		/*
-		match self.node_cache.entry(hash) {
+		let size_update = self.update_parent_size(from_parent);
+		let result = match self.node_cache.entry(hash) {
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
-				let node = (*fetch_node)()?;
-				Ok(e.insert(node))
+				let (node, size) = (*fetch_node)()?;
+				if let NodeOwned::Value(..) = &node {
+					self.count.detached_values_count += 1;
+					self.count.detached_values_size += size as u32;
+				} else {
+					self.count.nodes_count += 1;
+					self.count.nodes_size += size as u32;
+				}
+				let bitmap: u16 = node.children_bitmap();
+				Ok(e.insert((
+					node,
+					ExampleCounterChild { children_included: Arc::new(AtomicU16::new(bitmap)) },
+				)))
 			},
 		}
-			*/
+		.map(|n| (&n.0, n.1.clone()));
+
+		if result.is_ok() && size_update {
+			// size gain in compact proof from removing a hash
+			// (previously 33bytes after 1bytes)
+			self.count.nodes_size -= 32;
+		}
+
+		result
 	}
 
 	fn get_node(
@@ -1251,8 +1268,38 @@ where
 		hash: &TrieHash<L>,
 		from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
-		unimplemented!("TODO")
-		//self.node_cache.get(hash)
+		debug_assert!(!self.update_parent_size(from_parent));
+		self.node_cache.get(hash).map(|n| (&n.0, n.1.clone()))
+	}
+
+	fn current_count(&self) -> Option<&CacheCountFor<L>> {
+		Some(&self.count)
+	}
+}
+
+impl<L: TrieLayout> TestTrieCacheCounted<L>
+where
+	L: TrieLayout<CacheConf = ExampleCounterConfig>,
+{
+	fn update_parent_size(&mut self, from_parent: Option<(ParentCountFor<L>, usize)>) -> bool {
+		if let Some((parent, index)) = from_parent {
+			// atomic consistency is not required here: only one handle on mut cache
+			// could just use unsafe *mut u16 for example counter child.
+			if parent
+				.children_included
+				.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |bitmap| {
+					if bitmap & (1 << index) > 0 {
+						Some(bitmap ^ (1 << index))
+					} else {
+						None
+					}
+				})
+				.is_ok()
+			{
+				return true
+			};
+		}
+		false
 	}
 }
 
@@ -1281,10 +1328,6 @@ pub struct ExampleCounterChild {
 	/// When accessing a child from cache, we remove one and
 	/// update nodes_size accordingly.
 	pub children_included: Arc<AtomicU16>,
-	/// Only count this node size on first access.
-	/// Not on real implementation, could be packed with
-	/// other fields under an AtomicU32.
-	pub included: Arc<AtomicBool>,
 }
 
 #[cfg(test)]
