@@ -19,13 +19,14 @@ use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 use log::debug;
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	reference_trie_root, test_layouts, ExampleCounterConfig, ExtensionLayout, HashedValueNoExt,
+	estimate_substrate_size_compact, estimate_substrate_size_count, reference_trie_root,
+	test_layouts, ExampleCounterConfig, ExtensionLayout, HashedValueNoExt,
 	HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
-	ReferenceNodeCodecNoExt, TestTrieCache,
+	ReferenceNodeCodecNoExt, TestTrieCache, TestTrieCacheCounted,
 };
 use trie_db::{
-	DBValue, NodeCodec, Recorder, Trie, TrieCache, TrieDBBuilder, TrieDBMut, TrieDBMutBuilder,
-	TrieError, TrieLayout, TrieMut, Value,
+	encode_compact, DBValue, NodeCodec, Recorder, Trie, TrieCache, TrieDBBuilder, TrieDBMut,
+	TrieDBMutBuilder, TrieError, TrieLayout, TrieMut, Value,
 };
 use trie_standardmap::*;
 
@@ -722,7 +723,6 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 		(b"AB".to_vec(), vec![3; 64]),
 		(b"B".to_vec(), vec![4; 64]),
 	];
-
 	// Add some initial data to the trie
 	let mut memdb = PrefixedMemoryDB::<T>::default();
 	let mut root = Default::default();
@@ -772,7 +772,6 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 	for record in recorder.drain() {
 		partial_db.insert(EMPTY_PREFIX, &record.data);
 	}
-
 	// Replay the it, but this time we use the proof.
 	let mut validated_root = root;
 	{
@@ -785,6 +784,82 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 	}
 
 	assert_eq!(new_root, validated_root);
+}
+
+#[test]
+fn test_recorder_with_cache_proof_size() {
+	let key_value = vec![
+		(b"A".to_vec(), vec![1; 64]),
+		(b"AA".to_vec(), vec![2; 64]),
+		(b"AB".to_vec(), vec![3; 64]),
+		(b"B".to_vec(), vec![4; 64]),
+	];
+
+	test_recorder_with_cache_proof_size_inner(key_value);
+	// TODO fix split
+	// TODO fix rem
+	// TODO fix rem then merge
+}
+// TODO second play (remove all existing then reinsert then check phoof)
+fn test_recorder_with_cache_proof_size_inner(key_value: Vec<(Vec<u8>, Vec<u8>)>) {
+	type T = HashedValueNoExtThreshold<33, ExampleCounterConfig>;
+	// Add some initial data to the trie
+	let mut memdb = PrefixedMemoryDB::<T>::default();
+	let mut root = Default::default();
+	{
+		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		for (key, value) in key_value.iter().take(1) {
+			t.insert(key, value).unwrap();
+		}
+	}
+
+	let mut cache = TestTrieCache::<T>::default();
+
+	{
+		let trie = TrieDBBuilder::<T>::new(&memdb, &root).with_cache(&mut cache).build();
+
+		// Only read one entry.
+		assert_eq!(key_value[0].1, trie.get(&key_value[0].0).unwrap().unwrap());
+	}
+
+	// Root should now be cached.
+	assert!(cache.get_node(&root, None).is_some());
+
+	// Add more data, but this time only to the overlay.
+	// While doing that we record all trie accesses to replay this operation.
+	let mut recorder = Recorder::<T>::new();
+	let mut cache = TestTrieCacheCounted::<T>::default();
+	let mut overlay = memdb.clone();
+	let mut new_root = root;
+	{
+		let mut trie = TrieDBMutBuilder::<T>::from_existing(&mut overlay, &mut new_root)
+			.with_recorder(&mut recorder)
+			.with_cache(&mut cache)
+			.build();
+
+		for (key, value) in key_value.iter().skip(1) {
+			trie.insert(key, value).unwrap();
+		}
+	}
+
+	for (key, value) in key_value.iter().skip(1) {
+		let cached_value = cache.lookup_value_for_key(key).unwrap();
+
+		assert_eq!(value, cached_value.data().flatten().unwrap().deref());
+	}
+
+	let mut partial_db = MemoryDBProof::<T>::default();
+	for record in recorder.drain() {
+		partial_db.insert(EMPTY_PREFIX, &record.data);
+	}
+
+	let compact_proof = {
+		let trie = <TrieDBBuilder<T>>::new(&partial_db, &root).build();
+		encode_compact::<T>(&trie).unwrap()
+	};
+	let size_compact = estimate_substrate_size_compact(&compact_proof);
+	let size_count = estimate_substrate_size_count(cache.current_count().unwrap());
+	assert_eq!(size_compact, size_count);
 }
 
 test_layouts!(test_insert_remove_data_with_cache, test_insert_remove_data_with_cache_internal);
