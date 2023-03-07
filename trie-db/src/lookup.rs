@@ -342,12 +342,13 @@ where
 	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
 		let mut partial = nibble_key;
 		let mut hash = self.hash;
+		let mut from_parent = self.from_parent.clone();
 		let mut key_nibbles = 0;
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
 			let (mut node, count) =
-				cache.get_or_insert_node(hash, self.from_parent.clone(), &mut || {
+				cache.get_or_insert_node(hash, from_parent, &mut || {
 					let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
 						Some(value) => value,
 						None =>
@@ -395,7 +396,7 @@ where
 						if partial.starts_with_vec(&slice) {
 							partial = partial.mid(slice.len());
 							key_nibbles += slice.len();
-							item
+							(item, 0)
 						} else {
 							self.record(|| TrieAccess::NonExisting { full_key });
 
@@ -421,11 +422,12 @@ where
 								Ok(None)
 							}
 						} else {
-							match &children[partial.at(0) as usize] {
+							let ix = partial.at(0) as usize;
+							match &children[ix] {
 								Some(x) => {
 									partial = partial.mid(1);
 									key_nibbles += 1;
-									x
+									(x, ix)
 								},
 								None => {
 									self.record(|| TrieAccess::NonExisting { full_key });
@@ -460,11 +462,12 @@ where
 								Ok(None)
 							}
 						} else {
-							match &children[partial.at(slice.len()) as usize] {
+							let ix = partial.at(slice.len()) as usize;
+							match &children[ix] {
 								Some(x) => {
 									partial = partial.mid(slice.len() + 1);
 									key_nibbles += slice.len() + 1;
-									x
+									(x, ix)
 								},
 								None => {
 									self.record(|| TrieAccess::NonExisting { full_key });
@@ -489,9 +492,10 @@ where
 				};
 
 				// check if new node data is inline or hash.
-				match next_node {
+				match next_node.0 {
 					NodeHandleOwned::Hash(new_hash) => {
 						hash = *new_hash;
+						from_parent = Some((count, next_node.1));
 						break
 					},
 					NodeHandleOwned::Inline(inline_node) => {

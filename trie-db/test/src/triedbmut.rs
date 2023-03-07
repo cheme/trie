@@ -19,7 +19,7 @@ use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 use log::debug;
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	reference_trie_root, test_layouts, ExtensionLayout, HashedValueNoExt,
+	reference_trie_root, test_layouts, ExampleCounterConfig, ExtensionLayout, HashedValueNoExt,
 	HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
 	ReferenceNodeCodecNoExt, TestTrieCache,
 };
@@ -73,7 +73,7 @@ fn reference_hashed_null_node<T: TrieLayout>() -> <T::Hash as Hasher>::Out {
 #[test]
 fn playpen() {
 	env_logger::init();
-	playpen_internal::<HashedValueNoExtThreshold<1, ()>>(); // TODO switch to counter
+	playpen_internal::<HashedValueNoExtThreshold<1, ExampleCounterConfig>>();
 	playpen_internal::<HashedValueNoExt>();
 	playpen_internal::<NoExtensionLayout>();
 	playpen_internal::<ExtensionLayout>();

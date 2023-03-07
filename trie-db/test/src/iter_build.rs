@@ -14,8 +14,8 @@
 
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	test_layouts, ExtensionLayout, HashedValueNoExt, HashedValueNoExtThreshold, NoExtensionLayout,
-	RefHasher,
+	test_layouts, ExampleCounterConfig, ExtensionLayout, HashedValueNoExt,
+	HashedValueNoExtThreshold, NoExtensionLayout, RefHasher,
 };
 use trie_db::{DBValue, Trie, TrieDBBuilder, TrieDBMutBuilder, TrieLayout, TrieMut};
 
@@ -61,7 +61,7 @@ fn test_iter<T: TrieLayout>(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	}
 }
 
-type CacheCounter = (); // TODO switch to cache counter
+type CacheCounter = ExampleCounterConfig;
 fn compare_implementations(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	test_iter::<HashedValueNoExtThreshold<1, CacheCounter>>(data.clone());
 	test_iter::<HashedValueNoExt>(data.clone());

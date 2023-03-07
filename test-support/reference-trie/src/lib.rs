@@ -58,7 +58,7 @@ macro_rules! test_layouts {
 		#[test]
 		fn $test() {
 			eprintln!("Running with layout `HashedValueNoExtThreshold`");
-			$test_internal::<$crate::HashedValueNoExtThreshold<1, ()>>(); // TODO switch to actual cache counter
+			$test_internal::<$crate::HashedValueNoExtThreshold<1, $crate::ExampleCounterConfig>>();
 			eprintln!("Running with layout `HashedValueNoExt`");
 			$test_internal::<$crate::HashedValueNoExt>();
 			eprintln!("Running with layout `NoExtensionLayout`");
@@ -1396,4 +1396,24 @@ mod tests {
 			assert_eq!(s_dec, Ok(sizes[i]));
 		}
 	}
+}
+
+/// Estimate
+pub fn estimate_substrate_size_compact(compact_proof: &[Vec<u8>]) -> usize {
+	let mut size = 0;
+	// nodes are small so only 1 byte for size
+	compact_proof.iter().for_each(|n| size += n.len() + 1);
+	size
+}
+
+/// Estimate
+pub fn estimate_substrate_size_count(count: &ExampleCounter) -> usize {
+	let mut size = 0;
+	// nodes are small so only 1 byte for size
+	size += count.nodes_count as usize;
+	// here we may be a few byte lower for big values
+	size += count.detached_values_count as usize;
+	size += count.nodes_size as usize;
+	size += count.detached_values_size as usize;
+	size
 }
