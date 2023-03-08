@@ -1142,6 +1142,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 		&mut self,
 		hash: TrieHash<L>,
 		_from_parent: Option<(ParentCountFor<L>, usize)>,
+		_count_size: bool,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
 			(NodeOwned<TrieHash<L>>, usize),
 			TrieHash<L>,
@@ -1171,6 +1172,16 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 	}
 
 	fn current_count(&self) -> Option<&CacheCountFor<L>> {
+		None
+	}
+
+	fn register_count(
+		&mut self,
+		_is_value: bool,
+		_node_size: usize,
+		_children_bitmap: u16,
+		_from_parent: Option<(ParentCountFor<L>, usize)>,
+	) -> Option<ParentCountFor<L>> {
 		None
 	}
 }
@@ -1223,6 +1234,7 @@ where
 		&mut self,
 		hash: TrieHash<L>,
 		from_parent: Option<(ParentCountFor<L>, usize)>,
+		count_size: bool,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
 			(NodeOwned<TrieHash<L>>, usize),
 			TrieHash<L>,
@@ -1239,14 +1251,16 @@ where
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
 				let (node, size) = (*fetch_node)()?;
-				if let NodeOwned::Value(..) = &node {
-					debug_assert!(from_parent.as_ref().map(|p| p.1 == 16).unwrap_or(true));
-					is_value = true;
-					self.count.detached_values_count += 1;
-					self.count.detached_values_size += size as u32;
-				} else {
-					self.count.nodes_count += 1;
-					self.count.nodes_size += size as u32;
+				if count_size {
+					if let NodeOwned::Value(..) = &node {
+						debug_assert!(from_parent.as_ref().map(|p| p.1 == 16).unwrap_or(true));
+						is_value = true;
+						self.count.detached_values_count += 1;
+						self.count.detached_values_size += size as u32;
+					} else {
+						self.count.nodes_count += 1;
+						self.count.nodes_size += size as u32;
+					}
 				}
 				let bitmap: u16 = node.children_bitmap();
 				Ok(e.insert((
@@ -1286,6 +1300,38 @@ where
 
 	fn current_count(&self) -> Option<&CacheCountFor<L>> {
 		Some(&self.count)
+	}
+
+	fn register_count(
+		&mut self,
+		is_value: bool,
+		node_size: usize,
+		children_bitmap: u16,
+		from_parent: Option<(ParentCountFor<L>, usize)>,
+	) -> Option<ParentCountFor<L>> {
+		if self.update_parent_size(from_parent.clone()) {
+			// TODO count removed hash instead (so estimate is not inside)
+			if is_value {
+				// only 31 due to sep node
+				self.count.nodes_size -= 30;
+			} else {
+				// size gain in compact proof from removing a hash
+				// (previously 33bytes after 1bytes)
+				self.count.nodes_size -= 32;
+			}
+		}
+		if is_value {
+			debug_assert!(from_parent.as_ref().map(|p| p.1 == 16).unwrap_or(true));
+			self.count.detached_values_count += 1;
+			self.count.detached_values_size += node_size as u32;
+		} else {
+			self.count.nodes_count += 1;
+			self.count.nodes_size += node_size as u32;
+		}
+		Some(ExampleCounterChild {
+			children_included: Arc::new(AtomicU16::new(children_bitmap)),
+			value_included: Arc::new(AtomicBool::new(true)),
+		})
 	}
 }
 

@@ -510,6 +510,23 @@ impl<L: TrieLayout> Node<L> {
 			Self::Extension(key, _) => Some(key),
 		}
 	}
+
+	/// Returns a bitmap of present child.
+	pub fn children_bitmap(&self) -> u16 {
+		if let Self::Extension(..) = self {
+			return 0u16 | 1 << 0
+		}
+		if let Node::Branch(children, _) | Node::NibbledBranch(_, children, _) = self {
+			let mut bitmap = 0u16;
+			children.iter().enumerate().for_each(|(index, node)| {
+				if let Some(NodeHandle::Hash(_)) = node {
+					bitmap |= 1 << index;
+				}
+			});
+			return bitmap
+		}
+		0u16
+	}
 }
 
 // post-inspect action.
@@ -551,7 +568,7 @@ enum Stored<L: TrieLayout> {
 	// A new node.
 	New(Node<L>),
 	// A cached node, loaded from the DB.
-	Cached(Node<L>, TrieHash<L>),
+	Cached(Node<L>, TrieHash<L>, Option<ParentCountFor<L>>),
 }
 
 /// Used to build a collection of child nodes from a collection of `NodeHandle`s
@@ -629,7 +646,7 @@ impl<'a, L: TrieLayout> Index<&'a StorageHandle> for NodeStorage<L> {
 	fn index(&self, handle: &'a StorageHandle) -> &Node<L> {
 		match self.nodes[handle.0] {
 			Stored::New(ref node) => node,
-			Stored::Cached(ref node, _) => node,
+			Stored::Cached(ref node, ..) => node,
 		}
 	}
 }
@@ -778,11 +795,12 @@ where
 		key: Prefix,
 	) -> Result<(StorageHandle, Option<ParentCountFor<L>>), TrieHash<L>, CError<L>> {
 		let mut accessed_parent_count = None;
+		let from_parent_clone = from_parent.clone();
 		// We only check the `cache` for a node with `get_node` and don't insert
 		// the node if it wasn't there, because in substrate we only access the node while computing
 		// a new trie (aka some branch). We assume that this node isn't that important
 		// to have it being cached.
-		let node = match self.cache.as_mut().and_then(|c| c.get_node(&hash, from_parent)) {
+		let node = match self.cache.as_mut().and_then(|c| c.get_node(&hash, from_parent_clone)) {
 			Some((node, node_parent_count)) => {
 				accessed_parent_count = Some(node_parent_count);
 				if let Some(recorder) = self.recorder.as_mut() {
@@ -804,11 +822,25 @@ where
 					});
 				}
 
-				Node::from_encoded(hash, &node_encoded, &mut self.storage)?
+				let node = Node::from_encoded(hash, &node_encoded, &mut self.storage)?;
+				if let Some(cache) = self.cache.as_mut() {
+					let node_bitmap = node.children_bitmap();
+					let is_value = false; // TODO register value!!
+					accessed_parent_count = cache.register_count(
+						is_value,
+						node_encoded.len(),
+						node_bitmap,
+						from_parent,
+					);
+				}
+				node
 			},
 		};
 
-		Ok((self.storage.alloc(Stored::Cached(node, hash)), accessed_parent_count))
+		Ok((
+			self.storage.alloc(Stored::Cached(node, hash, accessed_parent_count.clone())),
+			accessed_parent_count,
+		))
 	}
 
 	// Inspect a node, choosing either to replace, restore, or delete it.
@@ -833,8 +865,8 @@ where
 				Action::Replace(node) => Some((Stored::New(node), true)),
 				Action::Delete => None,
 			},
-			Stored::Cached(node, hash) => match inspector(self, node, key)? {
-				Action::Restore(node) => Some((Stored::Cached(node, hash), false)),
+			Stored::Cached(node, hash, node_count) => match inspector(self, node, key)? {
+				Action::Restore(node) => Some((Stored::Cached(node, hash, node_count), false)),
 				Action::Replace(node) => {
 					self.death_row.insert((hash, current_key.left_owned()));
 					Some((Stored::New(node), true))
@@ -1726,7 +1758,7 @@ where
 						};
 						let child_node = match stored {
 							Stored::New(node) => node,
-							Stored::Cached(node, hash) => {
+							Stored::Cached(node, hash, _count) => {
 								self.death_row
 									.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
 								node
@@ -1811,9 +1843,9 @@ where
 					},
 				};
 
-				let (child_node, maybe_hash) = match stored {
-					Stored::New(node) => (node, None),
-					Stored::Cached(node, hash) => (node, Some(hash)),
+				let (child_node, maybe_hash, count) = match stored {
+					Stored::New(node) => (node, None, None),
+					Stored::Cached(node, hash, count) => (node, Some(hash), count),
 				};
 
 				match child_node {
@@ -1860,7 +1892,7 @@ where
 
 						// reallocate the child node.
 						let stored = if let Some(hash) = maybe_hash {
-							Stored::Cached(child_node, hash)
+							Stored::Cached(child_node, hash, count)
 						} else {
 							Stored::New(child_node)
 						};
@@ -1905,7 +1937,7 @@ where
 					match node {
 						NodeToEncode::Node(value) => {
 							let value_hash = self.db.insert(k.as_prefix(), value);
-							self.cache_value(None, k.inner(), value, value_hash);
+							self.cache_value(k.inner(), value, value_hash);
 							k.drop_lasts(mov);
 							ChildReference::Hash(value_hash)
 						},
@@ -1922,30 +1954,24 @@ where
 				*self.root = self.db.insert(EMPTY_PREFIX, &encoded_root);
 				self.hash_count += 1;
 
-				self.cache_node(*self.root, None, &encoded_root, full_key);
+				self.cache_node(*self.root, &encoded_root, full_key);
 
 				self.root_handle = NodeHandle::Hash(*self.root);
 			},
-			Stored::Cached(node, hash) => {
+			Stored::Cached(node, hash, count) => {
 				// probably won't happen, but update the root and move on.
 				*self.root = hash;
 				self.root_handle =
-					NodeHandle::InMemory(self.storage.alloc(Stored::Cached(node, hash)));
+					NodeHandle::InMemory(self.storage.alloc(Stored::Cached(node, hash, count)));
 			},
 		}
 	}
 
 	/// Cache the given `encoded` node.
-	fn cache_node(
-		&mut self,
-		hash: TrieHash<L>,
-		from_parent: Option<(ParentCountFor<L>, usize)>,
-		encoded: &[u8],
-		full_key: Option<NibbleVec>,
-	) {
+	fn cache_node(&mut self, hash: TrieHash<L>, encoded: &[u8], full_key: Option<NibbleVec>) {
 		// If we have a cache, cache our node directly.
 		if let Some(cache) = self.cache.as_mut() {
-			let node = cache.get_or_insert_node(hash, from_parent, &mut || {
+			let node = cache.get_or_insert_node(hash, None, false, &mut || {
 				let size = encoded.len();
 				Ok((
 					L::Codec::decode(&encoded)
@@ -2006,19 +2032,13 @@ where
 	/// Cache the given `value`.
 	///
 	/// `hash` is the hash of `value`.
-	fn cache_value(
-		&mut self,
-		from_parent: Option<(ParentCountFor<L>, usize)>,
-		full_key: &[u8],
-		value: impl Into<Bytes>,
-		hash: TrieHash<L>,
-	) {
+	fn cache_value(&mut self, full_key: &[u8], value: impl Into<Bytes>, hash: TrieHash<L>) {
 		if let Some(cache) = self.cache.as_mut() {
 			let value = value.into();
 
 			// `get_or_insert` should always return `Ok`, but be safe.
 			let value = if let Ok(value) = cache
-				.get_or_insert_node(hash, from_parent, &mut || {
+				.get_or_insert_node(hash, None, false, &mut || {
 					let size = value.len();
 					Ok((NodeOwned::Value(value.clone(), hash), size))
 				})
@@ -2049,7 +2069,7 @@ where
 			NodeHandle::Hash(hash) => ChildReference::Hash(hash),
 			NodeHandle::InMemory(storage_handle) => {
 				match self.storage.destroy(storage_handle) {
-					Stored::Cached(_, hash) => ChildReference::Hash(hash),
+					Stored::Cached(_, hash, _) => ChildReference::Hash(hash),
 					Stored::New(node) => {
 						// Reconstructs the full key
 						let full_key = self.cache.as_ref().and_then(|_| {
@@ -2069,7 +2089,7 @@ where
 									NodeToEncode::Node(value) => {
 										let value_hash = self.db.insert(prefix.as_prefix(), value);
 
-										self.cache_value(None, prefix.inner(), value, value_hash);
+										self.cache_value(prefix.inner(), value, value_hash);
 
 										prefix.drop_lasts(mov);
 										ChildReference::Hash(value_hash)
@@ -2087,7 +2107,7 @@ where
 							let hash = self.db.insert(prefix.as_prefix(), &encoded);
 							self.hash_count += 1;
 
-							self.cache_node(hash, None, &encoded, full_key);
+							self.cache_node(hash, &encoded, full_key);
 
 							ChildReference::Hash(hash)
 						} else {

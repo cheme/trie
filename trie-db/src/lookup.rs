@@ -99,14 +99,15 @@ where
 		match v {
 			ValueOwned::Inline(value, hash) => Ok((value.clone(), hash)),
 			ValueOwned::Node(hash) => {
-				let (node, _count) = cache.get_or_insert_node(hash, from_parent, &mut || {
-					let value = db
-						.get(&hash, prefix)
-						.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
-					let size = value.len();
+				let (node, _count) =
+					cache.get_or_insert_node(hash, from_parent, true, &mut || {
+						let value = db
+							.get(&hash, prefix)
+							.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
+						let size = value.len();
 
-					Ok((NodeOwned::Value(value.into(), hash), size))
-				})?;
+						Ok((NodeOwned::Value(value.into(), hash), size))
+					})?;
 
 				let value = node
 					.data()
@@ -347,24 +348,25 @@ where
 
 		// this loop iterates through non-inline nodes.
 		for depth in 0.. {
-			let (mut node, count) = cache.get_or_insert_node(hash, from_parent, &mut || {
-				let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
-					Some(value) => value,
-					None =>
-						return Err(Box::new(match depth {
-							0 => TrieError::InvalidStateRoot(hash),
-							_ => TrieError::IncompleteDatabase(hash),
-						})),
-				};
+			let (mut node, count) =
+				cache.get_or_insert_node(hash, from_parent, true, &mut || {
+					let node_data = match self.db.get(&hash, nibble_key.mid(key_nibbles).left()) {
+						Some(value) => value,
+						None =>
+							return Err(Box::new(match depth {
+								0 => TrieError::InvalidStateRoot(hash),
+								_ => TrieError::IncompleteDatabase(hash),
+							})),
+					};
 
-				let size = node_data.len();
-				let decoded = match L::Codec::decode(&node_data[..]) {
-					Ok(node) => node,
-					Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
-				};
+					let size = node_data.len();
+					let decoded = match L::Codec::decode(&node_data[..]) {
+						Ok(node) => node,
+						Err(e) => return Err(Box::new(TrieError::DecoderError(hash, e))),
+					};
 
-				decoded.to_owned_node::<L>().map(|n| (n, size))
-			})?;
+					decoded.to_owned_node::<L>().map(|n| (n, size))
+				})?;
 
 			self.record(|| TrieAccess::NodeOwned { hash, node_owned: node });
 

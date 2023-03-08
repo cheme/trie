@@ -680,6 +680,7 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 		&mut self,
 		hash: NC::HashOut,
 		from_parent: Option<(CC::ParentCountProofSize, usize)>,
+		count_size: bool,
 		fetch_node: &mut dyn FnMut() -> Result<
 			(NodeOwned<NC::HashOut>, usize),
 			NC::HashOut,
@@ -696,6 +697,14 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 		// only.
 		from_parent: Option<(CC::ParentCountProofSize, usize)>,
 	) -> Option<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize)>;
+
+	fn register_count(
+		&mut self,
+		is_value: bool,
+		node_size: usize,
+		children_bitmap: u16,
+		from_parent: Option<(CC::ParentCountProofSize, usize)>,
+	) -> Option<CC::ParentCountProofSize>;
 
 	/// If supported by implementation, return the current proof size count.
 	fn current_count(&self) -> Option<&CC::CountProofSize>;

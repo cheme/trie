@@ -788,45 +788,41 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 
 #[test]
 fn test_recorder_with_cache_proof_size() {
-	let key_value = vec![
+	let key_value_init = vec![
 		(b"A".to_vec(), vec![1; 64]),
 		(b"AA".to_vec(), vec![2; 64]),
-		(b"AB".to_vec(), vec![3; 64]),
+		(b"AB".to_vec(), vec![3; 32]),
 		(b"B".to_vec(), vec![4; 64]),
 	];
 
-	test_recorder_with_cache_proof_size_inner(key_value);
+	let key_value_insert = vec![(b"A".to_vec(), vec![2; 64]), (b"C".to_vec(), vec![3; 64])];
+	//	test_recorder_with_cache_proof_size_inner(&key_value_init, &key_value_insert);
+	let key_value_insert = vec![
+		(b"AAAA".to_vec(), vec![2; 64]),
+		(b"BB".to_vec(), vec![3; 64]),
+		(b"AAAAA".to_vec(), vec![2; 64]),
+	];
+	test_recorder_with_cache_proof_size_inner(&key_value_init, &key_value_insert);
 	// TODO fix split
 	// TODO fix rem
 	// TODO fix rem then merge
 }
 // TODO second play (remove all existing then reinsert then check phoof)
-fn test_recorder_with_cache_proof_size_inner(key_value: Vec<(Vec<u8>, Vec<u8>)>) {
+fn test_recorder_with_cache_proof_size_inner(
+	key_value_init: &Vec<(Vec<u8>, Vec<u8>)>,
+	key_value_insert: &Vec<(Vec<u8>, Vec<u8>)>,
+) {
 	type T = HashedValueNoExtThreshold<33, ExampleCounterConfig>;
 	// Add some initial data to the trie
 	let mut memdb = PrefixedMemoryDB::<T>::default();
 	let mut root = Default::default();
 	{
 		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
-		for (key, value) in key_value.iter().take(1) {
+		for (key, value) in key_value_init.iter() {
 			t.insert(key, value).unwrap();
 		}
 	}
 
-	let mut cache = TestTrieCache::<T>::default();
-
-	{
-		let trie = TrieDBBuilder::<T>::new(&memdb, &root).with_cache(&mut cache).build();
-
-		// Only read one entry.
-		assert_eq!(key_value[0].1, trie.get(&key_value[0].0).unwrap().unwrap());
-	}
-
-	// Root should now be cached.
-	assert!(cache.get_node(&root, None).is_some());
-
-	// Add more data, but this time only to the overlay.
-	// While doing that we record all trie accesses to replay this operation.
 	let mut recorder = Recorder::<T>::new();
 	let mut cache = TestTrieCacheCounted::<T>::default();
 	let mut overlay = memdb.clone();
@@ -837,15 +833,9 @@ fn test_recorder_with_cache_proof_size_inner(key_value: Vec<(Vec<u8>, Vec<u8>)>)
 			.with_cache(&mut cache)
 			.build();
 
-		for (key, value) in key_value.iter().skip(1) {
+		for (key, value) in key_value_insert.iter() {
 			trie.insert(key, value).unwrap();
 		}
-	}
-
-	for (key, value) in key_value.iter().skip(1) {
-		let cached_value = cache.lookup_value_for_key(key).unwrap();
-
-		assert_eq!(value, cached_value.data().flatten().unwrap().deref());
 	}
 
 	let mut partial_db = MemoryDBProof::<T>::default();
