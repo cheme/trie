@@ -284,7 +284,7 @@ impl<L: TrieLayout> Node<L> {
 			},
 			EncodedNodeHandle::Inline(data) => {
 				let child = Node::from_encoded(parent_hash, data, storage)?;
-				NodeHandle::InMemory(storage.alloc(Stored::New(child)))
+				NodeHandle::InMemory(storage.alloc(Stored::New(child, None)))
 			},
 		};
 		Ok(handle)
@@ -299,7 +299,7 @@ impl<L: TrieLayout> Node<L> {
 			NodeHandleOwned::Hash(hash) => NodeHandle::Hash(*hash),
 			NodeHandleOwned::Inline(node) => {
 				let child = Node::from_node_owned(&**node, storage);
-				NodeHandle::InMemory(storage.alloc(Stored::New(child)))
+				NodeHandle::InMemory(storage.alloc(Stored::New(child, None)))
 			},
 		}
 	}
@@ -566,8 +566,9 @@ impl<L: TrieLayout> InsertAction<L> {
 // What kind of node is stored here.
 enum Stored<L: TrieLayout> {
 	// A new node.
-	New(Node<L>),
+	New(Node<L>, Option<ParentCountFor<L>>),
 	// A cached node, loaded from the DB.
+	// TODO remove parent
 	Cached(Node<L>, TrieHash<L>, Option<ParentCountFor<L>>),
 }
 
@@ -636,7 +637,7 @@ impl<L: TrieLayout> NodeStorage<L> {
 		let idx = handle.0;
 
 		self.free_indices.push_back(idx);
-		mem::replace(&mut self.nodes[idx], Stored::New(Node::Empty))
+		mem::replace(&mut self.nodes[idx], Stored::New(Node::Empty, None))
 	}
 }
 
@@ -645,7 +646,7 @@ impl<'a, L: TrieLayout> Index<&'a StorageHandle> for NodeStorage<L> {
 
 	fn index(&self, handle: &'a StorageHandle) -> &Node<L> {
 		match self.nodes[handle.0] {
-			Stored::New(ref node) => node,
+			Stored::New(ref node, ..) => node,
 			Stored::Cached(ref node, ..) => node,
 		}
 	}
@@ -793,14 +794,13 @@ where
 		hash: TrieHash<L>,
 		from_parent: Option<(ParentCountFor<L>, usize)>,
 		key: Prefix,
-	) -> Result<(StorageHandle, Option<ParentCountFor<L>>), TrieHash<L>, CError<L>> {
+	) -> Result<StorageHandle, TrieHash<L>, CError<L>> {
 		let mut accessed_parent_count = None;
-		let from_parent_clone = from_parent.clone();
 		// We only check the `cache` for a node with `get_node` and don't insert
 		// the node if it wasn't there, because in substrate we only access the node while computing
 		// a new trie (aka some branch). We assume that this node isn't that important
 		// to have it being cached.
-		let node = match self.cache.as_mut().and_then(|c| c.get_node(&hash, from_parent_clone)) {
+		let node = match self.cache.as_mut().and_then(|c| c.get_node(&hash)) {
 			Some((node, node_parent_count)) => {
 				accessed_parent_count = Some(node_parent_count);
 				if let Some(recorder) = self.recorder.as_mut() {
@@ -825,7 +825,7 @@ where
 				let node = Node::from_encoded(hash, &node_encoded, &mut self.storage)?;
 				if let Some(cache) = self.cache.as_mut() {
 					let node_bitmap = node.children_bitmap();
-					let is_value = false; // TODO register value!!
+					let is_value = false;
 					accessed_parent_count = cache.register_count(
 						is_value,
 						node_encoded.len(),
@@ -837,10 +837,7 @@ where
 			},
 		};
 
-		Ok((
-			self.storage.alloc(Stored::Cached(node, hash, accessed_parent_count.clone())),
-			accessed_parent_count,
-		))
+		Ok(self.storage.alloc(Stored::Cached(node, hash, accessed_parent_count)))
 	}
 
 	// Inspect a node, choosing either to replace, restore, or delete it.
@@ -855,27 +852,30 @@ where
 		F: FnOnce(
 			&mut Self,
 			Node<L>,
+			Option<ParentCountFor<L>>,
 			&mut NibbleFullKey,
 		) -> Result<Action<L>, TrieHash<L>, CError<L>>,
 	{
 		let current_key = *key;
 		Ok(match stored {
-			Stored::New(node) => match inspector(self, node, key)? {
-				Action::Restore(node) => Some((Stored::New(node), false)),
-				Action::Replace(node) => Some((Stored::New(node), true)),
-				Action::Delete => None,
-			},
-			Stored::Cached(node, hash, node_count) => match inspector(self, node, key)? {
-				Action::Restore(node) => Some((Stored::Cached(node, hash, node_count), false)),
-				Action::Replace(node) => {
-					self.death_row.insert((hash, current_key.left_owned()));
-					Some((Stored::New(node), true))
+			Stored::New(node, node_count) =>
+				match inspector(self, node, node_count.clone(), key)? {
+					Action::Restore(node) => Some((Stored::New(node, node_count), false)),
+					Action::Replace(node) => Some((Stored::New(node, node_count), true)),
+					Action::Delete => None,
 				},
-				Action::Delete => {
-					self.death_row.insert((hash, current_key.left_owned()));
-					None
+			Stored::Cached(node, hash, node_count) =>
+				match inspector(self, node, node_count.clone(), key)? {
+					Action::Restore(node) => Some((Stored::Cached(node, hash, node_count), false)),
+					Action::Replace(node) => {
+						self.death_row.insert((hash, current_key.left_owned()));
+						Some((Stored::New(node, node_count), true))
+					},
+					Action::Delete => {
+						self.death_row.insert((hash, current_key.left_owned()));
+						None
+					},
 				},
-			},
 		})
 	}
 
@@ -986,14 +986,14 @@ where
 		value: Bytes,
 		old_val: &mut Option<Value<L>>,
 	) -> Result<(StorageHandle, bool), TrieHash<L>, CError<L>> {
-		let (h, count) = match handle {
-			NodeHandle::InMemory(h) => (h, None),
+		let h = match handle {
+			NodeHandle::InMemory(h) => h,
 			NodeHandle::Hash(h) => self.cache(h, from_parent, key.left())?,
 		};
 		// cache then destroy for hash handle (handle being root in most case)
 		let stored = self.storage.destroy(h);
 		let (new_stored, changed) = self
-			.inspect(stored, key, move |trie, stored, key| {
+			.inspect(stored, key, move |trie, stored, count, key| {
 				trie.insert_inspector(stored, count, key, value, old_val)
 					.map(|a| a.into_action())
 			})?
@@ -1080,8 +1080,9 @@ where
 					} else {
 						// Original had nothing there. compose a leaf.
 						let value = Value::new(value, L::MAX_INLINE_VALUE);
-						let leaf =
-							self.storage.alloc(Stored::New(Node::Leaf(key.to_stored(), value)));
+						let leaf = self
+							.storage
+							.alloc(Stored::New(Node::Leaf(key.to_stored(), value), None));
 						children[idx] = Some(leaf.into());
 					}
 
@@ -1124,7 +1125,7 @@ where
 					let low = Node::NibbledBranch(nbranch_partial, children, stored_value);
 					let ix = existing_key.at(common);
 					let mut children = empty_children();
-					let alloc_storage = self.storage.alloc(Stored::New(low));
+					let alloc_storage = self.storage.alloc(Stored::New(low, node_count));
 
 					children[ix as usize] = Some(alloc_storage.into());
 
@@ -1139,7 +1140,7 @@ where
 						let ix = partial.at(common);
 						let stored_leaf = Node::Leaf(partial.mid(common + 1).to_stored(), value);
 
-						let leaf = self.storage.alloc(Stored::New(stored_leaf));
+						let leaf = self.storage.alloc(Stored::New(stored_leaf, None));
 
 						children[ix as usize] = Some(leaf.into());
 						InsertAction::Replace(Node::NibbledBranch(
@@ -1177,8 +1178,9 @@ where
 					} else {
 						// Original had nothing there. compose a leaf.
 						let value = Value::new(value, L::MAX_INLINE_VALUE);
-						let leaf =
-							self.storage.alloc(Stored::New(Node::Leaf(key.to_stored(), value)));
+						let leaf = self
+							.storage
+							.alloc(Stored::New(Node::Leaf(key.to_stored(), value), None));
 
 						children[idx] = Some(leaf.into());
 					}
@@ -1228,7 +1230,8 @@ where
 						let idx = existing_key.at(common) as usize;
 						let new_leaf =
 							Node::Leaf(existing_key.mid(common + 1).to_stored(), stored_value);
-						children[idx] = Some(self.storage.alloc(Stored::New(new_leaf)).into());
+						children[idx] =
+							Some(self.storage.alloc(Stored::New(new_leaf, None)).into());
 
 						if L::USE_EXTENSION {
 							Node::Branch(children, None)
@@ -1272,7 +1275,7 @@ where
 						self.insert_inspector(branch, None, key, value, old_val)?.unwrap_node();
 
 					// always replace since we took a leaf and made an extension.
-					let leaf = self.storage.alloc(Stored::New(branch));
+					let leaf = self.storage.alloc(Stored::New(branch, node_count));
 					InsertAction::Replace(Node::Extension(existing_key.to_stored(), leaf.into()))
 				} else {
 					debug_assert!(L::USE_EXTENSION);
@@ -1298,7 +1301,7 @@ where
 					// make an extension using it. this is a replacement.
 					InsertAction::Replace(Node::Extension(
 						existing_key.to_stored_range(common),
-						self.storage.alloc(Stored::New(augmented_low)).into(),
+						self.storage.alloc(Stored::New(augmented_low, None)).into(),
 					))
 				}
 			},
@@ -1329,7 +1332,7 @@ where
 						// No need to register set branch (was here before).
 						// Note putting a branch in extension requires fix.
 						let ext = Node::Extension(existing_key.mid(1).to_stored(), child_branch);
-						Some(self.storage.alloc(Stored::New(ext)).into())
+						Some(self.storage.alloc(Stored::New(ext, None)).into())
 					};
 
 					// continue inserting.
@@ -1390,7 +1393,7 @@ where
 					// this is known because the partial key is only the common prefix.
 					InsertAction::Replace(Node::Extension(
 						existing_key.to_stored_range(common),
-						self.storage.alloc(Stored::New(augmented_low)).into(),
+						self.storage.alloc(Stored::New(augmented_low, None)).into(),
 					))
 				}
 			},
@@ -1405,15 +1408,15 @@ where
 		key: &mut NibbleFullKey,
 		old_val: &mut Option<Value<L>>,
 	) -> Result<Option<(StorageHandle, bool)>, TrieHash<L>, CError<L>> {
-		let (stored, count) = match handle {
-			NodeHandle::InMemory(h) => (self.storage.destroy(h), None),
+		let stored = match handle {
+			NodeHandle::InMemory(h) => self.storage.destroy(h),
 			NodeHandle::Hash(h) => {
-				let (handle, count) = self.cache(h, from_parent, key.left())?;
-				(self.storage.destroy(handle), count)
+				let handle = self.cache(h, from_parent, key.left())?;
+				self.storage.destroy(handle)
 			},
 		};
 
-		let opt = self.inspect(stored, key, move |trie, node, key| {
+		let opt = self.inspect(stored, key, move |trie, node, count, key| {
 			trie.remove_inspector(node, count, key, old_val)
 		})?;
 
@@ -1745,19 +1748,19 @@ where
 							alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start),
 							prefix_end,
 						);
-						let (stored, _count) = match child {
-							NodeHandle::InMemory(h) => (self.storage.destroy(h), None),
+						let stored = match child {
+							NodeHandle::InMemory(h) => self.storage.destroy(h),
 							NodeHandle::Hash(h) => {
-								let (handle, count) = self.cache(
+								let handle = self.cache(
 									h,
 									node_count.map(|p| (p, a as usize)),
 									child_prefix,
 								)?;
-								(self.storage.destroy(handle), count)
+								self.storage.destroy(handle)
 							},
 						};
 						let child_node = match stored {
-							Stored::New(node) => node,
+							Stored::New(node, _count) => node,
 							Stored::Cached(node, hash, _count) => {
 								self.death_row
 									.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
@@ -1834,17 +1837,16 @@ where
 				let child_prefix =
 					(alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start), prefix_end);
 
-				let (stored, count) = match child {
-					NodeHandle::InMemory(h) => (self.storage.destroy(h), None),
+				let stored = match child {
+					NodeHandle::InMemory(h) => self.storage.destroy(h),
 					NodeHandle::Hash(h) => {
-						let (handle, count) =
-							self.cache(h, node_count.map(|p| (p, 0)), child_prefix)?;
-						(self.storage.destroy(handle), count)
+						let handle = self.cache(h, node_count.map(|p| (p, 0)), child_prefix)?;
+						self.storage.destroy(handle)
 					},
 				};
 
 				let (child_node, maybe_hash, count) = match stored {
-					Stored::New(node) => (node, None, None),
+					Stored::New(node, count) => (node, None, count),
 					Stored::Cached(node, hash, count) => (node, Some(hash), count),
 				};
 
@@ -1894,7 +1896,7 @@ where
 						let stored = if let Some(hash) = maybe_hash {
 							Stored::Cached(child_node, hash, count)
 						} else {
-							Stored::New(child_node)
+							Stored::New(child_node, count)
 						};
 
 						Ok(Node::Extension(partial, self.storage.alloc(stored).into()))
@@ -1924,7 +1926,7 @@ where
 		};
 
 		match self.storage.destroy(handle) {
-			Stored::New(node) => {
+			Stored::New(node, _count) => {
 				// Reconstructs the full key for root node.
 				let full_key = self.cache.as_ref().and_then(|_| {
 					node.partial_key().and_then(|k| Some(NibbleSlice::from_stored(k).into()))
@@ -2070,7 +2072,7 @@ where
 			NodeHandle::InMemory(storage_handle) => {
 				match self.storage.destroy(storage_handle) {
 					Stored::Cached(_, hash, _) => ChildReference::Hash(hash),
-					Stored::New(node) => {
+					Stored::New(node, _) => {
 						// Reconstructs the full key
 						let full_key = self.cache.as_ref().and_then(|_| {
 							let mut prefix = prefix.clone();

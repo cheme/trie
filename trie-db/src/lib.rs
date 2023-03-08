@@ -692,10 +692,6 @@ pub trait TrieCache<NC: NodeCodec, CC: TrieCacheConf> {
 	fn get_node(
 		&mut self,
 		hash: &NC::HashOut,
-		// TODO from_parent here is unused: since we need to keep
-		// all infos, then this is always use at first get_or_insert_node
-		// only.
-		from_parent: Option<(CC::ParentCountProofSize, usize)>,
 	) -> Option<(&NodeOwned<NC::HashOut>, CC::ParentCountProofSize)>;
 
 	fn register_count(

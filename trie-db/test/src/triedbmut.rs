@@ -743,7 +743,7 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 	}
 
 	// Root should now be cached.
-	assert!(cache.get_node(&root, None).is_some());
+	assert!(cache.get_node(&root).is_some());
 
 	// Add more data, but this time only to the overlay.
 	// While doing that we record all trie accesses to replay this operation.
@@ -796,7 +796,7 @@ fn test_recorder_with_cache_proof_size() {
 	];
 
 	let key_value_insert = vec![(b"A".to_vec(), vec![2; 64]), (b"C".to_vec(), vec![3; 64])];
-	//	test_recorder_with_cache_proof_size_inner(&key_value_init, &key_value_insert);
+	test_recorder_with_cache_proof_size_inner(&key_value_init, &key_value_insert);
 	let key_value_insert = vec![
 		(b"AAAA".to_vec(), vec![2; 64]),
 		(b"BB".to_vec(), vec![3; 64]),

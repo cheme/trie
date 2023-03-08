@@ -1166,7 +1166,6 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::CacheConf> for TestTrieCache
 	fn get_node(
 		&mut self,
 		hash: &TrieHash<L>,
-		_from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
 		self.node_cache.get(hash).map(|n| (&n.0, n.1.clone()))
 	}
@@ -1275,14 +1274,10 @@ where
 		.map(|n| (&n.0, n.1.clone()));
 
 		if result.is_ok() && size_update {
-			// TODO count removed hash instead (so estimate is not inside)
 			if is_value {
-				// only 31 due to sep node
-				self.count.nodes_size -= 30;
+				self.count.detached_values_accessed_hashes += 1;
 			} else {
-				// size gain in compact proof from removing a hash
-				// (previously 33bytes after 1bytes)
-				self.count.nodes_size -= 32;
+				self.count.nodes_children_accessed_hashes += 1;
 			}
 		}
 
@@ -1292,9 +1287,7 @@ where
 	fn get_node(
 		&mut self,
 		hash: &TrieHash<L>,
-		from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Option<(&NodeOwned<TrieHash<L>>, ParentCountFor<L>)> {
-		debug_assert!(!self.update_parent_size(from_parent));
 		self.node_cache.get(hash).map(|n| (&n.0, n.1.clone()))
 	}
 
@@ -1310,14 +1303,10 @@ where
 		from_parent: Option<(ParentCountFor<L>, usize)>,
 	) -> Option<ParentCountFor<L>> {
 		if self.update_parent_size(from_parent.clone()) {
-			// TODO count removed hash instead (so estimate is not inside)
 			if is_value {
-				// only 31 due to sep node
-				self.count.nodes_size -= 30;
+				self.count.detached_values_accessed_hashes += 1;
 			} else {
-				// size gain in compact proof from removing a hash
-				// (previously 33bytes after 1bytes)
-				self.count.nodes_size -= 32;
+				self.count.nodes_children_accessed_hashes += 1;
 			}
 		}
 		if is_value {
@@ -1387,10 +1376,14 @@ pub struct ExampleCounter {
 	pub nodes_count: u32,
 	/// Total size of encoded registered nodes.
 	pub nodes_size: u32,
+	/// Number of children hash that can be remove when compacting proof.
+	pub nodes_children_accessed_hashes: u32,
 	/// Number of detached (not inline) value registered.
 	pub detached_values_count: u32,
 	/// Total size of encoded registered detached values.
 	pub detached_values_size: u32,
+	/// Number of values hash that can be remove when compacting proof.
+	pub detached_values_accessed_hashes: u32,
 }
 
 #[derive(Clone, Default)]
@@ -1488,5 +1481,8 @@ pub fn estimate_substrate_size_count(count: &ExampleCounter) -> usize {
 	size += count.detached_values_count as usize;
 	size += count.nodes_size as usize;
 	size += count.detached_values_size as usize;
+	size -= count.nodes_children_accessed_hashes as usize * 32;
+	// only 30 due to sep node
+	size -= count.detached_values_accessed_hashes as usize * 30;
 	size
 }

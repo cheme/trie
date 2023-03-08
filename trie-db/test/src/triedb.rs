@@ -369,7 +369,7 @@ fn test_recorder_with_cache_internal<T: TrieLayout>() {
 	}
 
 	// Root should now be cached.
-	assert!(cache.get_node(&root, None).is_some());
+	assert!(cache.get_node(&root).is_some());
 	// Also the data should be cached.
 	let value = cache.lookup_value_for_key(&key_value[1].0).unwrap();
 
@@ -459,7 +459,7 @@ fn test_recorder_with_cache_get_hash_internal<T: TrieLayout>() {
 	}
 
 	// Root should now be cached.
-	assert!(cache.get_node(&root, None).is_some());
+	assert!(cache.get_node(&root).is_some());
 	// Also the data should be cached.
 
 	if T::MAX_INLINE_VALUE.map_or(true, |l| l as usize > key_value[1].1.len()) {
