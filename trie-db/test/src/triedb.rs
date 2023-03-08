@@ -671,6 +671,7 @@ fn test_record_value() {
 			.build();
 
 		trie.get(key_value[0].0.as_slice()).unwrap();
+		trie.get(key_value[0].0.as_slice()).unwrap();
 	}
 
 	let mut partial_db = MemoryDBProof::<L>::default();
@@ -680,7 +681,7 @@ fn test_record_value() {
 		partial_db.insert(EMPTY_PREFIX, &record.data);
 	}
 
-	assert_eq!(count, 2);
+	assert_eq!(count, 4); // Double recording on this impl
 
 	let compact_proof = {
 		let trie = <TrieDBBuilder<L>>::new(&partial_db, &root).build();
@@ -700,6 +701,7 @@ fn test_record_value() {
 			.with_cache(&mut cache)
 			.build();
 
+		trie.get(key_value[1].0.as_slice()).unwrap();
 		trie.get(key_value[1].0.as_slice()).unwrap();
 	}
 
@@ -722,11 +724,46 @@ fn test_record_value() {
 
 	// Hash access would record two node (branch and leaf with value 32 len inline).
 	let mut recorder = Recorder::<L>::new();
+	let mut cache = TestTrieCacheCounted::<L>::default();
 	let overlay = memdb.clone();
 	{
-		let trie = TrieDBBuilder::<L>::new(&overlay, &root).with_recorder(&mut recorder).build();
+		let trie = TrieDBBuilder::<L>::new(&overlay, &root)
+			.with_recorder(&mut recorder)
+			.with_cache(&mut cache)
+			.build();
 
 		trie.get_hash(key_value[0].0.as_slice()).unwrap();
+		trie.get_hash(key_value[0].0.as_slice()).unwrap();
+	}
+
+	let mut partial_db = MemoryDBProof::<L>::default();
+	let mut count = 0;
+	for record in recorder.drain() {
+		count += 1;
+		partial_db.insert(EMPTY_PREFIX, &record.data);
+	}
+
+	assert_eq!(count, 4); // Double recording on this impl
+
+	let compact_proof = {
+		let trie = <TrieDBBuilder<L>>::new(&partial_db, &root).build();
+		encode_compact::<L>(&trie).unwrap()
+	};
+	let size_compact = estimate_substrate_size_compact(&compact_proof);
+	let size_count = estimate_substrate_size_count(cache.current_count().unwrap());
+	assert_eq!(size_compact, size_count);
+
+	// Hash access would record two node (branch and leaf with value 32 len inline).
+	let mut recorder = Recorder::<L>::new();
+	let mut cache = TestTrieCacheCounted::<L>::default();
+	let overlay = memdb.clone();
+	{
+		let trie = TrieDBBuilder::<L>::new(&overlay, &root)
+			.with_recorder(&mut recorder)
+			.with_cache(&mut cache)
+			.build();
+
+		trie.get_hash(key_value[1].0.as_slice()).unwrap();
 	}
 
 	let mut partial_db = MemoryDBProof::<L>::default();
@@ -738,19 +775,11 @@ fn test_record_value() {
 
 	assert_eq!(count, 2);
 
-	// Hash access would record two node (branch and leaf with value 32 len inline).
-	let mut recorder = Recorder::<L>::new();
-	let overlay = memdb.clone();
-	{
-		let trie = TrieDBBuilder::<L>::new(&overlay, &root).with_recorder(&mut recorder).build();
-
-		trie.get_hash(key_value[1].0.as_slice()).unwrap();
-	}
-
-	let mut count = 0;
-	for _ in recorder.drain() {
-		count += 1;
-	}
-
-	assert_eq!(count, 2);
+	let compact_proof = {
+		let trie = <TrieDBBuilder<L>>::new(&partial_db, &root).build();
+		encode_compact::<L>(&trie).unwrap()
+	};
+	let size_compact = estimate_substrate_size_compact(&compact_proof);
+	let size_count = estimate_substrate_size_count(cache.current_count().unwrap());
+	assert_eq!(size_compact, size_count);
 }
