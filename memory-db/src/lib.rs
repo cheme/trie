@@ -265,13 +265,12 @@ where
 		let key = KF::key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) =>
-				if entry.get().1 == 1 {
-					let (value, _) = entry.remove();
-					Some(value)
-				} else {
-					entry.get_mut().1 -= 1;
-					None
-				},
+//				if entry.get().1 == 1 {
+//					let (value, _) = entry.remove();
+//					Some(value)
+//				} else {
+					None,
+//				},
 			Entry::Vacant(entry) => {
 				let value = T::default();
 				entry.insert((value, -1));
@@ -346,10 +345,12 @@ where
 
 	/// Purge all zero-referenced data from the database.
 	pub fn purge(&mut self) {
+		/*
 		self.data.retain(|_, (_, rc)| {
 			let keep = *rc != 0;
 			keep
 		});
+		*/
 	}
 
 	/// Return the internal key-value Map, clearing the current state.
@@ -378,7 +379,7 @@ where
 						entry.get_mut().0 = value;
 					}
 
-					entry.get_mut().1 += rc;
+					//entry.get_mut().1 += rc;
 				},
 				Entry::Vacant(entry) => {
 					entry.insert((value, rc));
@@ -405,14 +406,14 @@ where
 {
 	fn get(&self, key: &H::Out) -> Option<T> {
 		match self.data.get(key.as_ref()) {
-			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
+			Some(&(ref d, rc)) => Some(d.clone()),
 			_ => None,
 		}
 	}
 
 	fn contains(&self, key: &H::Out) -> bool {
 		match self.data.get(key.as_ref()) {
-			Some(&(_, x)) if x > 0 => true,
+			Some(&(_, x)) => true,
 			_ => false,
 		}
 	}
@@ -436,7 +437,7 @@ where
 		match self.data.entry(key.as_ref().into()) {
 			Entry::Occupied(mut entry) => {
 				let &mut (_, ref mut rc) = entry.get_mut();
-				*rc -= 1;
+//				*rc -= 1;
 			},
 			Entry::Vacant(entry) => {
 				let value = T::default();
@@ -474,7 +475,7 @@ where
 
 		let key = KF::key(key, prefix);
 		match self.data.get(&key) {
-			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
+			Some(&(ref d, rc)) => Some(d.clone()),
 			_ => None,
 		}
 	}
@@ -530,7 +531,7 @@ where
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) => {
 				let &mut (_, ref mut rc) = entry.get_mut();
-				*rc -= 1;
+	//			*rc -= 1;
 			},
 			Entry::Vacant(entry) => {
 				let value = T::default();
