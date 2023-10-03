@@ -1,4 +1,4 @@
-// Copyright 2017, 2018 Parity Technologies
+// Copyright 2017, 2020 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{
+	triedbmut::{TrieDBMutBuilder, Value},
+	CError, DBValue, Result, TrieDBMut, TrieHash, TrieLayout, TrieMut,
+};
 use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
-use super::{Result, DBValue, TrieDBMut, TrieMut, TrieLayout, TrieHash, CError};
 
 /// A mutable `Trie` implementation which hashes keys and uses a generic `HashDB` backing database.
 /// Additionaly it stores inserted hash-key mappings for later retrieval.
@@ -34,7 +37,7 @@ where
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
 	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
-		FatDBMut { raw: TrieDBMut::new(db, root) }
+		FatDBMut { raw: TrieDBMutBuilder::new(db, root).build() }
 	}
 
 	/// Create a new trie with the backing database `db` and `root`.
@@ -42,9 +45,9 @@ where
 	/// Returns an error if root does not exist.
 	pub fn from_existing(
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
-		root: &'db mut TrieHash<L>
-	) -> Result<Self, TrieHash<L>, CError<L>> {
-		Ok(FatDBMut { raw: TrieDBMut::from_existing(db, root)? })
+		root: &'db mut TrieHash<L>,
+	) -> Self {
+		FatDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build() }
 	}
 
 	/// Get the backing database.
@@ -62,16 +65,21 @@ impl<'db, L> TrieMut<L> for FatDBMut<'db, L>
 where
 	L: TrieLayout,
 {
-	fn root(&mut self) -> &TrieHash<L> { self.raw.root() }
+	fn root(&mut self) -> &TrieHash<L> {
+		self.raw.root()
+	}
 
-	fn is_empty(&self) -> bool { self.raw.is_empty() }
+	fn is_empty(&self) -> bool {
+		self.raw.is_empty()
+	}
 
 	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
 		self.raw.contains(L::Hash::hash(key).as_ref())
 	}
 
 	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
-		where 'a: 'key
+	where
+		'a: 'key,
 	{
 		self.raw.get(L::Hash::hash(key).as_ref())
 	}
@@ -80,7 +88,7 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.insert(hash.as_ref(), value)?;
 		let db = self.raw.db_mut();
@@ -93,7 +101,7 @@ where
 		Ok(out)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.remove(hash.as_ref())?;
 
@@ -104,44 +112,5 @@ where
 		}
 
 		Ok(out)
-	}
-}
-
-#[cfg(test)]
-mod test {
-	use memory_db::{MemoryDB, HashKey};
-	use hash_db::{Hasher, EMPTY_PREFIX};
-	use keccak_hasher::KeccakHasher;
-	use reference_trie::{RefFatDBMut, RefTrieDB, Trie, TrieMut};
-
-	#[test]
-	fn fatdbmut_to_trie() {
-		let mut memdb = MemoryDB::<KeccakHasher, HashKey<_>, _>::default();
-		let mut root = Default::default();
-		{
-			let mut t = RefFatDBMut::new(&mut memdb, &mut root);
-			t.insert(&[0x01u8, 0x23], &[0x01u8, 0x23]).unwrap();
-		}
-		let t = RefTrieDB::new(&memdb, &root).unwrap();
-		assert_eq!(
-			t.get(&KeccakHasher::hash(&[0x01u8, 0x23])),
-			Ok(Some(vec![0x01u8, 0x23])),
-		);
-	}
-
-	#[test]
-	fn fatdbmut_insert_remove_key_mapping() {
-		let mut memdb = MemoryDB::<KeccakHasher, HashKey<_>, _>::default();
-		let mut root = Default::default();
-		let key = [0x01u8, 0x23];
-		let val = [0x01u8, 0x24];
-		let key_hash = KeccakHasher::hash(&key);
-		let aux_hash = KeccakHasher::hash(&key_hash);
-		let mut t = RefFatDBMut::new(&mut memdb, &mut root);
-		t.insert(&key, &val).unwrap();
-		assert_eq!(t.get(&key), Ok(Some(val.to_vec())));
-		assert_eq!(t.db().get(&aux_hash, EMPTY_PREFIX), Some(key.to_vec()));
-		t.remove(&key).unwrap();
-		assert_eq!(t.db().get(&aux_hash, EMPTY_PREFIX), None);
 	}
 }

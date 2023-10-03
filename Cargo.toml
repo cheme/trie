@@ -8,6 +8,9 @@ members = [
 	"test-support/trie-standardmap",
 	"test-support/trie-bench",
 	"trie-db",
+	"trie-db/test",
+	"trie-eip1186",
+	"trie-eip1186/test",
 	"trie-root",
-	"check_no_std"
+	"trie-root/test"
 ]

@@ -14,17 +14,17 @@
 
 //! Nibble oriented methods.
 
-use crate::node::{NodeKey, NodeHandle, NodeHandlePlan};
-use crate::rstd::cmp;
+use crate::{
+	node::{NodeHandle, NodeHandlePlan, NodeKey},
+	rstd::{cmp, marker::PhantomData, vec, vec::Vec},
+};
 use hash_db::MaybeDebug;
-use crate::rstd::vec::Vec;
-use crate::rstd::vec;
-use crate::rstd::marker::PhantomData;
+
 pub use self::leftnibbleslice::LeftNibbleSlice;
 
-mod nibblevec;
-mod nibbleslice;
 mod leftnibbleslice;
+mod nibbleslice;
+mod nibblevec;
 
 // Work-around absence of constant function for math pow.
 const TWO_EXP: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
@@ -47,15 +47,17 @@ pub enum Layout {
 /// methods.
 /// Generic methods should not need redefinition except for optimization
 /// purpose.
-pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy + MaybeDebug {
+pub trait NibbleOps:
+	Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy + MaybeDebug
+{
 	/// See [`Layout`].
-	const LAYOUT : Layout;
+	const LAYOUT: Layout;
 	/// Single nibble length in bit.
-	const BIT_PER_NIBBLE : usize = TWO_EXP[Self::LAYOUT as usize];
+	const BIT_PER_NIBBLE: usize = TWO_EXP[Self::LAYOUT as usize];
 	/// Number of nibble per byte.
-	const NIBBLE_PER_BYTE : usize = 8 / Self::BIT_PER_NIBBLE;
+	const NIBBLE_PER_BYTE: usize = 8 / Self::BIT_PER_NIBBLE;
 	/// Number of child for a branch (trie radix).
-	const NIBBLE_LENGTH : usize = TWO_EXP[Self::BIT_PER_NIBBLE];
+	const NIBBLE_LENGTH: usize = TWO_EXP[Self::BIT_PER_NIBBLE];
 	/// Padding bitmasks, internally use for working on padding byte.
 	/// Length of this array is `Self::BIT_PER_NIBBLE`.
 	/// The first element of each pair is a bit mask to apply,
@@ -97,26 +99,24 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 		// of elements!
 		if ix > 0 {
 			b & !(255u8 << (Self::BIT_PER_NIBBLE * (Self::NIBBLE_PER_BYTE - ix as usize)))
-			//b & Self::PADDING_BITMASK[Self::NIBBLE_PER_BYTE - ix as usize].0
+		//b & Self::PADDING_BITMASK[Self::NIBBLE_PER_BYTE - ix as usize].0
 		} else {
 			b
 		}
 	}
 
 	/// Get u8 nibble value at a given index of a byte.
-	///
 	#[inline(always)]
 	fn at_left(ix: u8, b: u8) -> u8 {
 		// TODO EMCH compare perf without padding bitmask
-		(b & Self::PADDING_BITMASK[ix as usize].0)
-			>> Self::PADDING_BITMASK[ix as usize].1
+		(b & Self::PADDING_BITMASK[ix as usize].0) >> Self::PADDING_BITMASK[ix as usize].1
 	}
 
 	/// Get u8 nibble value at a given index in a left aligned array.
 	#[inline(always)]
-	fn left_nibble_at(v1: &[u8], mut ix: usize) -> u8 {
+	pub fn left_nibble_at(v1: &[u8], mut ix: usize) -> u8 {
 		let pad = ix % Self::NIBBLE_PER_BYTE;
-		ix =  ix / Self::NIBBLE_PER_BYTE;
+		ix = ix / Self::NIBBLE_PER_BYTE;
 		Self::at_left(pad as u8, v1[ix])
 	}
 
@@ -144,9 +144,9 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 	/// Count the biggest common depth between two left aligned packed nibble slice.
 	fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
 		let upper_bound = cmp::min(v1.len(), v2.len());
-		for a in 0 .. upper_bound {
+		for a in 0..upper_bound {
 			if v1[a] != v2[a] {
-				return a * Self::NIBBLE_PER_BYTE + Self::left_common(v1[a], v2[a]);
+				return a * Self::NIBBLE_PER_BYTE + Self::left_common(v1[a], v2[a])
 			}
 		}
 		upper_bound * Self::NIBBLE_PER_BYTE
@@ -156,7 +156,7 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 	#[inline(always)]
 	fn left_common(a: u8, b: u8) -> usize {
 		((a ^ b).leading_zeros() as usize) / Self::BIT_PER_NIBBLE
-/*		let mut i = 0;
+		/*		let mut i = 0;
 		while i < Self::NIBBLE_PER_BYTE {
 			//if (a >> Self::PADDING_BITMASK[i].1)
 			//	!= (b >> Self::PADDING_BITMASK[i].1) {
@@ -172,6 +172,7 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 	/// The nibble shifts needed to align.
 	/// We use two value, one is a left shift and
 	/// the other is a right shift.
+	/// Calculate the number of common nibble between two left aligned bytes.
 	#[inline(always)]
 	fn split_shifts(pad: usize) -> (usize, usize) {
 		debug_assert!(pad > 0);
@@ -191,7 +192,7 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 			let shift = old_offset - ofset;
 			let (s1, s2) = Self::split_shifts(shift);
 			let kl = key.1.len();
-			(0..kl - 1).for_each(|i| key.1[i] = key.1[i] << s2 | key.1[i+1] >> s1);
+			(0..kl - 1).for_each(|i| key.1[i] = key.1[i] << s2 | key.1[i + 1] >> s1);
 			key.1[kl - 1] = key.1[kl - 1] << s2;
 			true
 		} else if old_offset < ofset {
@@ -199,7 +200,9 @@ pub trait NibbleOps: Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy 
 			let shift = ofset - old_offset;
 			let (s1, s2) = Self::split_shifts(shift);
 			key.1.push(0);
-			(1..key.1.len()).rev().for_each(|i| key.1[i] = key.1[i - 1] << s1 | key.1[i] >> s2);
+			(1..key.1.len())
+				.rev()
+				.for_each(|i| key.1[i] = key.1[i - 1] << s1 | key.1[i] >> s2);
 			key.1[0] = key.1[0] >> s2;
 			true
 		} else {
@@ -238,12 +241,8 @@ pub struct Radix4;
 // new_padded_end merged
 impl NibbleOps for Radix4 {
 	const LAYOUT: Layout = Layout::Radix4;
-	const PADDING_BITMASK: &'static [(u8, usize)] = &[
-		(0b1111_1111, 6),
-		(0b0011_1111, 4),
-		(0b0000_1111, 2),
-		(0b0000_0011, 0),
-	];
+	const PADDING_BITMASK: &'static [(u8, usize)] =
+		&[(0b1111_1111, 6), (0b0011_1111, 4), (0b0000_1111, 2), (0b0000_0011, 0)];
 	type ChildRangeIndex = ChildIndex4<NodeHandlePlan>;
 }
 
@@ -274,9 +273,7 @@ pub struct Radix256;
 
 impl NibbleOps for Radix256 {
 	const LAYOUT: Layout = Layout::Radix256;
-	const PADDING_BITMASK: &'static [(u8, usize)] = &[
-		(1, 0),
-	];
+	const PADDING_BITMASK: &'static [(u8, usize)] = &[(1, 0)];
 	type ChildRangeIndex = ChildIndex256<NodeHandlePlan>;
 
 	#[inline]
@@ -291,7 +288,7 @@ impl NibbleOps for Radix256 {
 }
 
 /// Backing storage for `NibbleVec`s.
-pub(crate) type BackingByteVec = smallvec::SmallVec<[u8; 36]>;
+pub(crate) type BackingByteVec = smallvec::SmallVec<[u8; 40]>;
 
 /// Owning, nibble-oriented byte vector. Counterpart to `NibbleSlice`.
 /// Nibbles are always left aligned, so making a `NibbleVec` from
@@ -341,13 +338,12 @@ pub struct NibbleSliceIterator<'a, N: NibbleOps> {
 
 /// Technical trait only to access child slice from an encoded
 /// representation of a branch.
-pub trait ChildIndex<V>: AsRef<[Option<V>]>
-	+ AsMut<[Option<V>]> + Default + Eq + PartialEq + crate::MaybeDebug
-	+ Clone {
-
+pub trait ChildIndex<V>:
+	AsRef<[Option<V>]> + AsMut<[Option<V>]> + Default + Eq + PartialEq + crate::MaybeDebug + Clone
+{
 	/// Constant length for the number of children.
 	/// TODO EMCH see if can delete
-	const NIBBLE_LENGTH : usize;
+	const NIBBLE_LENGTH: usize;
 
 	#[inline]
 	fn from_iter(nodes: impl Iterator<Item = Option<V>>) -> Self {
@@ -391,16 +387,16 @@ pub trait ChildSliceIndex: ChildIndex<NodeHandlePlan> {
 	}
 }
 
-impl<I: ChildIndex<NodeHandlePlan>> ChildSliceIndex for I { }
+impl<I: ChildIndex<NodeHandlePlan>> ChildSliceIndex for I {}
 
 /// Iterator over `ChildSliceIndex` trait.
-pub struct IterChildSliceIndex<'a, CS>(&'a CS, usize, &'a[u8]);
+pub struct IterChildSliceIndex<'a, CS>(&'a CS, usize, &'a [u8]);
 
 impl<'a, CS: ChildSliceIndex> Iterator for IterChildSliceIndex<'a, CS> {
 	type Item = Option<NodeHandle<'a>>;
 	fn next(&mut self) -> Option<Self::Item> {
 		if self.1 == CS::NIBBLE_LENGTH {
-			return None;
+			return None
 		}
 		self.1 += 1;
 		Some(self.0.slice_at(self.1 - 1, self.2))
@@ -427,12 +423,12 @@ macro_rules! child_slice_index {
 		}
 
 		impl<V> ChildIndex<V> for $me<V>
-			where
-				V: MaybeDebug + Eq + PartialEq + Clone,
+		where
+			V: MaybeDebug + Eq + PartialEq + Clone,
 		{
 			const NIBBLE_LENGTH: usize = $size;
 		}
-	}
+	};
 }
 
 child_slice_index!(ChildIndex16, 16);
@@ -481,7 +477,7 @@ impl<V: Clone> Default for ChildIndex256<V> {
 
 impl<V> AsRef<[Option<V>]> for ChildIndex256<V> {
 	fn as_ref(&self) -> &[Option<V>] {
-			&self.0[..]
+		&self.0[..]
 	}
 }
 
@@ -492,8 +488,18 @@ impl<V> AsMut<[Option<V>]> for ChildIndex256<V> {
 }
 
 impl<V> ChildIndex<V> for ChildIndex256<V>
-	where
-		V: MaybeDebug + Eq + PartialEq + Clone,
+where
+	V: MaybeDebug + Eq + PartialEq + Clone,
 {
 	const NIBBLE_LENGTH: usize = 256;
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn nibble_vec_size() {
+		assert_eq!(std::mem::size_of::<NibbleVec>(), 56);
+	}
 }

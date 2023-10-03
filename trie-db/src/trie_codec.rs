@@ -1,4 +1,4 @@
-// Copyright 2019 Parity Technologies
+// Copyright 2019, 2021 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -25,26 +25,30 @@
 //! expected to save roughly (n - 1) hashes in size where n is the number of nodes in the partial
 //! trie.
 
-use hash_db::{HashDB};
-use crate::nibble::NibbleOps;
 use crate::{
-	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
-	TrieHash, TrieError, TrieDB, TrieDBNodeIterator, TrieLayout, TrieChildRangeIndex,
-	node::{Node, NodeHandle, NodePlan, OwnedNode, BranchChildrenNodePlan},
+	nibble::NibbleOps,
+	nibble_ops::NIBBLE_LENGTH,
+	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
+	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, result, sync::Arc, vec, vec::Vec},
+	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBRawIterator,
+	TrieError, TrieHash, TrieLayout,
 };
-use crate::rstd::{
-	boxed::Box, convert::TryInto, rc::Rc, result, vec, vec::Vec,
-};
+use hash_db::{HashDB, Prefix};
+
+const OMIT_VALUE_HASH: crate::node::Value<'static> = crate::node::Value::Inline(&[]);
 
 struct EncoderStackEntry<L: TrieLayout> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: NibbleVec<L::Nibble>,
-	node: Rc<OwnedNode<DBValue, L::Nibble>>,
+	/// Node in memory content.
+	node: Arc<OwnedNode<DBValue, L::Nibble>>,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
 	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
 	child_index: usize,
 	/// Flags indicating whether each child is omitted in the encoded node.
 	omit_children: Vec<bool>,
+	/// Skip value if value node is after.
+	omit_value: bool,
 	/// The encoding of the subtrie nodes rooted at this entry, which is built up in
 	/// `encode_compact`.
 	output_index: usize,
@@ -59,66 +63,75 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 	/// Preconditions:
 	/// - self.prefix + partial must be a prefix of child_prefix.
 	/// - if self.node is a branch, then child_prefix must be longer than self.prefix + partial.
-	fn advance_child_index(&mut self, child_prefix: &NibbleVec<L::Nibble>)
-		-> result::Result<(), &'static str>
-	{
+	fn advance_child_index(
+		&mut self,
+		child_prefix: &NibbleVec<L::Nibble>,
+	) -> result::Result<(), &'static str> {
 		match self.node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } =>
 				return Err("empty and leaf nodes have no children"),
-			NodePlan::Extension { .. } => {
+			NodePlan::Extension { .. } =>
 				if self.child_index != 0 {
 					return Err("extension node cannot have multiple children")
-				}
-			}
+				},
 			NodePlan::Branch { .. } => {
 				if child_prefix.len() <= self.prefix.len() {
-					return Err("child_prefix does not contain prefix");
+					return Err("child_prefix does not contain prefix")
 				}
 				let child_index = child_prefix.at(self.prefix.len()) as usize;
 				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix");
+					return Err("iterator returned children in non-ascending order by prefix")
 				}
 				self.child_index = child_index;
-			}
+			},
 			NodePlan::NibbledBranch { partial, .. } => {
 				if child_prefix.len() <= self.prefix.len() + partial.len() {
-					return Err("child_prefix does not contain prefix and node partial");
+					return Err("child_prefix does not contain prefix and node partial")
 				}
 				let child_index = child_prefix.at(self.prefix.len() + partial.len()) as usize;
 				if child_index < self.child_index {
-					return Err("iterator returned children in non-ascending order by prefix");
+					return Err("iterator returned children in non-ascending order by prefix")
 				}
 				self.child_index = child_index;
-			}
+			},
 		}
 		Ok(())
 	}
 
 	/// Generates the encoding of the subtrie rooted at this entry.
-	fn encode_node(&self) -> Result<Vec<u8>, TrieHash<L>, CError<L>> {
+	fn encode_node(&mut self) -> Result<Vec<u8>, TrieHash<L>, CError<L>> {
 		let node_data = self.node.data();
-		Ok(match self.node.node_plan() {
-			NodePlan::Empty | NodePlan::Leaf { .. } => node_data.to_vec(),
-			NodePlan::Extension { partial, child: _ } => {
+		let node_plan = self.node.node_plan();
+		let mut encoded = match node_plan {
+			NodePlan::Empty => node_data.to_vec(),
+			NodePlan::Leaf { partial, value: _ } =>
+				if self.omit_value {
+					let partial = partial.build(node_data);
+					C::leaf_node(partial.right_iter(), partial.len(), OMIT_VALUE_HASH)
+				} else {
+					node_data.to_vec()
+				},
+			NodePlan::Extension { partial, child: _ } =>
 				if !self.omit_children[0] {
 					node_data.to_vec()
 				} else {
 					let partial = partial.build(node_data);
 					let empty_child = ChildReference::Inline(TrieHash::<L>::default(), 0);
 					L::Codec::extension_node(partial.right_iter(), partial.len(), empty_child)
-				}
-			}
+				},
 			NodePlan::Branch { value, children } => {
 				let mut result: Result<(), TrieHash<L>, CError<L>> = Ok(());
 				let result = &mut result;
 				let children = (0..L::Nibble::NIBBLE_LENGTH).map(|i| {
 					Self::branch_children(i, node_data, children, &self.omit_children, result)
 				});
-				L::Codec::branch_node(
-					children,
-					value.clone().map(|range| &node_data[range])
-				)
-			}
+				let value = if self.omit_value {
+					value.is_some().then_some(OMIT_VALUE_HASH)
+				} else {
+					value.as_ref().map(|v| v.build(node_data))
+				};
+				L::Codec::branch_node(children, value)
+			},
 			NodePlan::NibbledBranch { partial, value, children } => {
 				let partial = partial.build(node_data);
 				let mut result: Result<(), TrieHash<L>, CError<L>> = Ok(());
@@ -126,14 +139,29 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 				let children = (0..L::Nibble::NIBBLE_LENGTH).map(|i| {
 					Self::branch_children(i, node_data, children, &self.omit_children, result)
 				});
+				let value = if self.omit_value {
+					value.is_some().then_some(OMIT_VALUE_HASH)
+				} else {
+					value.as_ref().map(|v| v.build(node_data))
+				};
 				L::Codec::branch_node_nibbled(
 					partial.right_iter(),
 					partial.len(),
 					children,
-					value.clone().map(|range| &node_data[range])
+					//Self::branch_children(node_data, &children, &self.omit_children)?.iter(),
+					value,
 				)
+			},
+		};
+
+		if self.omit_value {
+			if let Some(header) = C::ESCAPE_HEADER {
+				encoded.insert(0, header);
+			} else {
+				return Err(Box::new(TrieError::InvalidStateRoot(Default::default())))
 			}
-		})
+		}
+		Ok(encoded)
 	}
 
 	/// Generate the list of child references for a branch node with certain children omitted.
@@ -147,8 +175,7 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 		child_handles: &BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
 		omit_children: &[bool],
 		result: &mut Result<(), TrieHash<L>, CError<L>>,
-	) -> Option<ChildReference<TrieHash<L>>>
-	{
+	) -> Option<ChildReference<TrieHash<L>>> {
 		let empty_child = ChildReference::Inline(TrieHash::<L>::default(), 0);
 		if omit_children[i] {
 			Some(empty_child)
@@ -156,9 +183,7 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 			let child_ref = child_plan
 				.build(node_data)
 				.try_into()
-				.map_err(|hash| Box::new(
-					TrieError::InvalidHash(TrieHash::<L>::default(), hash)
-				));
+				.map_err(|hash| Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash)));
 			match child_ref {
 				Ok(child_ref) => Some(child_ref),
 				Err(e) => {
@@ -172,6 +197,31 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 	}
 }
 
+/// Detached value if included does write a reserved header,
+/// followed by node encoded with 0 length value and the value
+/// as a standalone vec.
+fn detached_value<L: TrieLayout>(
+	db: &TrieDB<L>,
+	value: &ValuePlan,
+	node_data: &[u8],
+	node_prefix: Prefix,
+) -> Option<Vec<u8>> {
+	let fetched;
+	match value {
+		ValuePlan::Node(hash_plan) => {
+			if let Ok(value) =
+				TrieDBRawIterator::fetch_value(db, &node_data[hash_plan.clone()], node_prefix)
+			{
+				fetched = value;
+			} else {
+				return None
+			}
+		},
+		_ => return None,
+	}
+	Some(fetched)
+}
+
 /// Generates a compact representation of the partial trie stored in the given DB. The encoding
 /// is a vector of mutated trie nodes with those child references omitted. The mutated trie nodes
 /// are listed in pre-order traversal order so that the full nodes can be efficiently
@@ -180,8 +230,8 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
 pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CError<L>>
-	where
-		L: TrieLayout
+where
+	L: TrieLayout,
 {
 	let mut output = Vec::new();
 
@@ -189,23 +239,23 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 	// entry.
 	let mut stack: Vec<EncoderStackEntry<L>> = Vec::new();
 
-	// TrieDBNodeIterator guarantees that:
+	// TrieDBRawIterator guarantees that:
 	// - It yields at least one node.
 	// - The first node yielded is the root node with an empty prefix and is not inline.
 	// - The prefixes yielded are in strictly increasing lexographic order.
-	let iter = TrieDBNodeIterator::new(db)?;
+	let mut iter = TrieDBRawIterator::new(db)?;
 
-	// Following from the guarantees about TrieDBNodeIterator, we guarantee that after the first
+	// Following from the guarantees about TrieDBRawIterator, we guarantee that after the first
 	// iteration of the loop below, the stack always has at least one entry and the bottom (front)
 	// of the stack is the root node, which is not inline. Furthermore, the iterator is not empty,
 	// so at least one iteration always occurs.
-	for item in iter {
+	while let Some(item) = iter.next_raw_item(db) {
 		match item {
 			Ok((prefix, node_hash, node)) => {
 				// Skip inline nodes, as they cannot contain hash references to other nodes by
 				// assumption.
 				if node_hash.is_none() {
-					continue;
+					continue
 				}
 
 				// Unwind the stack until the new entry is a child of the last entry on the stack.
@@ -216,48 +266,57 @@ pub fn encode_compact<L>(db: &TrieDB<L>) -> Result<Vec<Vec<u8>>, TrieHash<L>, CE
 					if prefix.starts_with(&last_entry.prefix) {
 						// advance_child_index preconditions are satisfied because of iterator
 						// correctness.
-						last_entry.advance_child_index(&prefix)
-							.expect(
-								"all errors from advance_child_index indicate bugs with \
-								TrieDBNodeIterator or this function"
-							);
+						last_entry.advance_child_index(&prefix).expect(
+							"all errors from advance_child_index indicate bugs with \
+								TrieDBRawIterator or this function",
+						);
 						last_entry.omit_children[last_entry.child_index] = true;
 						last_entry.child_index += 1;
 						stack.push(last_entry);
-						break;
+						break
 					} else {
 						output[last_entry.output_index] = last_entry.encode_node()?;
 					}
 				}
 
-				let children_len = match node.node_plan() {
-					NodePlan::Empty | NodePlan::Leaf { .. } => 0,
-					NodePlan::Extension { .. } => 1,
-					NodePlan::Branch { .. }
-						| NodePlan::NibbledBranch { .. } => L::Nibble::NIBBLE_LENGTH,
+				let (children_len, detached_value) = match node.node_plan() {
+					NodePlan::Empty => (0, None),
+					NodePlan::Leaf { value, .. } =>
+						(0, detached_value(db, value, node.data(), prefix.as_prefix())),
+					NodePlan::Extension { .. } => (1, None),
+					NodePlan::NibbledBranch { value: Some(value), .. } |
+					NodePlan::Branch { value: Some(value), .. } =>
+						(NIBBLE_LENGTH, detached_value(db, value, node.data(), prefix.as_prefix())),
+					NodePlan::NibbledBranch { value: None, .. } |
+					NodePlan::Branch { value: None, .. } => (L::Nibble::NIBBLE_LENGTH, None),
 				};
+
 				stack.push(EncoderStackEntry {
-					prefix,
-					node,
+					prefix: prefix.clone(),
+					node: node.clone(),
 					child_index: 0,
 					omit_children: vec![false; children_len],
+					omit_value: detached_value.is_some(),
 					output_index: output.len(),
 				});
 				// Insert a placeholder into output which will be replaced when this new entry is
 				// popped from the stack.
 				output.push(Vec::new());
-			}
+				if let Some(value) = detached_value {
+					output.push(value);
+				}
+			},
 			Err(err) => match *err {
 				// If we hit an IncompleteDatabaseError, just ignore it and continue encoding the
 				// incomplete trie. This encoding must support partial tries, which can be used for
 				// space-efficient storage proofs.
 				TrieError::IncompleteDatabase(_) => {},
 				_ => return Err(err),
-			}
+			},
 		}
 	}
 
-	while let Some(entry) = stack.pop() {
+	while let Some(mut entry) = stack.pop() {
 		output[entry.output_index] = entry.encode_node()?;
 	}
 
@@ -271,6 +330,9 @@ struct DecoderStackEntry<'a, L: TrieLayout> {
 	child_index: usize,
 	/// The reconstructed child references.
 	children: Vec<Option<ChildReference<TrieHash<L>>>>,
+	/// A value attached as a node. The node will need to use its hash as value.
+	attached_value: Option<&'a [u8]>,
+	_marker: PhantomData<C>,
 }
 
 impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
@@ -286,36 +348,32 @@ impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
 		match &mut self.node {
 			Node::Extension(_, child) if self.child_index == 0 => {
 				match child {
-					NodeHandle::Inline(data) if data.is_empty() =>
-						return Ok(false),
+					NodeHandle::Inline(data) if data.is_empty() => return Ok(false),
 					_ => {
-						let child_ref = child.clone().try_into()
-							.map_err(|hash| Box::new(
-								TrieError::InvalidHash(TrieHash::<L>::default(), hash)
-							))?;
+						let child_ref = child.clone().try_into().map_err(|hash| {
+							Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash))
+						})?;
 						self.children[self.child_index] = Some(child_ref);
-					}
+					},
 				}
 				self.child_index += 1;
-			}
+			},
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
 				while self.child_index < L::Nibble::NIBBLE_LENGTH {
 					match children.at(self.child_index) {
-						Some(NodeHandle::Inline(data)) if data.is_empty() =>
-							return Ok(false),
+						Some(NodeHandle::Inline(data)) if data.is_empty() => return Ok(false),
 						Some(child) => {
-							let child_ref = child.try_into()
-								.map_err(|hash| Box::new(
-									TrieError::InvalidHash(TrieHash::<L>::default(), hash)
-								))?;
+							let child_ref = child.try_into().map_err(|hash| {
+								Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash))
+							})?;
 							self.children[self.child_index] = Some(child_ref);
-						}
-						None => {}
+						},
+						None => {},
 					}
 					self.child_index += 1;
 				}
-			}
-			_ => {}
+			},
+			_ => {},
 		}
 		Ok(true)
 	}
@@ -324,17 +382,17 @@ impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
 	/// prefix.
 	fn push_to_prefix(&self, prefix: &mut NibbleVec<L::Nibble>) {
 		match self.node {
-			Node::Empty => {}
+			Node::Empty => {},
 			Node::Leaf(partial, _) | Node::Extension(partial, _) => {
 				prefix.append_partial(partial.right());
-			}
+			},
 			Node::Branch(_, _) => {
 				prefix.push(self.child_index as u8);
-			}
+			},
 			Node::NibbledBranch(partial, _, _) => {
 				prefix.append_partial(partial.right());
 				prefix.push(self.child_index as u8);
-			}
+			},
 		}
 	}
 
@@ -342,17 +400,17 @@ impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
 	/// prefix.
 	fn pop_from_prefix(&self, prefix: &mut NibbleVec<L::Nibble>) {
 		match self.node {
-			Node::Empty => {}
+			Node::Empty => {},
 			Node::Leaf(partial, _) | Node::Extension(partial, _) => {
 				prefix.drop_lasts(partial.len());
-			}
+			},
 			Node::Branch(_, _) => {
 				prefix.pop();
-			}
+			},
 			Node::NibbledBranch(partial, _, _) => {
 				prefix.pop();
 				prefix.drop_lasts(partial.len());
-			}
+			},
 		}
 	}
 
@@ -360,28 +418,30 @@ impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
 	///
 	/// Preconditions:
 	/// - if node is an extension node, then `children[0]` is Some.
-	fn encode_node(self) -> Vec<u8> {
+	fn encode_node(self, attached_hash: Option<&[u8]>) -> Vec<u8> {
+		let attached_hash = attached_hash.map(|h| crate::node::Value::Node(h));
 		match self.node {
-			Node::Empty =>
-				L::Codec::empty_node().to_vec(),
-			Node::Leaf(partial, value) =>
-				L::Codec::leaf_node(partial.right(), value),
-			Node::Extension(partial, _) =>
-				L::Codec::extension_node(
-					partial.right_iter(),
-					partial.len(),
-					self.children[0]
-						.expect("required by method precondition; qed"),
-				),
-			Node::Branch(_, value) =>
-				L::Codec::branch_node(self.children.into_iter(), value),
-			Node::NibbledBranch(partial, _, value) =>
-				L::Codec::branch_node_nibbled(
-					partial.right_iter(),
-					partial.len(),
-					self.children.iter(),
-					value,
-				),
+			Node::Empty => L::Codec::empty_node().to_vec(),
+			Node::Leaf(partial, value) => L::Codec::leaf_node(
+				partial.right_iter(),
+				partial.len(),
+				attached_hash.unwrap_or(value),
+			),
+			Node::Extension(partial, _) => L::Codec::extension_node(
+				partial.right_iter(),
+				partial.len(),
+				self.children[0].expect("required by method precondition; qed"),
+			),
+			Node::Branch(_, value) => L::Codec::branch_node(
+				self.children.into_iter(),
+				if attached_hash.is_some() { attached_hash } else { value },
+			),
+			Node::NibbledBranch(partial, _, value) => L::Codec::branch_node_nibbled(
+				partial.right_iter(),
+				partial.len(),
+				self.children.iter(),
+				if attached_hash.is_some() { attached_hash } else { value },
+			),
 		}
 	}
 }
@@ -398,11 +458,26 @@ impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
 //
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
-pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
-	-> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
-	where
-		L: TrieLayout,
-		DB: HashDB<L::Hash, T>,
+pub fn decode_compact<L, DB>(
+	db: &mut DB,
+	encoded: &[Vec<u8>],
+) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
+where
+	L: TrieLayout,
+	DB: HashDB<L::Hash, DBValue>,
+{
+	decode_compact_from_iter::<L, DB, _>(db, encoded.iter().map(Vec::as_slice))
+}
+
+/// Variant of 'decode_compact' that accept an iterator of encoded nodes as input.
+pub fn decode_compact_from_iter<'a, L, DB, I>(
+	db: &mut DB,
+	encoded: I,
+) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
+where
+	L: TrieLayout,
+	DB: HashDB<L::Hash, DBValue>,
+	I: IntoIterator<Item = &'a [u8]>,
 {
 	// The stack of nodes through a path in the trie. Each entry is a child node of the preceding
 	// entry.
@@ -411,8 +486,15 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 	// The prefix of the next item to be read from the slice of encoded items.
 	let mut prefix = NibbleVec::new();
 
-	for (i, encoded_node) in encoded.iter().enumerate() {
-		let node = L::Codec::decode(encoded_node)
+	let mut iter = encoded.into_iter().enumerate();
+	while let Some((i, encoded_node)) = iter.next() {
+		let mut attached_node = 0;
+		if let Some(header) = L::Codec::ESCAPE_HEADER {
+			if encoded_node.starts_with(&[header]) {
+				attached_node = 1;
+			}
+		}
+		let node = L::Codec::decode(&encoded_node[attached_node..])
 			.map_err(|err| Box::new(TrieError::DecoderError(<TrieHash<L>>::default(), err)))?;
 
 		let children_len = match node {
@@ -424,199 +506,45 @@ pub fn decode_compact<L, DB, T>(db: &mut DB, encoded: &[Vec<u8>])
 			node,
 			child_index: 0,
 			children: vec![None; children_len],
+			attached_value: None,
+			_marker: PhantomData::default(),
 		};
+
+		if attached_node > 0 {
+			// Read value
+			if let Some((_, fetched_value)) = iter.next() {
+				last_entry.attached_value = Some(fetched_value);
+			} else {
+				return Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())))
+			}
+		}
 
 		loop {
 			if !last_entry.advance_child_index()? {
 				last_entry.push_to_prefix(&mut prefix);
 				stack.push(last_entry);
-				break;
+				break
 			}
 
 			// Since `advance_child_index` returned true, the preconditions for `encode_node` are
 			// satisfied.
-			let node_data = last_entry.encode_node();
+			let hash = last_entry
+				.attached_value
+				.as_ref()
+				.map(|value| db.insert(prefix.as_prefix(), value));
+			let node_data = last_entry.encode_node(hash.as_ref().map(|h| h.as_ref()));
 			let node_hash = db.insert(prefix.as_prefix(), node_data.as_ref());
 
 			if let Some(entry) = stack.pop() {
 				last_entry = entry;
 				last_entry.pop_from_prefix(&mut prefix);
-				last_entry.children[last_entry.child_index] =
-					Some(ChildReference::Hash(node_hash));
+				last_entry.children[last_entry.child_index] = Some(ChildReference::Hash(node_hash));
 				last_entry.child_index += 1;
 			} else {
-				return Ok((node_hash, i + 1));
+				return Ok((node_hash, i + 1))
 			}
 		}
 	}
 
 	Err(Box::new(TrieError::IncompleteDatabase(<TrieHash<L>>::default())))
-}
-
-#[cfg(test)]
-mod tests {
-	use crate::DBValue;
-	use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
-	use reference_trie::{
-		ExtensionLayout, NoExtensionLayout,
-		Trie, TrieMut, TrieDB, TrieError, TrieDBMut, TrieLayout, Recorder,
-		encode_compact, decode_compact,
-	};
-
-	type MemoryDB<H> = memory_db::MemoryDB<H, memory_db::HashKey<H>, DBValue>;
-
-	fn test_encode_compact<L: TrieLayout>(
-		entries: Vec<(&'static [u8], &'static [u8])>,
-		keys: Vec<&'static [u8]>,
-	) -> (<L::Hash as Hasher>::Out, Vec<Vec<u8>>, Vec<(&'static [u8], Option<DBValue>)>)
-	{
-		// Populate DB with full trie from entries.
-		let (db, root) = {
-			let mut db = <MemoryDB<L::Hash>>::default();
-			let mut root = Default::default();
-			{
-				let mut trie = <TrieDBMut<L>>::new(&mut db, &mut root);
-				for (key, value) in entries.iter() {
-					trie.insert(key, value).unwrap();
-				}
-			}
-			(db, root)
-		};
-
-		// Lookup items in trie while recording traversed nodes.
-		let mut recorder = Recorder::new();
-		let items = {
-			let mut items = Vec::with_capacity(keys.len());
-			let trie = <TrieDB<L>>::new(&db, &root).unwrap();
-			for key in keys {
-				let value = trie.get_with(key, &mut recorder).unwrap();
-				items.push((key, value));
-			}
-			items
-		};
-
-		// Populate a partial trie DB with recorded nodes.
-		let mut partial_db = MemoryDB::default();
-		for record in recorder.drain() {
-			partial_db.insert(EMPTY_PREFIX, &record.data);
-		}
-
-		// Compactly encode the partial trie DB.
-		let compact_trie = {
-			let trie = <TrieDB<L>>::new(&partial_db, &root).unwrap();
-			encode_compact::<L>(&trie).unwrap()
-		};
-
-		(root, compact_trie, items)
-	}
-
-	fn test_decode_compact<L: TrieLayout>(
-		encoded: &[Vec<u8>],
-		items: Vec<(&'static [u8], Option<DBValue>)>,
-		expected_root: <L::Hash as Hasher>::Out,
-		expected_used: usize,
-	) {
-		// Reconstruct the partial DB from the compact encoding.
-		let mut db = MemoryDB::default();
-		let (root, used) = decode_compact::<L, _, _>(&mut db, encoded).unwrap();
-		assert_eq!(root, expected_root);
-		assert_eq!(used, expected_used);
-
-		// Check that lookups for all items succeed.
-		let trie = <TrieDB<L>>::new(&db, &root).unwrap();
-		for (key, expected_value) in items {
-			assert_eq!(trie.get(key).unwrap(), expected_value);
-		}
-	}
-
-	#[test]
-	fn trie_compact_encoding_works_with_ext() {
-		let (root, mut encoded, items) = test_encode_compact::<ExtensionLayout>(
-			vec![
-				// "alfa" is at a hash-referenced leaf node.
-				(b"alfa", &[0; 32]),
-				// "bravo" is at an inline leaf node.
-				(b"bravo", b"bravo"),
-				// "do" is at a hash-referenced branch node.
-				(b"do", b"verb"),
-				// "dog" is at an inline leaf node.
-				(b"dog", b"puppy"),
-				// "doge" is at a hash-referenced leaf node.
-				(b"doge", &[0; 32]),
-				// extension node "o" (plus nibble) to next branch.
-				(b"horse", b"stallion"),
-				(b"house", b"building"),
-			],
-			vec![
-				b"do",
-				b"dog",
-				b"doge",
-				b"bravo",
-				b"d", // None, witness is extension node with omitted child
-				b"do\x10", // None, empty branch child
-				b"halp", // None, witness is extension node with non-omitted child
-			],
-		);
-
-		encoded.push(Vec::new()); // Add an extra item to ensure it is not read.
-		test_decode_compact::<ExtensionLayout>(&encoded, items, root, encoded.len() - 1);
-	}
-
-	#[test]
-	fn trie_compact_encoding_works_without_ext() {
-		let (root, mut encoded, items) = test_encode_compact::<NoExtensionLayout>(
-			vec![
-				// "alfa" is at a hash-referenced leaf node.
-				(b"alfa", &[0; 32]),
-				// "bravo" is at an inline leaf node.
-				(b"bravo", b"bravo"),
-				// "do" is at a hash-referenced branch node.
-				(b"do", b"verb"),
-				// "dog" is at an inline leaf node.
-				(b"dog", b"puppy"),
-				// "doge" is at a hash-referenced leaf node.
-				(b"doge", &[0; 32]),
-				// extension node "o" (plus nibble) to next branch.
-				(b"horse", b"stallion"),
-				(b"house", b"building"),
-			],
-			vec![
-				b"do",
-				b"dog",
-				b"doge",
-				b"bravo",
-				b"d", // None, witness is a branch partial
-				b"do\x10", // None, witness is empty branch child
-				b"halp", // None, witness is branch partial
-			],
-		);
-
-		encoded.push(Vec::new()); // Add an extra item to ensure it is not read.
-		test_decode_compact::<NoExtensionLayout>(&encoded, items, root, encoded.len() - 1);
-	}
-
-	#[test]
-	fn trie_decoding_fails_with_incomplete_database() {
-		let (_, encoded, _) = test_encode_compact::<ExtensionLayout>(
-			vec![
-				(b"alfa", &[0; 32]),
-				(b"bravo", b"bravo"),
-			],
-			vec![
-				b"alfa",
-			],
-		);
-
-		assert!(encoded.len() > 1);
-
-		// Reconstruct the partial DB from the compact encoding.
-		let mut db = MemoryDB::default();
-		match decode_compact::<ExtensionLayout, _, _>(&mut db, &encoded[..encoded.len() - 1]) {
-			Err(err) => match *err {
-				TrieError::IncompleteDatabase(_) => {}
-				_ => panic!("got unexpected TrieError"),
-			}
-			_ => panic!("decode was unexpectedly successful"),
-		}
-	}
 }

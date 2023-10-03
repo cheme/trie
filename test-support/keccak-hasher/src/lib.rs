@@ -14,23 +14,28 @@
 
 //! Hasher implementation for the Keccak-256 hash
 
-use hash_db::Hasher;
-use tiny_keccak::Keccak;
 use hash256_std_hasher::Hash256StdHasher;
+use hash_db::Hasher;
+use tiny_keccak::{Hasher as _, Keccak};
+
+/// The `Keccak` hash output type.
+pub type KeccakHash = [u8; 32];
 
 /// Concrete `Hasher` impl for the Keccak-256 hash
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct KeccakHasher;
 impl Hasher for KeccakHasher {
-	type Out = [u8; 32];
+	type Out = KeccakHash;
 
 	type StdHasher = Hash256StdHasher;
 
 	const LENGTH: usize = 32;
 
 	fn hash(x: &[u8]) -> Self::Out {
+		let mut keccak = Keccak::v256();
+		keccak.update(x);
 		let mut out = [0u8; 32];
-		Keccak::keccak256(x, &mut out);
+		keccak.finalize(&mut out);
 		out
 	}
 }
@@ -49,7 +54,11 @@ mod tests {
 		h.insert(hello_key, hello_bytes.to_vec());
 		h.remove(&hello_key);
 
-		let mut h: HashMap<<KeccakHasher as Hasher>::Out, Vec<u8>, std::hash::BuildHasherDefault<Hash256StdHasher>> = Default::default();
+		let mut h: HashMap<
+			<KeccakHasher as Hasher>::Out,
+			Vec<u8>,
+			std::hash::BuildHasherDefault<Hash256StdHasher>,
+		> = Default::default();
 		h.insert(hello_key, hello_bytes.to_vec());
 		h.remove(&hello_key);
 	}

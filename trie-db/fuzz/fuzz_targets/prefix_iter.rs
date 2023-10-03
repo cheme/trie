@@ -1,8 +1,8 @@
 #![no_main]
 
-use trie_db_fuzz::fuzz_prefix_iter;
 use libfuzzer_sys::fuzz_target;
+use trie_db_fuzz::fuzz_prefix_iter;
 
 fuzz_target!(|data: &[u8]| {
-	fuzz_prefix_iter(data);
+	fuzz_prefix_iter::<reference_trie::NoExtensionLayout>(data);
 });

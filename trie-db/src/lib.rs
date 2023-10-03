@@ -1,4 +1,4 @@
-// Copyright 2017, 2019 Parity Technologies
+// Copyright 2017, 2021 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,22 +15,28 @@
 
 //! Trie interface and implementation.
 
-
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
 #[cfg(feature = "std")]
 mod rstd {
-	pub use std::{borrow, boxed, cmp, convert, fmt, hash, iter, marker, mem, ops, rc, result, vec, slice};
-	pub use std::collections::VecDeque;
-	pub use std::error::Error;
+	pub use std::{
+		borrow, boxed, cmp,
+		collections::{BTreeMap, VecDeque},
+		convert,
+		error::Error,
+		fmt, hash, iter, marker, mem, ops, rc, result, sync, vec,
+	};
 }
 
 #[cfg(not(feature = "std"))]
 mod rstd {
-	pub use core::{borrow, convert, cmp, iter, fmt, hash, marker, mem, ops, result, slice};
-	pub use alloc::{boxed, rc, vec};
-	pub use alloc::collections::VecDeque;
+	pub use alloc::{
+		borrow, boxed,
+		collections::{btree_map::BTreeMap, VecDeque},
+		rc, sync, vec,
+	};
+	pub use core::{cmp, convert, fmt, hash, iter, marker, mem, ops, result};
 	pub trait Error {}
 	impl<T> Error for T {}
 }
@@ -38,16 +44,17 @@ mod rstd {
 #[cfg(feature = "std")]
 use self::rstd::{fmt, Error};
 
-use hash_db::MaybeDebug;
 use self::rstd::{boxed::Box, vec::Vec};
+use hash_db::MaybeDebug;
+use node::NodeOwned;
 
 pub mod node;
 pub mod proof;
-pub mod triedb;
-pub mod triedbmut;
+pub mod recorder;
 pub mod sectriedb;
 pub mod sectriedbmut;
-pub mod recorder;
+pub mod triedb;
+pub mod triedbmut;
 
 mod fatdb;
 mod fatdbmut;
@@ -58,23 +65,27 @@ mod nibble;
 mod node_codec;
 mod trie_codec;
 
+pub use self::{
+	fatdb::{FatDB, FatDBIterator},
+	fatdbmut::FatDBMut,
+	lookup::Lookup,
+	nibble::{
+		nibble_ops, ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4,
+		ChildSliceIndex, NibbleOps, NibbleSlice, NibbleVec, Radix16, Radix2, Radix256, Radix4,
+	},
+	recorder::Recorder,
+	sectriedb::SecTrieDB,
+	sectriedbmut::SecTrieDBMut,
+	triedb::{TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBKeyIterator},
+	triedbmut::{ChildReference, TrieDBMut, TrieDBMutBuilder, Value},
+};
+pub use crate::{
+	iter_build::{trie_visit, ProcessEncodedNode, TrieBuilder, TrieRoot, TrieRootUnhashed},
+	iterator::{TrieDBNodeIterator, TrieDBRawIterator},
+	node_codec::{NodeCodec, Partial},
+	trie_codec::{decode_compact, decode_compact_from_iter, encode_compact},
+};
 pub use hash_db::{HashDB, HashDBRef, Hasher};
-pub use self::triedb::{TrieDB, TrieDBIterator};
-pub use self::triedbmut::{TrieDBMut, ChildReference};
-pub use self::sectriedbmut::SecTrieDBMut;
-pub use self::sectriedb::SecTrieDB;
-pub use self::fatdb::{FatDB, FatDBIterator};
-pub use self::fatdbmut::FatDBMut;
-pub use self::recorder::{Recorder, Record};
-pub use self::lookup::Lookup;
-pub use self::nibble::{NibbleSlice, NibbleVec, NibbleOps, ChildIndex,
-	ChildIndex2, ChildIndex4, ChildIndex16, ChildIndex256,
-	Radix16, Radix4, Radix2, Radix256, ChildSliceIndex};
-pub use crate::node_codec::{NodeCodec, Partial, BitMap};
-pub use crate::iter_build::{trie_visit, ProcessEncodedNode,
-	 TrieBuilder, TrieRoot, TrieRootUnhashed};
-pub use crate::iterator::TrieDBNodeIterator;
-pub use crate::trie_codec::{decode_compact, encode_compact};
 
 #[cfg(feature = "std")]
 pub use crate::iter_build::TrieRootPrint;
@@ -98,77 +109,157 @@ pub enum TrieError<T, E> {
 	ValueAtIncompleteKey(Vec<u8>, (u8, u8)),
 	/// Corrupt Trie item
 	DecoderError(T, E),
+	/// Hash is not value.
 	InvalidHash(T, Vec<u8>),
 }
 
 #[cfg(feature = "std")]
-impl<T, E> fmt::Display for TrieError<T, E> where T: MaybeDebug, E: MaybeDebug {
+impl<T, E> fmt::Display for TrieError<T, E>
+where
+	T: MaybeDebug,
+	E: MaybeDebug,
+{
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match *self {
-			TrieError::InvalidStateRoot(ref root) =>
-				write!(f, "Invalid state root: {:?}", root),
+			TrieError::InvalidStateRoot(ref root) => write!(f, "Invalid state root: {:?}", root),
 			TrieError::IncompleteDatabase(ref missing) =>
 				write!(f, "Database missing expected key: {:?}", missing),
 			TrieError::ValueAtIncompleteKey(ref bytes, ref extra) =>
 				write!(f, "Value found in trie at incomplete key {:?} + {:?}", bytes, extra),
 			TrieError::DecoderError(ref hash, ref decoder_err) => {
 				write!(f, "Decoding failed for hash {:?}; err: {:?}", hash, decoder_err)
-			}
-			TrieError::InvalidHash(ref hash, ref data) =>
-				write!(
-					f,
-					"Encoded node {:?} contains invalid hash reference with length: {}",
-					hash, data.len()
-				),
+			},
+			TrieError::InvalidHash(ref hash, ref data) => write!(
+				f,
+				"Encoded node {:?} contains invalid hash reference with length: {}",
+				hash,
+				data.len()
+			),
 		}
 	}
 }
 
 #[cfg(feature = "std")]
-impl<T, E> Error for TrieError<T, E> where T: fmt::Debug, E: Error { }
+impl<T, E> Error for TrieError<T, E>
+where
+	T: fmt::Debug,
+	E: Error,
+{
+}
 
 /// Trie result type.
 /// Boxed to avoid copying around extra space for the `Hasher`s `Out` on successful queries.
 pub type Result<T, H, E> = crate::rstd::result::Result<T, Box<TrieError<H, E>>>;
 
-
 /// Trie-Item type used for iterators over trie data.
-pub type TrieItem<'a, U, E> = Result<(Vec<u8>, DBValue), U, E>;
+pub type TrieItem<U, E> = Result<(Vec<u8>, DBValue), U, E>;
+
+/// Trie-Item type used for iterators over trie key only.
+pub type TrieKeyItem<U, E> = Result<Vec<u8>, U, E>;
 
 /// Description of what kind of query will be made to the trie.
-///
-/// This is implemented for any &mut recorder (where the query will return
-/// a DBValue), any function taking raw bytes (where no recording will be made),
-/// or any tuple of (&mut Recorder, FnOnce(&[u8]))
 pub trait Query<H: Hasher> {
 	/// Output item.
 	type Item;
 
 	/// Decode a byte-slice into the desired item.
 	fn decode(self, data: &[u8]) -> Self::Item;
-
-	/// Record that a node has been passed through.
-	fn record(&mut self, _hash: &H::Out, _data: &[u8], _depth: u32) {}
 }
 
-impl<'a, H: Hasher> Query<H> for &'a mut Recorder<H::Out> {
-	type Item = DBValue;
-	fn decode(self, value: &[u8]) -> DBValue { value.to_vec() }
-	fn record(&mut self, hash: &H::Out, data: &[u8], depth: u32) {
-		(&mut **self).record(hash, data, depth);
+/// Used to report the trie access to the [`TrieRecorder`].
+///
+/// As the trie can use a [`TrieCache`], there are multiple kinds of accesses.
+/// If a cache is used, [`Self::Key`] and [`Self::NodeOwned`] are possible
+/// values. Otherwise only [`Self::EncodedNode`] is a possible value.
+#[cfg_attr(feature = "std", derive(Debug))]
+pub enum TrieAccess<'a, H> {
+	/// The given [`NodeOwned`] was accessed using its `hash`.
+	NodeOwned { hash: H, node_owned: &'a NodeOwned<H> },
+	/// The given `encoded_node` was accessed using its `hash`.
+	EncodedNode { hash: H, encoded_node: rstd::borrow::Cow<'a, [u8]> },
+	/// The given `value` was accessed using its `hash`.
+	///
+	/// The given `full_key` is the key to access this value in the trie.
+	///
+	/// Should map to [`RecordedForKey::Value`] when checking the recorder.
+	Value { hash: H, value: rstd::borrow::Cow<'a, [u8]>, full_key: &'a [u8] },
+	/// A value was accessed that is stored inline a node.
+	///
+	/// As the value is stored inline there is no need to separately record the value as it is part
+	/// of a node. The given `full_key` is the key to access this value in the trie.
+	///
+	/// Should map to [`RecordedForKey::Value`] when checking the recorder.
+	InlineValue { full_key: &'a [u8] },
+	/// The hash of the value for the given `full_key` was accessed.
+	///
+	/// Should map to [`RecordedForKey::Hash`] when checking the recorder.
+	Hash { full_key: &'a [u8] },
+	/// The value/hash for `full_key` was accessed, but it couldn't be found in the trie.
+	///
+	/// Should map to [`RecordedForKey::Value`] when checking the recorder.
+	NonExisting { full_key: &'a [u8] },
+}
+
+/// Result of [`TrieRecorder::trie_nodes_recorded_for_key`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordedForKey {
+	/// We recorded all trie nodes up to the value for a storage key.
+	///
+	/// This should be returned when the recorder has seen the following [`TrieAccess`]:
+	///
+	/// - [`TrieAccess::Value`]: If we see this [`TrieAccess`], it means we have recorded all the
+	///   trie nodes up to the value.
+	/// - [`TrieAccess::NonExisting`]: If we see this [`TrieAccess`], it means we have recorded all
+	///   the necessary  trie nodes to prove that the value doesn't exist in the trie.
+	Value,
+	/// We recorded all trie nodes up to the value hash for a storage key.
+	///
+	/// If we have a [`RecordedForKey::Value`], it means that we also have the hash of this value.
+	/// This also means that if we first have recorded the hash of a value and then also record the
+	/// value, the access should be upgraded to [`RecordedForKey::Value`].
+	///
+	/// This should be returned when the recorder has seen the following [`TrieAccess`]:
+	///
+	/// - [`TrieAccess::Hash`]: If we see this [`TrieAccess`], it means we have recorded all trie
+	///   nodes to have the hash of the value.
+	Hash,
+	/// We haven't recorded any trie nodes yet for a storage key.
+	///
+	/// This means we have not seen any [`TrieAccess`] referencing the searched key.
+	None,
+}
+
+impl RecordedForKey {
+	/// Is `self` equal to [`Self::None`]?
+	pub fn is_none(&self) -> bool {
+		matches!(self, Self::None)
 	}
 }
 
-impl<F, T, H: Hasher> Query<H> for F where F: for<'a> FnOnce(&'a [u8]) -> T {
-	type Item = T;
-	fn decode(self, value: &[u8]) -> T { (self)(value) }
+/// A trie recorder that can be used to record all kind of [`TrieAccess`]'s.
+///
+/// To build a trie proof a recorder is required that records all trie accesses. These recorded trie
+/// accesses can then be used to create the proof.
+pub trait TrieRecorder<H> {
+	/// Record the given [`TrieAccess`].
+	///
+	/// Depending on the [`TrieAccess`] a call of [`Self::trie_nodes_recorded_for_key`] afterwards
+	/// must return the correct recorded state.
+	fn record<'a>(&mut self, access: TrieAccess<'a, H>);
+
+	/// Check if we have recorded any trie nodes for the given `key`.
+	///
+	/// Returns [`RecordedForKey`] to express the state of the recorded trie nodes.
+	fn trie_nodes_recorded_for_key(&self, key: &[u8]) -> RecordedForKey;
 }
 
-impl<'a, F, T, H: Hasher> Query<H> for (&'a mut Recorder<H::Out>, F) where F: FnOnce(&[u8]) -> T {
+impl<F, T, H: Hasher> Query<H> for F
+where
+	F: for<'a> FnOnce(&'a [u8]) -> T,
+{
 	type Item = T;
-	fn decode(self, value: &[u8]) -> T { (self.1)(value) }
-	fn record(&mut self, hash: &H::Out, data: &[u8], depth: u32) {
-		self.0.record(hash, data, depth)
+	fn decode(self, value: &[u8]) -> T {
+		(self)(value)
 	}
 }
 
@@ -178,34 +269,58 @@ pub trait Trie<L: TrieLayout> {
 	fn root(&self) -> &TrieHash<L>;
 
 	/// Is the trie empty?
-	fn is_empty(&self) -> bool { *self.root() == L::Codec::hashed_null_node() }
+	fn is_empty(&self) -> bool {
+		*self.root() == L::Codec::hashed_null_node()
+	}
 
 	/// Does the trie contain a given key?
 	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
-		self.get(key).map(|x| x.is_some() )
+		self.get(key).map(|x| x.is_some())
 	}
 
+	/// Returns the hash of the value for `key`.
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>>;
+
 	/// What is the value of the given key in this trie?
-	fn get<'a, 'key>(
-		&'a self,
-		key: &'key [u8],
-	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> where 'a: 'key {
-		self.get_with(key, |v: &[u8]| v.to_vec() )
+	fn get(&self, key: &[u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
+		self.get_with(key, |v: &[u8]| v.to_vec())
 	}
 
 	/// Search for the key with the given query parameter. See the docs of the `Query`
 	/// trait for more details.
-	fn get_with<'a, 'key, Q: Query<L::Hash>>(
-		&'a self,
-		key: &'key [u8],
-		query: Q
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> where 'a: 'key;
+	fn get_with<Q: Query<L::Hash>>(
+		&self,
+		key: &[u8],
+		query: Q,
+	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>>;
+
+	/// Look up the [`MerkleValue`] of the node that is the closest descendant for the provided
+	/// key.
+	///
+	/// When the provided key leads to a node, then the merkle value of that node
+	/// is returned. However, if the key does not lead to a node, then the merkle value
+	/// of the closest descendant is returned. `None` if no such descendant exists.
+	fn lookup_first_descendant(
+		&self,
+		key: &[u8],
+	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>>;
 
 	/// Returns a depth-first iterator over the elements of trie.
-	fn iter<'a>(&'a self) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L> >> + 'a>,
+	fn iter<'a>(
+		&'a self,
+	) -> Result<
+		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
 		TrieHash<L>,
-		CError<L>
+		CError<L>,
+	>;
+
+	/// Returns a depth-first iterator over the keys of elemets of trie.
+	fn key_iter<'a>(
+		&'a self,
+	) -> Result<
+		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
+		TrieHash<L>,
+		CError<L>,
 	>;
 }
 
@@ -223,10 +338,9 @@ pub trait TrieMut<L: TrieLayout> {
 	}
 
 	/// What is the value of the given key in this trie?
-	fn get<'a, 'key>(
-		&'a self,
-		key: &'key [u8],
-	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> where 'a: 'key;
+	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
+	where
+		'a: 'key;
 
 	/// Insert a `key`/`value` pair into the trie. An empty value is equivalent to removing
 	/// `key` from the trie. Returns the old value associated with this key, if it existed.
@@ -234,11 +348,11 @@ pub trait TrieMut<L: TrieLayout> {
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>;
+	) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>>;
 
 	/// Remove a `key` from the trie. Equivalent to making it equal to the empty
 	/// value. Returns the old value associated with this key, if it existed.
-	fn remove(&mut self, key: &[u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>;
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>>;
 }
 
 /// A trie iterator that also supports random access (`seek()`).
@@ -267,20 +381,19 @@ impl Default for TrieSpec {
 
 /// Trie factory.
 #[derive(Default, Clone)]
-pub struct TrieFactory<L: TrieLayout> {
+pub struct TrieFactory {
 	spec: TrieSpec,
-	layout: L,
 }
 
 /// All different kinds of tries.
 /// This is used to prevent a heap allocation for every created trie.
-pub enum TrieKinds<'db, L: TrieLayout> {
+pub enum TrieKinds<'db, 'cache, L: TrieLayout> {
 	/// A generic trie db.
-	Generic(TrieDB<'db, L>),
+	Generic(TrieDB<'db, 'cache, L>),
 	/// A secure trie db.
-	Secure(SecTrieDB<'db, L>),
+	Secure(SecTrieDB<'db, 'cache, L>),
 	/// A fat trie db.
-	Fat(FatDB<'db, L>),
+	Fat(FatDB<'db, 'cache, L>),
 }
 
 // wrapper macro for making the match easier to deal with.
@@ -294,7 +407,7 @@ macro_rules! wrapper {
 	}
 }
 
-impl<'db, L: TrieLayout> Trie<L> for TrieKinds<'db, L> {
+impl<'db, 'cache, L: TrieLayout> Trie<L> for TrieKinds<'db, 'cache, L> {
 	fn root(&self) -> &TrieHash<L> {
 		wrapper!(self, root,)
 	}
@@ -307,74 +420,95 @@ impl<'db, L: TrieLayout> Trie<L> for TrieKinds<'db, L> {
 		wrapper!(self, contains, key)
 	}
 
-	fn get_with<'a, 'key, Q: Query<L::Hash>>(
-		&'a self, key: &'key [u8],
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		wrapper!(self, get_hash, key)
+	}
+
+	fn get_with<Q: Query<L::Hash>>(
+		&self,
+		key: &[u8],
 		query: Q,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>>
-		where 'a: 'key
-	{
+	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
 		wrapper!(self, get_with, key, query)
 	}
 
-	fn iter<'a>(&'a self) -> Result<
+	fn lookup_first_descendant(
+		&self,
+		key: &[u8],
+	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>> {
+		wrapper!(self, lookup_first_descendant, key)
+	}
+
+	fn iter<'a>(
+		&'a self,
+	) -> Result<
 		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
 		TrieHash<L>,
 		CError<L>,
 	> {
 		wrapper!(self, iter,)
 	}
+
+	fn key_iter<'a>(
+		&'a self,
+	) -> Result<
+		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
+		TrieHash<L>,
+		CError<L>,
+	> {
+		wrapper!(self, key_iter,)
+	}
 }
 
-impl<'db, L> TrieFactory<L>
-where
-	L: TrieLayout + 'db,
-{
+impl TrieFactory {
 	/// Creates new factory.
-	pub fn new(spec: TrieSpec, layout: L) -> Self {
-		TrieFactory { spec, layout }
+	pub fn new(spec: TrieSpec) -> Self {
+		TrieFactory { spec }
 	}
 
 	/// Create new immutable instance of Trie.
-	pub fn readonly(
+	pub fn readonly<'db, 'cache, L: TrieLayout>(
 		&self,
 		db: &'db dyn HashDBRef<L::Hash, DBValue>,
-		root: &'db TrieHash<L>
-	) -> Result<TrieKinds<'db, L>, TrieHash<L>, CError<L>> {
+		root: &'db TrieHash<L>,
+	) -> TrieKinds<'db, 'cache, L> {
 		match self.spec {
-			TrieSpec::Generic => Ok(TrieKinds::Generic(TrieDB::new(db, root)?)),
-			TrieSpec::Secure => Ok(TrieKinds::Secure(SecTrieDB::new(db, root)?)),
-			TrieSpec::Fat => Ok(TrieKinds::Fat(FatDB::new(db, root)?)),
+			TrieSpec::Generic => TrieKinds::Generic(TrieDBBuilder::new(db, root).build()),
+			TrieSpec::Secure => TrieKinds::Secure(SecTrieDB::new(db, root)),
+			TrieSpec::Fat => TrieKinds::Fat(FatDB::new(db, root)),
 		}
 	}
 
 	/// Create new mutable instance of Trie.
-	pub fn create(
+	pub fn create<'db, L: TrieLayout + 'db>(
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
 	) -> Box<dyn TrieMut<L> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Box::new(TrieDBMut::<L>::new(db, root)),
+			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::new(db, root).build()),
 			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::new(db, root)),
 			TrieSpec::Fat => Box::new(FatDBMut::<L>::new(db, root)),
 		}
 	}
 
 	/// Create new mutable instance of trie and check for errors.
-	pub fn from_existing(
+	pub fn from_existing<'db, L: TrieLayout + 'db>(
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
 		root: &'db mut TrieHash<L>,
-	) -> Result<Box<dyn TrieMut<L> + 'db>, TrieHash<L>, CError<L>> {
+	) -> Box<dyn TrieMut<L> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Ok(Box::new(TrieDBMut::<L>::from_existing(db, root)?)),
-			TrieSpec::Secure => Ok(Box::new(SecTrieDBMut::<L>::from_existing(db, root)?)),
-			TrieSpec::Fat => Ok(Box::new(FatDBMut::<L>::from_existing(db, root)?)),
+			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::from_existing(db, root).build()),
+			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::from_existing(db, root)),
+			TrieSpec::Fat => Box::new(FatDBMut::<L>::from_existing(db, root)),
 		}
 	}
 
 	/// Returns true iff the trie DB is a fat DB (allows enumeration of keys).
-	pub fn is_fat(&self) -> bool { self.spec == TrieSpec::Fat }
+	pub fn is_fat(&self) -> bool {
+		self.spec == TrieSpec::Fat
+	}
 }
 
 /// Trait with definition of trie layout.
@@ -385,54 +519,61 @@ pub trait TrieLayout {
 	/// no partial in branch, if false the trie will only
 	/// use branch and node with partials in both.
 	const USE_EXTENSION: bool;
+	/// If true, the trie will allow empty values into `TrieDBMut`
+	const ALLOW_EMPTY: bool = false;
+	/// Threshold above which an external node should be
+	/// use to store a node value.
+	const MAX_INLINE_VALUE: Option<u32>;
+
 	/// Trie nibble constants. It defines trie radix.
 	type Nibble: NibbleOps;
 	/// Hasher to use for this trie.
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
-	type Codec: NodeCodec<HashOut=TrieHash<Self>, Nibble=Self::Nibble>;
-
+	type Codec: NodeCodec<HashOut = TrieHash<Self>, Nibble = Self::Nibble>;
 	/// Array to use with `iter_build`.
 	type ChildRefIndex: ChildIndex<ChildReference<TrieHash<Self>>>;
 	/// Array to use with `triedbmut`.
 	type NodeIndex: ChildIndex<triedbmut::NodeHandle<TrieHash<Self>>>;
 }
 
-
 /// This trait associates a trie definition with preferred methods.
 /// It also contains own default implementations and can be
 /// used to allow switching implementation.
 pub trait TrieConfiguration: Sized + TrieLayout {
 	/// Operation to build a trie db from its ordered iterator over its key/values.
-	fn trie_build<DB, I, A, B>(db: &mut DB, input: I) -> <Self::Hash as Hasher>::Out where
-	DB: HashDB<Self::Hash, usize>,
-	I: IntoIterator<Item = (A, B)>,
-	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	fn trie_build<DB, I, A, B>(db: &mut DB, input: I) -> <Self::Hash as Hasher>::Out
+	where
+		DB: HashDB<Self::Hash, DBValue>,
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord,
+		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieBuilder::new(db);
+		let mut cb = TrieBuilder::<Self, DB>::new(db);
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
-		cb.root.unwrap_or(Default::default())
+		cb.root.unwrap_or_default()
 	}
 	/// Determines a trie root given its ordered contents, closed form.
-	fn trie_root<I, A, B>(input: I) -> <Self::Hash as Hasher>::Out where
-	I: IntoIterator<Item = (A, B)>,
-	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	fn trie_root<I, A, B>(input: I) -> <Self::Hash as Hasher>::Out
+	where
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord,
+		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieRoot::<Self::Hash, _>::default();
+		let mut cb = TrieRoot::<Self>::default();
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
-		cb.root.unwrap_or(Default::default())
+		cb.root.unwrap_or_default()
 	}
 	/// Determines a trie root node's data given its ordered contents, closed form.
-	fn trie_root_unhashed<I, A, B>(input: I) -> Vec<u8> where
-	I: IntoIterator<Item = (A, B)>,
-	A: AsRef<[u8]> + Ord,
-	B: AsRef<[u8]>,
+	fn trie_root_unhashed<I, A, B>(input: I) -> Vec<u8>
+	where
+		I: IntoIterator<Item = (A, B)>,
+		A: AsRef<[u8]> + Ord,
+		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieRootUnhashed::<Self::Hash>::default();
+		let mut cb = TrieRootUnhashed::<Self>::default();
 		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
-		cb.root.unwrap_or(Default::default())
+		cb.root.unwrap_or_default()
 	}
 	/// Encoding of index as a key (when reusing general trie for
 	/// indexed trie).
@@ -447,10 +588,8 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 		I: IntoIterator<Item = A>,
 		A: AsRef<[u8]>,
 	{
-		Self::trie_root(input
-			.into_iter()
-			.enumerate()
-			.map(|(i, v)| (Self::encode_index(i as u32), v))
+		Self::trie_root(
+			input.into_iter().enumerate().map(|(i, v)| (Self::encode_index(i as u32), v)),
 		)
 	}
 }
@@ -461,3 +600,199 @@ pub type TrieHash<L> = <<L as TrieLayout>::Hash as Hasher>::Out;
 pub type CError<L> = <<L as TrieLayout>::Codec as NodeCodec>::Error;
 /// Alias accessor to child slice index from a `TrieLayout`.
 pub type TrieChildRangeIndex<L> = <<L as TrieLayout>::Nibble as NibbleOps>::ChildRangeIndex;
+
+/// A value as cached by the [`TrieCache`].
+#[derive(Clone, Debug)]
+pub enum CachedValue<H> {
+	/// The value doesn't exist in the trie.
+	NonExisting,
+	/// We cached the hash, because we did not yet accessed the data.
+	ExistingHash(H),
+	/// The value exists in the trie.
+	Existing {
+		/// The hash of the value.
+		hash: H,
+		/// The actual data of the value stored as [`BytesWeak`].
+		///
+		/// The original data [`Bytes`] is stored in the trie node
+		/// that is also cached by the [`TrieCache`]. If this node is dropped,
+		/// this data will also not be "upgradeable" anymore.
+		data: BytesWeak,
+	},
+}
+
+impl<H: Copy> CachedValue<H> {
+	/// Returns the data of the value.
+	///
+	/// If a value doesn't exist in the trie or only the value hash is cached, this function returns
+	/// `None`. If the reference to the data couldn't be upgraded (see [`Bytes::upgrade`]), this
+	/// function returns `Some(None)`, aka the data needs to be fetched again from the trie.
+	pub fn data(&self) -> Option<Option<Bytes>> {
+		match self {
+			Self::Existing { data, .. } => Some(data.upgrade()),
+			_ => None,
+		}
+	}
+
+	/// Returns the hash of the value.
+	///
+	/// Returns only `None` when the value doesn't exist.
+	pub fn hash(&self) -> Option<H> {
+		match self {
+			Self::ExistingHash(hash) | Self::Existing { hash, .. } => Some(*hash),
+			Self::NonExisting => None,
+		}
+	}
+}
+
+impl<H> From<(Bytes, H)> for CachedValue<H> {
+	fn from(value: (Bytes, H)) -> Self {
+		Self::Existing { hash: value.1, data: value.0.into() }
+	}
+}
+
+impl<H> From<H> for CachedValue<H> {
+	fn from(value: H) -> Self {
+		Self::ExistingHash(value)
+	}
+}
+
+impl<H> From<Option<(Bytes, H)>> for CachedValue<H> {
+	fn from(value: Option<(Bytes, H)>) -> Self {
+		value.map_or(Self::NonExisting, |v| Self::Existing { hash: v.1, data: v.0.into() })
+	}
+}
+
+impl<H> From<Option<H>> for CachedValue<H> {
+	fn from(value: Option<H>) -> Self {
+		value.map_or(Self::NonExisting, |v| Self::ExistingHash(v))
+	}
+}
+
+/// A cache that can be used to speed-up certain operations when accessing the trie.
+///
+/// The [`TrieDB`]/[`TrieDBMut`] by default are working with the internal hash-db in a non-owning
+/// mode. This means that for every lookup in the trie, every node is always fetched and decoded on
+/// the fly. Fetching and decoding a node always takes some time and can kill the performance of any
+/// application that is doing quite a lot of trie lookups. To circumvent this performance
+/// degradation, a cache can be used when looking up something in the trie. Any cache that should be
+/// used with the [`TrieDB`]/[`TrieDBMut`] needs to implement this trait.
+///
+/// The trait is laying out a two level cache, first the trie nodes cache and then the value cache.
+/// The trie nodes cache, as the name indicates, is for caching trie nodes as [`NodeOwned`]. These
+/// trie nodes are referenced by their hash. The value cache is caching [`CachedValue`]'s and these
+/// are referenced by the key to look them up in the trie. As multiple different tries can have
+/// different values under the same key, it up to the cache implementation to ensure that the
+/// correct value is returned. As each trie has a different root, this root can be used to
+/// differentiate values under the same key.
+pub trait TrieCache<NC: NodeCodec> {
+	/// Lookup value for the given `key`.
+	///
+	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated
+	/// value.
+	///
+	/// [`Self::cache_data_for_key`] is used to make the cache aware of data that is associated
+	/// to a `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of always returning the correct value
+	/// for the current trie root.
+	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&CachedValue<NC::HashOut>>;
+
+	/// Cache the given `value` for the given `key`.
+	///
+	/// # Attention
+	///
+	/// The cache can be used for different tries, aka with different roots. This means
+	/// that the cache implementation needs to take care of caching `value` for the current
+	/// trie root.
+	fn cache_value_for_key(&mut self, key: &[u8], value: CachedValue<NC::HashOut>);
+
+	/// Get or insert a [`NodeOwned`].
+	///
+	/// The cache implementation should look up based on the given `hash` if the node is already
+	/// known. If the node is not yet known, the given `fetch_node` function can be used to fetch
+	/// the particular node.
+	///
+	/// Returns the [`NodeOwned`] or an error that happened on fetching the node.
+	fn get_or_insert_node(
+		&mut self,
+		hash: NC::HashOut,
+		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
+	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+
+	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
+	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+}
+
+/// A container for storing bytes.
+///
+/// This uses a reference counted pointer internally, so it is cheap to clone this object.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Bytes(rstd::sync::Arc<[u8]>);
+
+impl rstd::ops::Deref for Bytes {
+	type Target = [u8];
+
+	fn deref(&self) -> &Self::Target {
+		self.0.deref()
+	}
+}
+
+impl From<Vec<u8>> for Bytes {
+	fn from(bytes: Vec<u8>) -> Self {
+		Self(bytes.into())
+	}
+}
+
+impl From<&[u8]> for Bytes {
+	fn from(bytes: &[u8]) -> Self {
+		Self(bytes.into())
+	}
+}
+
+impl<T: AsRef<[u8]>> PartialEq<T> for Bytes {
+	fn eq(&self, other: &T) -> bool {
+		self.as_ref() == other.as_ref()
+	}
+}
+
+/// A weak reference of [`Bytes`].
+///
+/// A weak reference means that it doesn't prevent [`Bytes`] from being dropped because
+/// it holds a non-owning reference to the associated [`Bytes`] object. With [`Self::upgrade`] it
+/// is possible to upgrade it again to [`Bytes`] if the reference is still valid.
+#[derive(Clone, Debug)]
+pub struct BytesWeak(rstd::sync::Weak<[u8]>);
+
+impl BytesWeak {
+	/// Upgrade to [`Bytes`].
+	///
+	/// Returns `None` when the inner value was already dropped.
+	pub fn upgrade(&self) -> Option<Bytes> {
+		self.0.upgrade().map(Bytes)
+	}
+}
+
+impl From<Bytes> for BytesWeak {
+	fn from(bytes: Bytes) -> Self {
+		Self(rstd::sync::Arc::downgrade(&bytes.0))
+	}
+}
+
+/// Either the `hash` or `value` of a node depending on its size.
+///
+/// If the size of the node `value` is bigger or equal than `MAX_INLINE_VALUE` the `hash` is
+/// returned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MerkleValue<H> {
+	/// The merkle value is the node data itself when the
+	/// node data is smaller than `MAX_INLINE_VALUE`.
+	///
+	/// Note: The case of inline nodes.
+	Node(Vec<u8>),
+	/// The merkle value is the hash of the node.
+	Hash(H),
+}

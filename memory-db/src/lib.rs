@@ -1,4 +1,4 @@
-// Copyright 2017, 2018 Parity Technologies
+// Copyright 2017-2020 Parity Technologies
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,49 +19,24 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
-use hash_db::{HashDB, HashDBRef, PlainDB, PlainDBRef, Hasher as KeyHasher,
-	AsHashDB, AsPlainDB, Prefix};
-use parity_util_mem::{MallocSizeOf, MallocSizeOfOps};
-#[cfg(feature = "deprecated")]
-#[cfg(feature = "std")]
-use heapsize::HeapSizeOf;
+use hash_db::{
+	AsHashDB, AsPlainDB, HashDB, HashDBRef, Hasher as KeyHasher, MaybeDebug, PlainDB, PlainDBRef,
+	Prefix,
+};
 #[cfg(feature = "std")]
 use std::{
-	collections::hash_map::Entry,
-	collections::HashMap,
-	hash,
-	mem,
-	marker::PhantomData,
-	cmp::Eq,
-	borrow::Borrow,
+	borrow::Borrow, cmp::Eq, collections::hash_map::Entry, collections::HashMap as Map, hash,
+	marker::PhantomData, mem,
 };
 
 #[cfg(not(feature = "std"))]
-use hashbrown::{
-	HashMap,
-	hash_map::Entry,
-};
+use alloc::collections::btree_map::{BTreeMap as Map, Entry};
 
 #[cfg(not(feature = "std"))]
-use core::{
-	hash,
-	mem,
-	marker::PhantomData,
-	cmp::Eq,
-	borrow::Borrow,
-};
+use core::{borrow::Borrow, cmp::Eq, hash, marker::PhantomData, mem};
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
-
-#[cfg(feature = "std")]
-pub trait MaybeDebug: std::fmt::Debug {}
-#[cfg(feature = "std")]
-impl<T: std::fmt::Debug> MaybeDebug for T {}
-#[cfg(not(feature = "std"))]
-pub trait MaybeDebug {}
-#[cfg(not(feature = "std"))]
-impl<T> MaybeDebug for T {}
 
 /// Reference-counted memory-based `HashDB` implementation.
 ///
@@ -72,11 +47,10 @@ impl<T> MaybeDebug for T {}
 ///
 /// # Example
 /// ```rust
+///   use hash_db::{Hasher, HashDB, EMPTY_PREFIX};
+///   use keccak_hasher::KeccakHasher;
+///   use memory_db::{MemoryDB, HashKey};
 ///
-/// use hash_db::{Hasher, HashDB, EMPTY_PREFIX};
-/// use keccak_hasher::KeccakHasher;
-/// use memory_db::{MemoryDB, HashKey};
-/// fn main() {
 ///   let mut m = MemoryDB::<KeccakHasher, HashKey<_>, Vec<u8>>::default();
 ///   let d = "Hello world!".as_bytes();
 ///
@@ -105,24 +79,28 @@ impl<T> MaybeDebug for T {}
 ///
 ///   m.remove(&k, EMPTY_PREFIX);
 ///   assert!(!m.contains(&k, EMPTY_PREFIX));
-/// }
 /// ```
 pub struct MemoryDB<H, KF, T>
-	where
+where
 	H: KeyHasher,
 	KF: KeyFunction<H>,
 {
-	data: HashMap<KF::Key, (T, i32)>,
+	data: Map<KF::Key, (T, i32)>,
 	hashed_null_node: H::Out,
 	null_node_data: T,
 	_kf: PhantomData<KF>,
 }
 
-impl<H: KeyHasher, KF: KeyFunction<H>, T: Clone> Clone for MemoryDB<H, KF, T> {
+impl<H, KF, T> Clone for MemoryDB<H, KF, T>
+where
+	H: KeyHasher,
+	KF: KeyFunction<H>,
+	T: Clone,
+{
 	fn clone(&self) -> Self {
 		Self {
 			data: self.data.clone(),
-			hashed_null_node: self.hashed_null_node.clone(),
+			hashed_null_node: self.hashed_null_node,
 			null_node_data: self.null_node_data.clone(),
 			_kf: Default::default(),
 		}
@@ -130,15 +108,14 @@ impl<H: KeyHasher, KF: KeyFunction<H>, T: Clone> Clone for MemoryDB<H, KF, T> {
 }
 
 impl<H, KF, T> PartialEq<MemoryDB<H, KF, T>> for MemoryDB<H, KF, T>
-	where
+where
 	H: KeyHasher,
 	KF: KeyFunction<H>,
-	<KF as KeyFunction<H>>::Key: Eq + MaybeDebug,
 	T: Eq + MaybeDebug,
 {
 	fn eq(&self, other: &MemoryDB<H, KF, T>) -> bool {
 		for a in self.data.iter() {
-			match other.data.get(&a.0) {
+			match other.data.get(a.0) {
 				Some(v) if v != a.1 => return false,
 				None => return false,
 				_ => (),
@@ -149,15 +126,15 @@ impl<H, KF, T> PartialEq<MemoryDB<H, KF, T>> for MemoryDB<H, KF, T>
 }
 
 impl<H, KF, T> Eq for MemoryDB<H, KF, T>
-	where
-		H: KeyHasher,
-		KF: KeyFunction<H>,
-		<KF as KeyFunction<H>>::Key: Eq + MaybeDebug,
-		T: Eq + MaybeDebug,
-{}
+where
+	H: KeyHasher,
+	KF: KeyFunction<H>,
+	T: Eq + MaybeDebug,
+{
+}
 
 pub trait KeyFunction<H: KeyHasher> {
-	type Key: Send + Sync + Clone + hash::Hash + Eq;
+	type Key: Send + Sync + Clone + hash::Hash + Eq + MaybeDebug + core::cmp::Ord;
 
 	fn key(hash: &H::Out, prefix: Prefix) -> Self::Key;
 }
@@ -187,7 +164,7 @@ impl<H: KeyHasher> KeyFunction<H> for HashKey<H> {
 
 /// Make database key from hash only.
 pub fn hash_key<H: KeyHasher>(key: &H::Out, _prefix: Prefix) -> H::Out {
-	key.clone()
+	*key
 }
 
 /// Key function that concatenates prefix and hash.
@@ -224,13 +201,15 @@ pub fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
 	prefixed_key
 }
 
-#[derive(Clone, Debug)]
 /// Key function that concatenates prefix and hash.
 /// This is doing useless computation and should only be
 /// used for legacy purpose.
 /// It shall be remove in the future.
+#[derive(Clone, Debug)]
+#[deprecated(since = "0.22.0")]
 pub struct LegacyPrefixedKey<H: KeyHasher>(PhantomData<H>);
 
+#[allow(deprecated)]
 impl<H: KeyHasher> KeyFunction<H> for LegacyPrefixedKey<H> {
 	type Key = Vec<u8>;
 
@@ -241,6 +220,7 @@ impl<H: KeyHasher> KeyFunction<H> for LegacyPrefixedKey<H> {
 
 /// Legacy method for db using previous version of prefix encoding.
 /// Only for trie radix 16 trie.
+#[deprecated(since = "0.22.0")]
 pub fn legacy_prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
 	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.0.len() + 1);
 	if (prefix.1).0 == 0 {
@@ -258,10 +238,10 @@ pub fn legacy_prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8
 	prefixed_key
 }
 
-impl<'a, H, KF, T> Default for MemoryDB<H, KF, T>
+impl<H, KF, T> Default for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: From<&'a [u8]>,
+	T: for<'a> From<&'a [u8]>,
 	KF: KeyFunction<H>,
 {
 	fn default() -> Self {
@@ -280,35 +260,46 @@ where
 	/// If the value was purged, return the old value.
 	pub fn remove_and_purge(&mut self, key: &<H as KeyHasher>::Out, prefix: Prefix) -> Option<T> {
 		if key == &self.hashed_null_node {
-			return None;
+			return None
 		}
 		let key = KF::key(key, prefix);
 		match self.data.entry(key) {
 			Entry::Occupied(mut entry) =>
 				if entry.get().1 == 1 {
-					Some(entry.remove().0)
+					let (value, _) = entry.remove();
+					Some(value)
 				} else {
 					entry.get_mut().1 -= 1;
 					None
 				},
 			Entry::Vacant(entry) => {
-				entry.insert((T::default(), -1)); // FIXME: shouldn't it be purged?
+				let value = T::default();
+				entry.insert((value, -1));
 				None
-			}
+			},
 		}
+	}
+
+	/// Shrinks the capacity of the map as much as possible. It will drop
+	/// down as much as possible while maintaining the internal rules
+	/// and possibly leaving some space in accordance with the resize policy.
+	#[inline]
+	pub fn shrink_to_fit(&mut self) {
+		#[cfg(feature = "std")]
+		self.data.shrink_to_fit();
 	}
 }
 
-impl<'a, H: KeyHasher, KF, T> MemoryDB<H, KF, T>
+impl<H, KF, T> MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: From<&'a [u8]>,
+	T: for<'a> From<&'a [u8]>,
 	KF: KeyFunction<H>,
 {
 	/// Create a new `MemoryDB` from a given null key/data
-	pub fn from_null_node(null_key: &'a [u8], null_node_data: T) -> Self {
+	pub fn from_null_node(null_key: &[u8], null_node_data: T) -> Self {
 		MemoryDB {
-			data: HashMap::default(),
+			data: Map::default(),
 			hashed_null_node: H::hash(null_key),
 			null_node_data,
 			_kf: Default::default(),
@@ -316,7 +307,7 @@ where
 	}
 
 	/// Create a new instance of `Self`.
-	pub fn new(data: &'a [u8]) -> Self {
+	pub fn new(data: &[u8]) -> Self {
 		Self::from_null_node(data, data.into())
 	}
 
@@ -355,12 +346,15 @@ where
 
 	/// Purge all zero-referenced data from the database.
 	pub fn purge(&mut self) {
-		self.data.retain(|_, &mut (_, rc)| rc != 0);
+		self.data.retain(|_, (_, rc)| {
+			let keep = *rc != 0;
+			keep
+		});
 	}
 
-	/// Return the internal map of hashes to data, clearing the current state.
-	pub fn drain(&mut self) -> HashMap<KF::Key, (T, i32)> {
-		mem::replace(&mut self.data, Default::default())
+	/// Return the internal key-value Map, clearing the current state.
+	pub fn drain(&mut self) -> Map<KF::Key, (T, i32)> {
+		mem::take(&mut self.data)
 	}
 
 	/// Grab the raw information associated with a key. Returns None if the key
@@ -370,7 +364,7 @@ where
 	/// when the refs > 0.
 	pub fn raw(&self, key: &<H as KeyHasher>::Out, prefix: Prefix) -> Option<(&T, i32)> {
 		if key == &self.hashed_null_node {
-			return Some((&self.null_node_data, 1));
+			return Some((&self.null_node_data, 1))
 		}
 		self.data.get(&KF::key(key, prefix)).map(|(value, count)| (value, *count))
 	}
@@ -385,80 +379,20 @@ where
 					}
 
 					entry.get_mut().1 += rc;
-				}
+				},
 				Entry::Vacant(entry) => {
 					entry.insert((value, rc));
-				}
+				},
 			}
 		}
 	}
 
 	/// Get the keys in the database together with number of underlying references.
-	pub fn keys(&self) -> HashMap<KF::Key, i32> {
-		self.data.iter()
-			.filter_map(|(k, v)| if v.1 != 0 {
-				Some((k.clone(), v.1))
-			} else {
-				None
-			})
+	pub fn keys(&self) -> Map<KF::Key, i32> {
+		self.data
+			.iter()
+			.filter_map(|(k, v)| if v.1 != 0 { Some((k.clone(), v.1)) } else { None })
 			.collect()
-	}
-}
-
-#[cfg(feature = "deprecated")]
-#[cfg(feature = "std")]
-impl<H, KF, T> MemoryDB<H, KF, T>
-where
-	H: KeyHasher,
-	T: HeapSizeOf,
-	KF: KeyFunction<H>,
-{
-	#[deprecated(since="0.12.0", note="please use `size_of` instead")]
-	/// Returns the size of allocated heap memory
-	pub fn mem_used(&self) -> usize {
-		0//self.data.heap_size_of_children()
-		// TODO Reenable above when HeapSizeOf supports arrays.
-	}
-}
-
-// `no_std` implementation requires that hasmap
-// is implementated in parity-util-mem, that
-// is currently not the case.
-#[cfg(feature = "std")]
-impl<H, KF, T> MallocSizeOf for MemoryDB<H, KF, T>
-where
-	H: KeyHasher,
-	H::Out: MallocSizeOf,
-	T: MallocSizeOf,
-	KF: KeyFunction<H>,
-	KF::Key: MallocSizeOf,
-{
-	fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-		self.data.size_of(ops)
-			+ self.null_node_data.size_of(ops)
-			+ self.hashed_null_node.size_of(ops)
-	}
-}
-
-// This is temporary code, we should use
-// `parity-util-mem`, see
-// https://github.com/paritytech/trie/issues/21
-#[cfg(not(feature = "std"))]
-impl<H, KF, T> MallocSizeOf for MemoryDB<H, KF, T>
-where
-	H: KeyHasher,
-	H::Out: MallocSizeOf,
-	T: MallocSizeOf,
-	KF: KeyFunction<H>,
-	KF::Key: MallocSizeOf,
-{
-	fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-		use core::mem::size_of;
-		let mut n = self.data.capacity() * (size_of::<T>() + size_of::<H>() + size_of::<usize>());
-		for (k, v) in self.data.iter() {
-			n += k.size_of(ops) + v.size_of(ops);
-		}
-		n + self.null_node_data.size_of(ops) + self.hashed_null_node.size_of(ops)
 	}
 }
 
@@ -467,19 +401,19 @@ where
 	H: KeyHasher,
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
-	KF::Key: Borrow<[u8]> + for <'a> From<&'a [u8]>,
+	KF::Key: Borrow<[u8]> + for<'a> From<&'a [u8]>,
 {
 	fn get(&self, key: &H::Out) -> Option<T> {
 		match self.data.get(key.as_ref()) {
 			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
-			_ => None
+			_ => None,
 		}
 	}
 
 	fn contains(&self, key: &H::Out) -> bool {
 		match self.data.get(key.as_ref()) {
 			Some(&(_, x)) if x > 0 => true,
-			_ => false
+			_ => false,
 		}
 	}
 
@@ -505,7 +439,8 @@ where
 				*rc -= 1;
 			},
 			Entry::Vacant(entry) => {
-				entry.insert((T::default(), -1));
+				let value = T::default();
+				entry.insert((value, -1));
 			},
 		}
 	}
@@ -516,45 +451,49 @@ where
 	H: KeyHasher,
 	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
 	KF: Send + Sync + KeyFunction<H>,
-	KF::Key: Borrow<[u8]> + for <'a> From<&'a [u8]>,
+	KF::Key: Borrow<[u8]> + for<'a> From<&'a [u8]>,
 {
-	fn get(&self, key: &H::Out) -> Option<T> { PlainDB::get(self, key) }
-	fn contains(&self, key: &H::Out) -> bool { PlainDB::contains(self, key) }
+	fn get(&self, key: &H::Out) -> Option<T> {
+		PlainDB::get(self, key)
+	}
+	fn contains(&self, key: &H::Out) -> bool {
+		PlainDB::contains(self, key)
+	}
 }
 
 impl<H, KF, T> HashDB<H, T> for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
-	KF: Send + Sync + KeyFunction<H>,
+	T: Default + PartialEq<T> + AsRef<[u8]> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
+	KF: KeyFunction<H> + Send + Sync,
 {
 	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
 		if key == &self.hashed_null_node {
-			return Some(self.null_node_data.clone());
+			return Some(self.null_node_data.clone())
 		}
 
 		let key = KF::key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(ref d, rc)) if rc > 0 => Some(d.clone()),
-			_ => None
+			_ => None,
 		}
 	}
 
 	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
 		if key == &self.hashed_null_node {
-			return true;
+			return true
 		}
 
 		let key = KF::key(key, prefix);
 		match self.data.get(&key) {
 			Some(&(_, x)) if x > 0 => true,
-			_ => false
+			_ => false,
 		}
 	}
 
 	fn emplace(&mut self, key: H::Out, prefix: Prefix, value: T) {
 		if value == self.null_node_data {
-			return;
+			return
 		}
 
 		let key = KF::key(&key, prefix);
@@ -574,7 +513,7 @@ where
 
 	fn insert(&mut self, prefix: Prefix, value: &[u8]) -> H::Out {
 		if T::from(value) == self.null_node_data {
-			return self.hashed_null_node.clone();
+			return self.hashed_null_node
 		}
 
 		let key = H::hash(value);
@@ -584,7 +523,7 @@ where
 
 	fn remove(&mut self, key: &H::Out, prefix: Prefix) {
 		if key == &self.hashed_null_node {
-			return;
+			return
 		}
 
 		let key = KF::key(key, prefix);
@@ -594,7 +533,8 @@ where
 				*rc -= 1;
 			},
 			Entry::Vacant(entry) => {
-				entry.insert((T::default(), -1));
+				let value = T::default();
+				entry.insert((value, -1));
 			},
 		}
 	}
@@ -603,37 +543,49 @@ where
 impl<H, KF, T> HashDBRef<H, T> for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
-	KF: Send + Sync + KeyFunction<H>,
+	T: Default + PartialEq<T> + AsRef<[u8]> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
+	KF: KeyFunction<H> + Send + Sync,
 {
-	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> { HashDB::get(self, key, prefix) }
-	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool { HashDB::contains(self, key, prefix) }
+	fn get(&self, key: &H::Out, prefix: Prefix) -> Option<T> {
+		HashDB::get(self, key, prefix)
+	}
+	fn contains(&self, key: &H::Out, prefix: Prefix) -> bool {
+		HashDB::contains(self, key, prefix)
+	}
 }
 
 impl<H, KF, T> AsPlainDB<H::Out, T> for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: Default + PartialEq<T> + for<'a> From<&'a[u8]> + Clone + Send + Sync,
-	KF: Send + Sync + KeyFunction<H>,
-	KF::Key: Borrow<[u8]> + for <'a> From<&'a [u8]>,
+	T: Default + PartialEq<T> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
+	KF: KeyFunction<H> + Send + Sync,
+	KF::Key: Borrow<[u8]> + for<'a> From<&'a [u8]>,
 {
-	fn as_plain_db(&self) -> &dyn PlainDB<H::Out, T> { self }
-	fn as_plain_db_mut(&mut self) -> &mut dyn PlainDB<H::Out, T> { self }
+	fn as_plain_db(&self) -> &dyn PlainDB<H::Out, T> {
+		self
+	}
+	fn as_plain_db_mut(&mut self) -> &mut dyn PlainDB<H::Out, T> {
+		self
+	}
 }
 
 impl<H, KF, T> AsHashDB<H, T> for MemoryDB<H, KF, T>
 where
 	H: KeyHasher,
-	T: Default + PartialEq<T> + for<'a> From<&'a[u8]> + Clone + Send + Sync,
-	KF: Send + Sync + KeyFunction<H>,
+	T: Default + PartialEq<T> + AsRef<[u8]> + for<'a> From<&'a [u8]> + Clone + Send + Sync,
+	KF: KeyFunction<H> + Send + Sync,
 {
-	fn as_hash_db(&self) -> &dyn HashDB<H, T> { self }
-	fn as_hash_db_mut(&mut self) -> &mut dyn HashDB<H, T> { self }
+	fn as_hash_db(&self) -> &dyn HashDB<H, T> {
+		self
+	}
+	fn as_hash_db_mut(&mut self) -> &mut dyn HashDB<H, T> {
+		self
+	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::{MemoryDB, HashDB, KeyHasher, HashKey};
+	use super::{HashDB, HashKey, KeyHasher, MemoryDB};
 	use hash_db::EMPTY_PREFIX;
 	use keccak_hasher::KeccakHasher;
 
@@ -674,9 +626,9 @@ mod tests {
 		main.emplace(insert_key, EMPTY_PREFIX, "arf".as_bytes().to_vec());
 
 		let negative_remove_key = other.insert(EMPTY_PREFIX, b"negative");
-		other.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: 0
-		other.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: -1
-		main.remove(&negative_remove_key, EMPTY_PREFIX);	// ref cnt: -1
+		other.remove(&negative_remove_key, EMPTY_PREFIX); // ref cnt: 0
+		other.remove(&negative_remove_key, EMPTY_PREFIX); // ref cnt: -1
+		main.remove(&negative_remove_key, EMPTY_PREFIX); // ref cnt: -1
 
 		main.consolidate(other);
 
