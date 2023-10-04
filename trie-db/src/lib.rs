@@ -25,7 +25,7 @@ mod rstd {
 		collections::{BTreeMap, VecDeque},
 		convert,
 		error::Error,
-		fmt, hash, iter, marker, mem, ops, rc, result, sync, vec,
+		fmt, hash, iter, marker, mem, ops, rc, result, slice, sync, vec,
 	};
 }
 
@@ -36,7 +36,7 @@ mod rstd {
 		collections::{btree_map::BTreeMap, VecDeque},
 		rc, sync, vec,
 	};
-	pub use core::{cmp, convert, fmt, hash, iter, marker, mem, ops, result};
+	pub use core::{cmp, convert, fmt, hash, iter, marker, mem, ops, result, slice};
 	pub trait Error {}
 	impl<T> Error for T {}
 }
@@ -172,9 +172,9 @@ pub trait Query<H: Hasher> {
 /// If a cache is used, [`Self::Key`] and [`Self::NodeOwned`] are possible
 /// values. Otherwise only [`Self::EncodedNode`] is a possible value.
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum TrieAccess<'a, H> {
+pub enum TrieAccess<'a, H, N> {
 	/// The given [`NodeOwned`] was accessed using its `hash`.
-	NodeOwned { hash: H, node_owned: &'a NodeOwned<H> },
+	NodeOwned { hash: H, node_owned: &'a NodeOwned<H, N> },
 	/// The given `encoded_node` was accessed using its `hash`.
 	EncodedNode { hash: H, encoded_node: rstd::borrow::Cow<'a, [u8]> },
 	/// The given `value` was accessed using its `hash`.
@@ -240,12 +240,12 @@ impl RecordedForKey {
 ///
 /// To build a trie proof a recorder is required that records all trie accesses. These recorded trie
 /// accesses can then be used to create the proof.
-pub trait TrieRecorder<H> {
+pub trait TrieRecorder<H, N> {
 	/// Record the given [`TrieAccess`].
 	///
 	/// Depending on the [`TrieAccess`] a call of [`Self::trie_nodes_recorded_for_key`] afterwards
 	/// must return the correct recorded state.
-	fn record<'a>(&mut self, access: TrieAccess<'a, H>);
+	fn record<'a>(&mut self, access: TrieAccess<'a, H, N>);
 
 	/// Check if we have recorded any trie nodes for the given `key`.
 	///
@@ -685,7 +685,8 @@ impl<H> From<Option<H>> for CachedValue<H> {
 /// different values under the same key, it up to the cache implementation to ensure that the
 /// correct value is returned. As each trie has a different root, this root can be used to
 /// differentiate values under the same key.
-pub trait TrieCache<NC: NodeCodec> {
+// TODO on TrieLayout??
+pub trait TrieCache<NC: NodeCodec, N: NibbleOps> {
 	/// Lookup value for the given `key`.
 	///
 	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated
@@ -720,11 +721,11 @@ pub trait TrieCache<NC: NodeCodec> {
 	fn get_or_insert_node(
 		&mut self,
 		hash: NC::HashOut,
-		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>,
-	) -> Result<&NodeOwned<NC::HashOut>, NC::HashOut, NC::Error>;
+		fetch_node: &mut dyn FnMut() -> Result<NodeOwned<NC::HashOut, N>, NC::HashOut, NC::Error>,
+	) -> Result<&NodeOwned<NC::HashOut, N>, NC::HashOut, NC::Error>;
 
 	/// Get the [`NodeOwned`] that corresponds to the given `hash`.
-	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut>>;
+	fn get_node(&mut self, hash: &NC::HashOut) -> Option<&NodeOwned<NC::HashOut, N>>;
 }
 
 /// A container for storing bytes.

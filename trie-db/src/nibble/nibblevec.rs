@@ -238,7 +238,7 @@ impl<N: NibbleOps> NibbleVec<N> {
 	}
 
 	/// Same as [`Self::starts_with`] but using [`NibbleSlice`].
-	pub fn starts_with_slice(&self, other: &NibbleSlice) -> bool {
+	pub fn starts_with_slice(&self, other: &NibbleSlice<N>) -> bool {
 		if self.len() < other.len() {
 			return false
 		}
@@ -258,17 +258,18 @@ impl<N: NibbleOps> NibbleVec<N> {
 
 	/// Return an iterator over `Partial` bytes representation.
 	pub fn right_iter<'a>(&'a self) -> impl Iterator<Item = u8> + 'a {
-		let require_padding = self.len % nibble_ops::NIBBLE_PER_BYTE != 0;
+		let shift = self.len % N::NIBBLE_PER_BYTE;
+		let require_padding = shift != 0;
 		let mut ix = 0;
 		let inner = &self.inner;
 
-		let (left_s, right_s) = nibble_ops::SPLIT_SHIFTS;
+		let (left_s, right_s) = N::split_shifts(shift);
 
 		crate::rstd::iter::from_fn(move || {
 			if require_padding && ix < inner.len() {
 				if ix == 0 {
 					ix += 1;
-					Some(inner[ix - 1] >> nibble_ops::BIT_PER_NIBBLE)
+					Some(inner[ix - 1] >> N::BIT_PER_NIBBLE)
 				} else {
 					ix += 1;
 
@@ -295,8 +296,8 @@ impl<'a, N: NibbleOps> From<NibbleSlice<'a, N>> for NibbleVec<N> {
 	}
 }
 
-impl From<&NibbleVec> for NodeKey {
-	fn from(nibble: &NibbleVec) -> NodeKey {
+impl<N: NibbleOps> From<&NibbleVec<N>> for NodeKey {
+	fn from(nibble: &NibbleVec<N>) -> NodeKey {
 		if let Some(slice) = nibble.as_nibbleslice() {
 			slice.into()
 		} else {

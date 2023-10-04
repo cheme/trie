@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::rstd::{
-	cmp::{self, Ordering},
-	marker::PhantomData,
-};
-
-use crate::nibble::{
-	nibble_ops::{self, NIBBLE_PER_BYTE},
-	NibbleSlice,
+use crate::{
+	nibble::NibbleSlice,
+	rstd::{
+		cmp::{self, Ordering},
+		marker::PhantomData,
+	},
+	NibbleOps,
 };
 
 /// A representation of a nibble slice which is left-aligned. The regular `NibbleSlice` is

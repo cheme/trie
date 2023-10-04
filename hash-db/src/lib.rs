@@ -41,17 +41,21 @@ impl<T> MaybeDebug for T {}
 /// is a non expanded byte slice followed by a last padded byte representation.
 /// The padded byte is a pair of u8 containing the number of nibble, followed by
 /// the left aligned padded value.
+pub type Prefix<'a> = (&'a [u8], (u8, u8));
+/* TODO
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prefix<'a> {
 	slice: &'a [u8],
 	last: u8,
 	align: u8,
 }
+*/
 
 /// An empty prefix constant.
 /// Can be use when the prefix is not use internally
 /// or for root nodes.
-pub static EMPTY_PREFIX: Prefix<'static> = Prefix { slice: &[], last: 0, align: 0 };
+pub static EMPTY_PREFIX: Prefix<'static> = (&[], (0, 0));
+// TODO pub static EMPTY_PREFIX: Prefix<'static> = Prefix { slice: &[], last: 0, align: 0 };
 
 /// Trait describing an object that can hash a slice of bytes. Used to abstract
 /// other types over the hashing algorithm. Defines a single `hash` method and an

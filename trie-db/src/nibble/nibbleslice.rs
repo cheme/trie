@@ -21,6 +21,7 @@ use crate::{
 	node::NodeKey,
 	node_codec::Partial,
 	rstd::{cmp::*, marker::PhantomData},
+	NibbleOps,
 };
 use hash_db::Prefix;
 
@@ -255,7 +256,7 @@ impl<'a, N: NibbleOps> NibbleSlice<'a, N> {
 	///
 	/// This means the entire inner data will be returned as [`Prefix`], ignoring any `offset`.
 	pub fn original_data_as_prefix(&self) -> Prefix {
-		(&self.data, None)
+		(&self.data, (0, 0))
 	}
 
 	/// Owned version of a `Prefix` from a `left` method call.
@@ -265,7 +266,7 @@ impl<'a, N: NibbleOps> NibbleSlice<'a, N> {
 	}
 
 	/// Same as [`Self::starts_with`] but using [`NibbleVec`].
-	pub fn starts_with_vec(&self, other: &NibbleVec) -> bool {
+	pub fn starts_with_vec(&self, other: &NibbleVec<N>) -> bool {
 		if self.len() < other.len() {
 			return false
 		}
@@ -285,7 +286,7 @@ impl<'a, N: NibbleOps> NibbleSlice<'a, N> {
 }
 
 impl<'a, N> From<NibbleSlice<'a, N>> for NodeKey {
-	fn from(slice: NibbleSlice<'a>) -> NodeKey {
+	fn from(slice: NibbleSlice<'a, N>) -> NodeKey {
 		(slice.offset, slice.data.into())
 	}
 }
@@ -296,8 +297,8 @@ impl<'a, N: NibbleOps> PartialEq for NibbleSlice<'a, N> {
 	}
 }
 
-impl<'a, N: NibbleOps> PartialEq<NibbleVec> for NibbleSlice<'a, N> {
-	fn eq(&self, other: &NibbleVec) -> bool {
+impl<'a, N: NibbleOps> PartialEq<NibbleVec<N>> for NibbleSlice<'a, N> {
+	fn eq(&self, other: &NibbleVec<N>) -> bool {
 		if self.len() != other.len() {
 			return false
 		}

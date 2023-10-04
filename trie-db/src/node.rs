@@ -23,7 +23,7 @@ use hash_db::Hasher;
 
 use crate::nibble::{ChildIndex, ChildSliceIndex};
 
-use crate::rstd::marker::PhantomData;
+use crate::rstd::{borrow::Borrow, marker::PhantomData};
 
 /// Partial node key type: offset and owned value of a nibbleslice.
 /// Offset is applied on first byte of array (bytes are right aligned).
@@ -61,7 +61,7 @@ impl NodeHandle<'_> {
 	/// Converts this node handle into a [`NodeHandleOwned`].
 	pub fn to_owned_handle<L: TrieLayout>(
 		&self,
-	) -> Result<NodeHandleOwned<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<NodeHandleOwned<TrieHash<L>, L::Nibble>, TrieHash<L>, CError<L>> {
 		match self {
 			Self::Hash(h) => decode_hash::<L::Hash>(h)
 				.ok_or_else(|| Box::new(TrieError::InvalidHash(Default::default(), h.to_vec())))
@@ -75,16 +75,18 @@ impl NodeHandle<'_> {
 }
 
 /// Owned version of [`NodeHandleOwned`].
+/// TODO param L
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodeHandleOwned<H> {
+pub enum NodeHandleOwned<H, N> {
 	Hash(H),
-	Inline(Box<NodeOwned<H>>),
+	Inline(Box<NodeOwned<H, N>>),
 }
 
-impl<H> NodeHandleOwned<H>
+impl<H, N> NodeHandleOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
+	N: NibbleOps,
 {
 	/// Returns `self` as a [`ChildReference`].
 	///
@@ -107,9 +109,9 @@ where
 	}
 }
 
-impl<H> NodeHandleOwned<H> {
+impl<H, N> NodeHandleOwned<H, N> {
 	/// Returns `self` as inline node.
-	pub fn as_inline(&self) -> Option<&NodeOwned<H>> {
+	pub fn as_inline(&self) -> Option<&NodeOwned<H, N>> {
 		match self {
 			Self::Hash(_) => None,
 			Self::Inline(node) => Some(&*node),
@@ -222,11 +224,14 @@ pub enum Node<'a, N: NibbleOps> {
 	),
 }
 
-impl Node<'_> {
+impl<N: NibbleOps> Node<'_, N> {
 	/// Converts this node into a [`NodeOwned`].
 	pub fn to_owned_node<L: TrieLayout>(
 		&self,
-	) -> Result<NodeOwned<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<NodeOwned<TrieHash<L>, L::Nibble>, TrieHash<L>, CError<L>>
+	where
+		L: TrieLayout<Nibble = N>,
+	{
 		match self {
 			Self::Empty => Ok(NodeOwned::Empty),
 			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value::<L>())),
@@ -269,22 +274,23 @@ impl Node<'_> {
 }
 
 /// Owned version of [`Node`].
+/// TODO NodeOwned<L>
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodeOwned<H> {
+pub enum NodeOwned<H, N> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has key slice and value. Value may not be empty.
-	Leaf(NibbleVec, ValueOwned<H>),
+	Leaf(NibbleVec<N>, ValueOwned<H>),
 	/// Extension node; has key slice and node data. Data may not be null.
-	Extension(NibbleVec, NodeHandleOwned<H>),
+	Extension(NibbleVec<N>, NodeHandleOwned<H, N>),
 	/// Branch node; has slice of child nodes (each possibly null)
 	/// and an optional immediate node data.
-	Branch([Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH], Option<ValueOwned<H>>),
+	Branch([Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH], Option<ValueOwned<H>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
 	NibbledBranch(
-		NibbleVec,
-		[Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH],
+		NibbleVec<N>,
+		[Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH],
 		Option<ValueOwned<H>>,
 	),
 	/// Node that represents a value.
@@ -294,9 +300,10 @@ pub enum NodeOwned<H> {
 	Value(Bytes, H),
 }
 
-impl<H> NodeOwned<H>
+impl<H, N> NodeOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
+	N: NibbleOps,
 {
 	/// Convert to its encoded format.
 	pub fn to_encoded<C>(&self) -> Vec<u8>
@@ -327,15 +334,15 @@ where
 	}
 
 	/// Returns an iterator over all existing children with their optional nibble.
-	pub fn child_iter(&self) -> impl Iterator<Item = (Option<u8>, &NodeHandleOwned<H>)> {
+	pub fn child_iter(&self) -> impl Iterator<Item = (Option<u8>, &NodeHandleOwned<H, N>)> {
 		enum ChildIter<'a, H> {
 			Empty,
-			Single(&'a NodeHandleOwned<H>, bool),
-			Array(&'a [Option<NodeHandleOwned<H>>; nibble_ops::NIBBLE_LENGTH], usize),
+			Single(&'a NodeHandleOwned<H, N>, bool),
+			Array(&'a [Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH], usize),
 		}
 
 		impl<'a, H> Iterator for ChildIter<'a, H> {
-			type Item = (Option<u8>, &'a NodeHandleOwned<H>);
+			type Item = (Option<u8>, &'a NodeHandleOwned<H, N>);
 
 			fn next(&mut self) -> Option<Self::Item> {
 				loop {
@@ -385,7 +392,7 @@ where
 	}
 }
 
-impl<H> NodeOwned<H> {
+impl<H, N: NibbleOps> NodeOwned<H, N> {
 	/// Returns the data attached to this node.
 	pub fn data(&self) -> Option<&Bytes> {
 		match &self {
@@ -399,7 +406,7 @@ impl<H> NodeOwned<H> {
 	}
 
 	/// Returns the partial key of this node.
-	pub fn partial_key(&self) -> Option<&NibbleVec> {
+	pub fn partial_key(&self) -> Option<&NibbleVec<N>> {
 		match self {
 			Self::Branch(_, _) | Self::Value(_, _) | Self::Empty => None,
 			Self::Extension(partial, _) |
@@ -415,12 +422,12 @@ impl<H> NodeOwned<H> {
 		let self_size = mem::size_of::<Self>();
 
 		fn childs_size<'a, H: 'a>(
-			childs: impl Iterator<Item = &'a Option<NodeHandleOwned<H>>>,
+			childs: impl Iterator<Item = &'a Option<NodeHandleOwned<H, N>>>,
 		) -> usize {
 			// If a `child` isn't an inline node, its size is already taken account for by
 			// `self_size`.
 			childs
-				.filter_map(|c| c.as_ref())
+				.filter_map(|c: &'a Option<NodeHandleOwned<H, N>| c.as_ref())
 				.map(|c| c.as_inline().map_or(0, |n| n.size_in_bytes()))
 				.sum()
 		}
@@ -641,7 +648,7 @@ impl<D: Borrow<[u8]>, N: NibbleOps> OwnedNode<D, N> {
 	}
 
 	/// Returns a mutable reference to the node decode plan.
-	pub fn node_plan_mut(&mut self) -> &mut NodePlan {
+	pub fn node_plan_mut(&mut self) -> &mut NodePlan<N> {
 		&mut self.plan
 	}
 

@@ -354,7 +354,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 		db: &TrieDB<L>,
 	) -> Option<
 		Result<
-			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue>>),
+			(&NibbleVec<L::Nibble>, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Nibble>>),
 			TrieHash<L>,
 			CError<L>,
 		>,
@@ -417,7 +417,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::AtChild(i), NodePlan::Branch { children, .. }) |
 				(Status::AtChild(i), NodePlan::NibbledBranch { children, .. }) => {
-					if let Some(child) = &children[i] {
+					if let Some(child) = &children.at(i) {
 						self.key_nibbles.pop();
 						self.key_nibbles.push(i as u8);
 
@@ -479,12 +479,12 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 
 			let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
 			let key = key_slice.to_vec();
-			if let Some(extra_nibble) = maybe_extra_nibble {
-				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble))))
+			if maybe_extra_nibble.0 > 0 {
+				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, maybe_extra_nibble))))
 			}
 
 			let value = match value {
-				Value::Node(hash) => match Self::fetch_value(db, &hash, (key_slice, None)) {
+				Value::Node(hash) => match Self::fetch_value(db, &hash, (key_slice, (0, 0))) {
 					Ok(value) => value,
 					Err(err) => return Some(Err(err)),
 				},
@@ -526,8 +526,8 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 
 			let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
 			let key = key_slice.to_vec();
-			if let Some(extra_nibble) = maybe_extra_nibble {
-				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble))))
+			if maybe_extra_nibble.0 > 0 {
+				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, maybe_extra_nibble))))
 			}
 
 			return Some(Ok(key))
@@ -596,8 +596,11 @@ impl<'a, 'cache, L: TrieLayout> TrieIterator<L> for TrieDBNodeIterator<'a, 'cach
 }
 
 impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
-	type Item =
-		Result<(NibbleVec, Option<TrieHash<L>>, Arc<OwnedNode<DBValue>>), TrieHash<L>, CError<L>>;
+	type Item = Result<
+		(NibbleVec<L::Nibble>, Option<TrieHash<L>>, Arc<OwnedNode<DBValue, L::Nibble>>),
+		TrieHash<L>,
+		CError<L>,
+	>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		self.raw_iter.next_raw_item(self.db).map(|result| {

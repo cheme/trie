@@ -122,7 +122,7 @@ where
 		let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
 			value
 		} else {
-			hashed = callback.process_inner_hashed_value((k2.as_ref(), None), v2.as_ref());
+			hashed = callback.process_inner_hashed_value((k2.as_ref(), (0, 0)), v2.as_ref());
 			Value::Node(hashed.as_ref())
 		};
 		let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
@@ -197,7 +197,7 @@ where
 		};
 
 		// encode branch
-		let encoded = T::Codec::branch_node(children.iter(), value);
+		let encoded = T::Codec::branch_node(children.as_ref().iter(), value);
 		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none());
 
 		if let Some(nkeyix) = nkey {
@@ -242,7 +242,7 @@ where
 		let encoded = T::Codec::branch_node_nibbled(
 			pr.right_range_iter(nkeyix.1),
 			nkeyix.1,
-			children.iter(),
+			children.as_ref().iter(),
 			value,
 		);
 		callback.process(pr.left(), encoded, is_root)
@@ -296,7 +296,7 @@ where
 		if single {
 			// one single element corner case
 			let (k2, v2) = previous_value;
-			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
+			let nkey = NibbleSlice::<T::Nibble>::new_offset(&k2.as_ref()[..], last_depth);
 			let pr = NibbleSlice::<T::Nibble>::new_offset(
 				&k2.as_ref()[..],
 				k2.as_ref().len() * T::Nibble::NIBBLE_PER_BYTE - nkey.len(),
@@ -306,7 +306,7 @@ where
 			let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
 				value
 			} else {
-				hashed = callback.process_inner_hashed_value((k2.as_ref(), None), v2.as_ref());
+				hashed = callback.process_inner_hashed_value((k2.as_ref(), (0, 0)), v2.as_ref());
 				Value::Node(hashed.as_ref())
 			};
 

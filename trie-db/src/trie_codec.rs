@@ -30,8 +30,8 @@ use crate::{
 	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, result, sync::Arc, vec, vec::Vec},
-	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBRawIterator,
-	TrieError, TrieHash, TrieLayout,
+	BranchChildrenNodePlan, CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
+	TrieChildRangeIndex, TrieDB, TrieDBRawIterator, TrieError, TrieHash, TrieLayout,
 };
 use hash_db::{HashDB, Prefix};
 
@@ -107,7 +107,7 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 			NodePlan::Leaf { partial, value: _ } =>
 				if self.omit_value {
 					let partial = partial.build(node_data);
-					C::leaf_node(partial.right_iter(), partial.len(), OMIT_VALUE_HASH)
+					L::Codec::leaf_node(partial.right_iter(), partial.len(), OMIT_VALUE_HASH)
 				} else {
 					node_data.to_vec()
 				},
@@ -155,7 +155,7 @@ impl<L: TrieLayout> EncoderStackEntry<L> {
 		};
 
 		if self.omit_value {
-			if let Some(header) = C::ESCAPE_HEADER {
+			if let Some(header) = L::Codec::ESCAPE_HEADER {
 				encoded.insert(0, header);
 			} else {
 				return Err(Box::new(TrieError::InvalidStateRoot(Default::default())))
@@ -332,7 +332,6 @@ struct DecoderStackEntry<'a, L: TrieLayout> {
 	children: Vec<Option<ChildReference<TrieHash<L>>>>,
 	/// A value attached as a node. The node will need to use its hash as value.
 	attached_value: Option<&'a [u8]>,
-	_marker: PhantomData<C>,
 }
 
 impl<'a, L: TrieLayout> DecoderStackEntry<'a, L> {
@@ -507,7 +506,6 @@ where
 			child_index: 0,
 			children: vec![None; children_len],
 			attached_value: None,
-			_marker: PhantomData::default(),
 		};
 
 		if attached_node > 0 {

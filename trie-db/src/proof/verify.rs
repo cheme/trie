@@ -19,7 +19,7 @@ use crate::{
 	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, Value},
 	rstd::{convert::TryInto, iter::Peekable, marker::PhantomData, result::Result, vec, vec::Vec},
-	CError, ChildReference, NodeCodec, TrieHash, TrieLayout,
+	BranchChildrenSlice, CError, ChildReference, NibbleOps, NodeCodec, TrieHash, TrieLayout,
 };
 use hash_db::Hasher;
 
@@ -180,7 +180,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 			Node::Extension(_, child) => {
 				// Guaranteed because of sorted keys order.
 				assert_eq!(self.child_index, 0);
-				Self::make_child_entry(proof_iter, child, child_prefix)
+				Self::make_child_entry(proof_iter, child.clone(), child_prefix)
 			},
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
 				// because this is a branch
@@ -196,7 +196,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 					self.child_index += 1;
 				}
 				let child = children.at(self.child_index).expect("guaranteed by advance_item");
-				Self::make_child_entry(proof_iter, child, child_prefix)
+				Self::make_child_entry(proof_iter, child.clone(), child_prefix)
 			},
 			_ => panic!("cannot have children"),
 		}
@@ -265,7 +265,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	fn advance_item<I>(
 		&mut self,
 		items_iter: &mut Peekable<I>,
-	) -> Result<Step<'a>, Error<TrieHash<L>, CError<L>>>
+	) -> Result<Step<'a, L::Nibble>, Error<TrieHash<L>, CError<L>>>
 	where
 		I: Iterator<Item = (&'a [u8], Option<&'a [u8]>)>,
 	{

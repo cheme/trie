@@ -33,8 +33,8 @@ use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 pub struct TrieDBBuilder<'db, 'cache, L: TrieLayout> {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
 	root: &'db TrieHash<L>,
-	cache: Option<&'cache mut dyn TrieCache<L::Codec>>,
-	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>>>,
+	cache: Option<&'cache mut dyn TrieCache<L::Codec, L::Nibble>>,
+	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
 }
 
 impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
@@ -49,7 +49,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 
 	/// Use the given `cache` for the db.
 	#[inline]
-	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec>) -> Self {
+	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec, L::Nibble>) -> Self {
 		self.cache = Some(cache);
 		self
 	}
@@ -58,7 +58,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_optional_cache<'ocache: 'cache>(
 		mut self,
-		cache: Option<&'ocache mut dyn TrieCache<L::Codec>>,
+		cache: Option<&'ocache mut dyn TrieCache<L::Codec, L::Nibble>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.cache = cache.map(|c| c as _);
@@ -67,7 +67,10 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 
 	/// Use the given `recorder` to record trie accesses.
 	#[inline]
-	pub fn with_recorder(mut self, recorder: &'cache mut dyn TrieRecorder<TrieHash<L>>) -> Self {
+	pub fn with_recorder(
+		mut self,
+		recorder: &'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>,
+	) -> Self {
 		self.recorder = Some(recorder);
 		self
 	}
@@ -76,7 +79,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_optional_recorder<'recorder: 'cache>(
 		mut self,
-		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L>>>,
+		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.recorder = recorder.map(|r| r as _);
@@ -123,8 +126,8 @@ where
 {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
 	root: &'db TrieHash<L>,
-	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec>>>,
-	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>>>>,
+	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec, L::Nibble>>>,
+	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>>,
 }
 
 impl<'db, 'cache, L> TrieDB<'db, 'cache, L>
@@ -199,7 +202,7 @@ where
 			.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
 
 		if let Some(recorder) = self.recorder.as_ref() {
-			debug_assert!(prefix.1.is_none(), "A value has never a partial key; qed");
+			debug_assert!(prefix.1.0 == 0, "A value has never a partial key; qed");
 
 			recorder.borrow_mut().record(TrieAccess::Value {
 				hash,
@@ -228,8 +231,10 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
-			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			recorder: recorder
+				.as_mut()
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
 		}
 		.look_up_hash(key, NibbleSlice::new(key))
 	}
@@ -246,8 +251,10 @@ where
 			db: self.db,
 			query,
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
-			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			recorder: recorder
+				.as_mut()
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
 		}
 		.look_up(key, NibbleSlice::new(key))
 	}
@@ -263,8 +270,10 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec>),
-			recorder: recorder.as_mut().map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			recorder: recorder
+				.as_mut()
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
 		}
 		.lookup_first_descendant(key, NibbleSlice::new(key))
 	}
@@ -343,6 +352,7 @@ where
 				},
 				Node::Branch(ref nodes, ref value) => {
 					let nodes: Vec<TrieAwareDebugNode<L>> = nodes
+						.iter()
 						.into_iter()
 						.enumerate()
 						.filter_map(|(i, n)| n.map(|n| (i, n)))

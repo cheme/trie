@@ -342,7 +342,7 @@ pub trait ChildIndex<V>:
 	AsRef<[Option<V>]> + AsMut<[Option<V>]> + Default + Eq + PartialEq + crate::MaybeDebug + Clone
 {
 	/// Constant length for the number of children.
-	/// TODO EMCH see if can delete
+	/// TODO EMCH see if can delete (by using consto or associated value in layout)
 	const NIBBLE_LENGTH: usize;
 
 	#[inline]
