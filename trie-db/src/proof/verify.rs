@@ -319,10 +319,10 @@ enum ValueMatch<'a, N> {
 
 /// Determines whether a node on the stack carries a value at the given key or whether any nodes
 /// in the subtrie do. The prefix of the node is given by the first `prefix_len` nibbles of `key`.
-fn match_key_to_node<'a, N: NibbleOps>(
+fn match_key_to_node<'a, N: NibbleOps, const N2: usize>(
 	key: &LeftNibbleSlice<'a, N>,
 	prefix_len: usize,
-	node: &Node<N>,
+	node: &Node<N, N2>,
 ) -> ValueMatch<'a, N> {
 	match node {
 		Node::Empty => ValueMatch::NotFound,

@@ -29,35 +29,19 @@ mod nibblevec;
 // Work-around absence of constant function for math pow.
 const TWO_EXP: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
 
-/// Ordered enumeration of the different possible number of nibble in
-/// a byte.
-pub enum Layout {
-	/// Radix 2 trie. Eight nibble per byte.
-	Radix2, // 1, 8, 2
-	/// Radix 4 trie. Four nibble per byte.
-	Radix4, // 2, 4, 4
-	/// Radix 16 trie. Two nibble per byte.
-	Radix16, // 4, 2, 16
-	/// Radix 256 trie. One nibble per byte.
-	Radix256, // 8, 1, 256
-}
-
-/// This trait contain Trie nibble specific definitions.
-/// This trait is mostly a collection of associated constant and some generic
-/// methods.
-/// Generic methods should not need redefinition except for optimization
-/// purpose.
-pub trait NibbleOps:
-	Default + Clone + PartialEq + Eq + PartialOrd + Ord + Copy + MaybeDebug
+/// Struct for methods depending on radix
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
+pub struct NibbleOps<const N: usize>
 {
-	/// See [`Layout`].
-	const LAYOUT: Layout;
 	/// Single nibble length in bit.
-	const BIT_PER_NIBBLE: usize = TWO_EXP[Self::LAYOUT as usize];
+	const BIT_PER_NIBBLE: usize = N.trailing_zeros() as usize;
 	/// Number of nibble per byte.
 	const NIBBLE_PER_BYTE: usize = 8 / Self::BIT_PER_NIBBLE;
 	/// Number of child for a branch (trie radix).
-	const NIBBLE_LENGTH: usize = TWO_EXP[Self::BIT_PER_NIBBLE];
+	/// TODO rem
+	const NIBBLE_LENGTH: usize = N;
+
 	/// Padding bitmasks, internally use for working on padding byte.
 	/// Length of this array is `Self::BIT_PER_NIBBLE`.
 	/// The first element of each pair is a bit mask to apply,
@@ -76,14 +60,11 @@ pub trait NibbleOps:
 	/// Last nibble index as u8, a convenience constant for iteration on all nibble.
 	const LAST_NIBBLE_INDEX: u8 = (Self::NIBBLE_PER_BYTE - 1) as u8;
 
-	/// Buffer type for child slice index array.
-	type ChildRangeIndex: ChildIndex<NodeHandlePlan>;
-
 	/// Pad left aligned representation for a given number of element.
 	/// Mask a byte from a `ix` > 0 (ix being content).
 	/// Result is a byte containing `ix` nibble of left aligned content and padded with 0.
 	#[inline(always)]
-	fn pad_left(ix: u8, b: u8) -> u8 {
+	pub fn pad_left(ix: u8, b: u8) -> u8 {
 		debug_assert!(ix > 0); // 0 does not pad anything TODO EMCH allow 0
 		b & !Self::PADDING_BITMASK[ix as usize].0
 		//b & !(255u8 >> (Self::BIT_PER_NIBBLE * ix)) // TODO EMCH compare perf with that
@@ -93,7 +74,7 @@ pub trait NibbleOps:
 	/// Mask a byte from a ix > 0 (ix being content).
 	/// Result is a byte containing `ix` nibble of right aligned content and padded with 0.
 	#[inline(always)]
-	fn pad_right(ix: u8, b: u8) -> u8 {
+	pub fn pad_right(ix: u8, b: u8) -> u8 {
 		// TODO EMCH change code to avoid this test (panic on 0 to see)
 		// it means there is calls to pad_right where we do not use the number
 		// of elements!
@@ -107,7 +88,7 @@ pub trait NibbleOps:
 
 	/// Get u8 nibble value at a given index of a byte.
 	#[inline(always)]
-	fn at_left(ix: u8, b: u8) -> u8 {
+	pub fn at_left(ix: u8, b: u8) -> u8 {
 		// TODO EMCH compare perf without padding bitmask
 		(b & Self::PADDING_BITMASK[ix as usize].0) >> Self::PADDING_BITMASK[ix as usize].1
 	}
@@ -122,7 +103,7 @@ pub trait NibbleOps:
 
 	/// Get u8 nibble value at a given index in a `NibbleSlice`.
 	#[inline(always)]
-	fn at(s: &NibbleSlice<Self>, ix: usize) -> u8 {
+	pub fn at(s: &NibbleSlice<Self>, ix: usize) -> u8 {
 		// same as left with offset
 		Self::left_nibble_at(&s.data[..], s.offset + ix)
 	}
@@ -130,19 +111,19 @@ pub trait NibbleOps:
 	/// Push u8 nibble value at a given index into an existing byte.
 	/// Note that existing value must be null (padded with 0).
 	#[inline(always)]
-	fn push_at_left(ix: u8, v: u8, into: u8) -> u8 {
+	pub fn push_at_left(ix: u8, v: u8, into: u8) -> u8 {
 		//into | (v << (8 - (BIT_PER_NIBBLE * ix)))
 		into | (v << Self::PADDING_BITMASK[ix as usize].1)
 	}
 
 	#[inline]
 	/// Calculate the number of needed padding for an array of nibble length `i`.
-	fn number_padding(i: usize) -> usize {
+	pub fn number_padding(i: usize) -> usize {
 		(Self::NIBBLE_PER_BYTE - (i % Self::NIBBLE_PER_BYTE)) % Self::NIBBLE_PER_BYTE
 	}
 
 	/// Count the biggest common depth between two left aligned packed nibble slice.
-	fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
+	pub fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
 		let upper_bound = cmp::min(v1.len(), v2.len());
 		for a in 0..upper_bound {
 			if v1[a] != v2[a] {
@@ -154,7 +135,7 @@ pub trait NibbleOps:
 
 	/// Calculate the number of common nibble between two left aligned bytes.
 	#[inline(always)]
-	fn left_common(a: u8, b: u8) -> usize {
+	pub fn left_common(a: u8, b: u8) -> usize {
 		((a ^ b).leading_zeros() as usize) / Self::BIT_PER_NIBBLE
 		/*		let mut i = 0;
 		while i < Self::NIBBLE_PER_BYTE {
@@ -174,7 +155,7 @@ pub trait NibbleOps:
 	/// the other is a right shift.
 	/// Calculate the number of common nibble between two left aligned bytes.
 	#[inline(always)]
-	fn split_shifts(pad: usize) -> (usize, usize) {
+	pub fn split_shifts(pad: usize) -> (usize, usize) {
 		debug_assert!(pad > 0);
 		let s1 = Self::PADDING_BITMASK[pad - 1].1;
 		let s2 = 8 - s1;
@@ -184,7 +165,7 @@ pub trait NibbleOps:
 	/// Shifts right aligned key to add a given left offset.
 	/// Resulting in possibly padding at both left and right
 	/// (used when combining two keys).
-	fn shift_key(key: &mut NodeKey, ofset: usize) -> bool {
+	pub fn shift_key(key: &mut NodeKey, ofset: usize) -> bool {
 		let old_offset = key.0;
 		key.0 = ofset;
 		if old_offset > ofset {
@@ -211,82 +192,6 @@ pub trait NibbleOps:
 	}
 }
 
-/// Radix 16 `NibbleOps` definition.
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
-pub struct Radix16;
-
-impl NibbleOps for Radix16 {
-	const LAYOUT: Layout = Layout::Radix16;
-	const PADDING_BITMASK: &'static [(u8, usize)] = &[(0xFF, 4), (0x0F, 0)];
-	type ChildRangeIndex = ChildIndex16<NodeHandlePlan>;
-
-	#[inline]
-	fn number_padding(i: usize) -> usize {
-		i % Self::NIBBLE_PER_BYTE
-	}
-
-	#[inline]
-	fn split_shifts(pad: usize) -> (usize, usize) {
-		debug_assert!(pad > 0);
-		(4, 4)
-	}
-}
-
-/// Radix 4 `NibbleOps` definition.
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
-pub struct Radix4;
-
-// new_padded_end merged
-impl NibbleOps for Radix4 {
-	const LAYOUT: Layout = Layout::Radix4;
-	const PADDING_BITMASK: &'static [(u8, usize)] =
-		&[(0b1111_1111, 6), (0b0011_1111, 4), (0b0000_1111, 2), (0b0000_0011, 0)];
-	type ChildRangeIndex = ChildIndex4<NodeHandlePlan>;
-}
-
-/// Radix 2 `NibbleOps` definition.
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
-pub struct Radix2;
-
-impl NibbleOps for Radix2 {
-	const LAYOUT: Layout = Layout::Radix2;
-	const PADDING_BITMASK: &'static [(u8, usize)] = &[
-		(0b1111_1111, 7),
-		(0b0111_1111, 6),
-		(0b0011_1111, 5),
-		(0b0001_1111, 4),
-		(0b0000_1111, 3),
-		(0b0000_0111, 2),
-		(0b0000_0011, 1),
-		(0b0000_0001, 0),
-	];
-	type ChildRangeIndex = ChildIndex2<NodeHandlePlan>;
-}
-
-/// Radix 256 `NibbleOps` definition.
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
-pub struct Radix256;
-
-impl NibbleOps for Radix256 {
-	const LAYOUT: Layout = Layout::Radix256;
-	const PADDING_BITMASK: &'static [(u8, usize)] = &[(1, 0)];
-	type ChildRangeIndex = ChildIndex256<NodeHandlePlan>;
-
-	#[inline]
-	fn split_shifts(_pad: usize) -> (usize, usize) {
-		unreachable!("pad > 0");
-	}
-
-	#[inline]
-	fn left_common(_a: u8, _b: u8) -> usize {
-		0
-	}
-}
-
 /// Backing storage for `NibbleVec`s.
 pub(crate) type BackingByteVec = smallvec::SmallVec<[u8; 40]>;
 
@@ -295,10 +200,9 @@ pub(crate) type BackingByteVec = smallvec::SmallVec<[u8; 40]>;
 /// a `NibbleSlice` can get costy.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, PartialEq, Eq)]
-pub struct NibbleVec<N> {
+pub struct NibbleVec<const N: usize> {
 	inner: BackingByteVec,
 	len: usize,
-	_marker: PhantomData<N>,
 }
 
 /// Nibble-orientated view onto byte-slice, allowing nibble-precision offsets.

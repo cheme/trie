@@ -83,7 +83,7 @@ pub enum NodeHandleOwned<H, const N: usize> {
 	Inline(Box<NodeOwned<H, N>>),
 }
 
-impl<H, N> NodeHandleOwned<H, N>
+impl<H, const N: usize> NodeHandleOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
 	N: NibbleOps,
@@ -206,7 +206,7 @@ impl<H> ValueOwned<H> {
 /// Type of node in the trie and essential information thereof.
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum Node<'a, N: NibbleOps> {
+pub enum Node<'a, N: NibbleOps, const N2: usize> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has key slice and value. Value may not be empty.
@@ -555,7 +555,7 @@ impl ValuePlan {
 /// ranges that can be used to index into a large byte slice.
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodePlan<N: NibbleOps> {
+pub enum NodePlan<N: NibbleOps, const N2: usize> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has a partial key plan and value.
@@ -573,11 +573,11 @@ pub enum NodePlan<N: NibbleOps> {
 	},
 }
 
-impl<N: NibbleOps> NodePlan<N> {
+impl<N: NibbleOps, const N2: usize> NodePlan<N, N2> {
 	/// Build a node by decoding a byte slice according to the node plan. It is the responsibility
 	/// of the caller to ensure that the node plan was created for the argument data, otherwise the
 	/// call may decode incorrectly or panic.
-	pub fn build<'a, 'b>(&'a self, data: &'b [u8]) -> Node<'b, N> {
+	pub fn build<'a, 'b>(&'a self, data: &'b [u8]) -> Node<'b, N, N2> {
 		match self {
 			NodePlan::Empty => Node::Empty,
 			NodePlan::Leaf { partial, value } => Node::Leaf(partial.build(data), value.build(data)),

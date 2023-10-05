@@ -251,7 +251,7 @@ impl<L: TrieLayout> Debug for Value<L> {
 }
 
 #[cfg(feature = "std")]
-impl<L: TrieLayout> Debug for Node<L>
+impl<L: TrieLayout, const N: usize> Debug for Node<L, N>
 where
 	L::Hash: Debug,
 {
@@ -274,7 +274,7 @@ impl<L: TrieLayout, const N: usize> Node<L, N> {
 	fn inline_or_hash(
 		parent_hash: TrieHash<L>,
 		child: EncodedNodeHandle,
-		storage: &mut NodeStorage<L>,
+		storage: &mut NodeStorage<L, N>,
 	) -> Result<NodeHandle<TrieHash<L>>, TrieHash<L>, CError<L>> {
 		let handle = match child {
 			EncodedNodeHandle::Hash(data) => {
@@ -293,7 +293,7 @@ impl<L: TrieLayout, const N: usize> Node<L, N> {
 	// load an inline node into memory or get the hash to do the lookup later.
 	fn inline_or_hash_owned(
 		child: &NodeHandleOwned<TrieHash<L>, N>,
-		storage: &mut NodeStorage<L>,
+		storage: &mut NodeStorage<L, N>,
 	) -> NodeHandle<TrieHash<L>> {
 		match child {
 			NodeHandleOwned::Hash(hash) => NodeHandle::Hash(*hash),
@@ -308,7 +308,7 @@ impl<L: TrieLayout, const N: usize> Node<L, N> {
 	fn from_encoded<'a, 'b>(
 		node_hash: TrieHash<L>,
 		data: &'a [u8],
-		storage: &'b mut NodeStorage<L>,
+		storage: &'b mut NodeStorage<L, N>,
 	) -> Result<Self, TrieHash<L>, CError<L>> {
 		let encoded_node =
 			L::Codec::decode(data).map_err(|e| Box::new(TrieError::DecoderError(node_hash, e)))?;
@@ -366,7 +366,7 @@ impl<L: TrieLayout, const N: usize> Node<L, N> {
 	/// Decode a node from a [`NodeOwned`].
 	fn from_node_owned(
 		node_owned: &NodeOwned<TrieHash<L>, L::Nibble::::NIBBLE_LENGTH>,
-		storage: &mut NodeStorage<L>,
+		storage: &mut NodeStorage<L, N>,
 	) -> Self {
 		match node_owned {
 			NodeOwned::Empty => Node::Empty,
@@ -514,14 +514,14 @@ enum Action<L: TrieLayout> {
 }
 
 // post-insert action. Same as action without delete
-enum InsertAction<L: TrieLayout> {
+enum InsertAction<L: TrieLayout, const N: usize> {
 	// Replace a node with a new one.
 	Replace(Node<L>),
 	// Restore the original node.
 	Restore(Node<L>),
 }
 
-impl<L: TrieLayout> InsertAction<L> {
+impl<L: TrieLayout, const N: usize> InsertAction<L, N> {
 	fn into_action(self) -> Action<L> {
 		match self {
 			InsertAction::Replace(n) => Action::Replace(n),
@@ -530,7 +530,7 @@ impl<L: TrieLayout> InsertAction<L> {
 	}
 
 	// unwrap the node, disregarding replace or restore state.
-	fn unwrap_node(self) -> Node<L> {
+	fn unwrap_node(self) -> Node<L, N> {
 		match self {
 			InsertAction::Replace(n) | InsertAction::Restore(n) => n,
 		}
@@ -583,12 +583,12 @@ where
 }
 
 /// Compact and cache-friendly storage for Trie nodes.
-struct NodeStorage<L: TrieLayout> {
+struct NodeStorage<L: TrieLayout, const N: usize> {
 	nodes: Vec<Stored<L>>,
 	free_indices: VecDeque<usize>,
 }
 
-impl<L: TrieLayout> NodeStorage<L> {
+impl<L: TrieLayout, const N: usize> NodeStorage<L, N> {
 	/// Create a new storage.
 	fn empty() -> Self {
 		NodeStorage { nodes: Vec::new(), free_indices: VecDeque::new() }
@@ -614,10 +614,10 @@ impl<L: TrieLayout> NodeStorage<L> {
 	}
 }
 
-impl<'a, L: TrieLayout> Index<&'a StorageHandle> for NodeStorage<L> {
-	type Output = Node<L>;
+impl<'a, L: TrieLayout, const N: usize> Index<&'a StorageHandle> for NodeStorage<L, N> {
+	type Output = Node<L, N>;
 
-	fn index(&self, handle: &'a StorageHandle) -> &Node<L> {
+	fn index(&self, handle: &'a StorageHandle) -> &Node<L, N> {
 		match self.nodes[handle.0] {
 			Stored::New(ref node) => node,
 			Stored::Cached(ref node, _) => node,
@@ -626,14 +626,14 @@ impl<'a, L: TrieLayout> Index<&'a StorageHandle> for NodeStorage<L> {
 }
 
 /// A builder for creating a [`TrieDBMut`].
-pub struct TrieDBMutBuilder<'db, L: TrieLayout> {
+pub struct TrieDBMutBuilder<'db, L: TrieLayout, const N: usize> {
 	db: &'db mut dyn HashDB<L::Hash, DBValue>,
 	root: &'db mut TrieHash<L>,
 	cache: Option<&'db mut dyn TrieCache<L::Codec, L::Nibble>>,
 	recorder: Option<&'db mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
 }
 
-impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
+impl<'db, L: TrieLayout, const N: usize> TrieDBMutBuilder<'db, L, N> {
 	/// Create a builder for constructing a new trie with the backing database `db` and empty
 	/// `root`.
 	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
@@ -689,7 +689,7 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 	}
 
 	/// Build the [`TrieDBMut`].
-	pub fn build(self) -> TrieDBMut<'db, L> {
+	pub fn build(self) -> TrieDBMut<'db, L, N> {
 		let root_handle = NodeHandle::Hash(*self.root);
 
 		TrieDBMut {
@@ -732,11 +732,11 @@ impl<'db, L: TrieLayout> TrieDBMutBuilder<'db, L> {
 /// t.remove(b"foo").unwrap();
 /// assert!(!t.contains(b"foo").unwrap());
 /// ```
-pub struct TrieDBMut<'a, L>
+pub struct TrieDBMut<'a, L, const N: usize>
 where
 	L: TrieLayout,
 {
-	storage: NodeStorage<L>,
+	storage: NodeStorage<L, N>,
 	db: &'a mut dyn HashDB<L::Hash, DBValue>,
 	root: &'a mut TrieHash<L>,
 	root_handle: NodeHandle<TrieHash<L>>,
@@ -750,7 +750,7 @@ where
 	recorder: Option<core::cell::RefCell<&'a mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>>,
 }
 
-impl<'a, L> TrieDBMut<'a, L>
+impl<'a, L, const N: usize> TrieDBMut<'a, L, N>
 where
 	L: TrieLayout,
 {
@@ -813,7 +813,7 @@ where
 	where
 		F: FnOnce(
 			&mut Self,
-			Node<L>,
+			Node<L, N>,
 			&mut NibbleFullKey<L::Nibble>,
 		) -> Result<Action<L>, TrieHash<L>, CError<L>>,
 	{
@@ -980,11 +980,11 @@ where
 	/// The insertion inspector.
 	fn insert_inspector(
 		&mut self,
-		node: Node<L>,
+		node: Node<L, N>,
 		key: &mut NibbleFullKey<L::Nibble>,
 		value: Bytes,
 		old_val: &mut Option<Value<L>>,
-	) -> Result<InsertAction<L>, TrieHash<L>, CError<L>> {
+	) -> Result<InsertAction<L, N>, TrieHash<L>, CError<L>> {
 		let partial = *key;
 
 		#[cfg(feature = "std")]
@@ -1351,7 +1351,7 @@ where
 	/// The removal inspector.
 	fn remove_inspector(
 		&mut self,
-		node: Node<L>,
+		node: Node<L, N>,
 		key: &mut NibbleFullKey<L::Nibble>,
 		old_val: &mut Option<Value<L>>,
 	) -> Result<Action<L>, TrieHash<L>, CError<L>> {
@@ -1537,17 +1537,17 @@ where
 	/// - Extension node followed by anything other than a Branch node.
 	fn fix(
 		&mut self,
-		node: Node<L>,
+		node: Node<L, N>,
 		key: NibbleSlice<L::Nibble>,
-	) -> Result<Node<L>, TrieHash<L>, CError<L>> {
+	) -> Result<Node<L, N>, TrieHash<L>, CError<L>> {
 		self.fix_inner(node, key, false)
 	}
 	fn fix_inner(
 		&mut self,
-		node: Node<L>,
+		node: Node<L, N>,
 		key: NibbleSlice<L::Nibble>,
 		recurse_extension: bool,
-	) -> Result<Node<L>, TrieHash<L>, CError<L>> {
+	) -> Result<Node<L, N>, TrieHash<L>, CError<L>> {
 		match node {
 			Node::Branch(mut children, value) => {
 				// if only a single value, transmute to leaf/extension and feed through fixed.
@@ -1808,7 +1808,7 @@ where
 				);
 
 				fn cache_child_values<L: TrieLayout>(
-					node: &NodeOwned<TrieHash<L>, L::Nibble>,
+					node: &NodeOwned<TrieHash<L>, N>,
 					values_to_cache: &mut Vec<(Vec<u8>, CachedValue<TrieHash<L>>)>,
 					full_key: NibbleVec<L::Nibble>,
 				) {
@@ -1942,7 +1942,7 @@ where
 	}
 }
 
-impl<'a, L> TrieMut<L> for TrieDBMut<'a, L>
+impl<'a, L, const N: usize> TrieMut<L> for TrieDBMut<'a, L, N>
 where
 	L: TrieLayout,
 {
@@ -2020,7 +2020,7 @@ where
 	}
 }
 
-impl<'a, L> Drop for TrieDBMut<'a, L>
+impl<'a, L, const N: usize> Drop for TrieDBMut<'a, L, N>
 where
 	L: TrieLayout,
 {
