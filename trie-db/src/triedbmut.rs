@@ -207,7 +207,7 @@ impl<L: TrieLayout> Value<L> {
 }
 
 /// Node types in the Trie.
-enum Node<L: TrieLayout> {
+enum Node<L: TrieLayout, const N: usize> {
 	/// Empty node.
 	Empty,
 	/// A leaf node contains the end of a key and a value.
@@ -220,9 +220,9 @@ enum Node<L: TrieLayout> {
 	/// The child node is always a branch.
 	Extension(NodeKey, NodeHandle<TrieHash<L>>),
 	/// A branch has up to number of children per nibble and an optional value.
-	Branch(Box<L::NodeIndex>, Option<Value<L>>),
+	Branch(Box<[Option<NodeHandle<TrieHash<L>>>; N]>, Option<Value<L>>),
 	/// Branch node with support for a nibble (to avoid extension node).
-	NibbledBranch(NodeKey, Box<L::NodeIndex>, Option<Value<L>>),
+	NibbledBranch(NodeKey, Box<[Option<NodeHandle<TrieHash<L>>>; N]>, Option<Value<L>>),
 }
 
 #[cfg(feature = "std")]
@@ -269,7 +269,7 @@ where
 	}
 }
 
-impl<L: TrieLayout> Node<L> {
+impl<L: TrieLayout, const N: usize> Node<L, N> {
 	// load an inline node into memory or get the hash to do the lookup later.
 	fn inline_or_hash(
 		parent_hash: TrieHash<L>,
@@ -292,7 +292,7 @@ impl<L: TrieLayout> Node<L> {
 
 	// load an inline node into memory or get the hash to do the lookup later.
 	fn inline_or_hash_owned(
-		child: &NodeHandleOwned<TrieHash<L>, L::Nibble>,
+		child: &NodeHandleOwned<TrieHash<L>, N>,
 		storage: &mut NodeStorage<L>,
 	) -> NodeHandle<TrieHash<L>> {
 		match child {
@@ -365,7 +365,7 @@ impl<L: TrieLayout> Node<L> {
 
 	/// Decode a node from a [`NodeOwned`].
 	fn from_node_owned(
-		node_owned: &NodeOwned<TrieHash<L>, L::Nibble>,
+		node_owned: &NodeOwned<TrieHash<L>, L::Nibble::::NIBBLE_LENGTH>,
 		storage: &mut NodeStorage<L>,
 	) -> Self {
 		match node_owned {
@@ -1881,8 +1881,9 @@ where
 						let full_key = self.cache.as_ref().and_then(|_| {
 							let mut prefix = prefix.clone();
 							if let Some(partial) = node.partial_key() {
-								prefix
-									.append_partial(NibbleSlice::<L::Nibble>::from_stored(partial).right());
+								prefix.append_partial(
+									NibbleSlice::<L::Nibble>::from_stored(partial).right(),
+								);
 							}
 							Some(prefix)
 						});

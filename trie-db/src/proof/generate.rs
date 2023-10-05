@@ -20,7 +20,6 @@ use hash_db::{HashDBRef, Hasher};
 
 use crate::{
 	nibble::{LeftNibbleSlice, NibbleOps},
-	nibble_ops::NIBBLE_LENGTH,
 	node::{
 		BranchChildrenNodePlan, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, Value, ValuePlan,
 	},
@@ -505,7 +504,7 @@ fn match_key_to_branch_node<'a, 'b, L: TrieLayout>(
 				child_plan
 					.build(node_data)
 					.try_into()
-					.map_err(|hash| Box::new(TrieError::InvalidHash(C::HashOut::default(), hash)))
+					.map_err(|hash| Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash)))
 			})
 			.transpose()?;
 		*child_index += 1;

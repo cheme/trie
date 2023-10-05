@@ -27,10 +27,9 @@
 
 use crate::{
 	nibble::NibbleOps,
-	nibble_ops::NIBBLE_LENGTH,
-	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
+	node::{BranchChildrenNodePlan, Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, result, sync::Arc, vec, vec::Vec},
-	BranchChildrenNodePlan, CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
+	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result,
 	TrieChildRangeIndex, TrieDB, TrieDBRawIterator, TrieError, TrieHash, TrieLayout,
 };
 use hash_db::{HashDB, Prefix};
@@ -286,7 +285,7 @@ where
 					NodePlan::Extension { .. } => (1, None),
 					NodePlan::NibbledBranch { value: Some(value), .. } |
 					NodePlan::Branch { value: Some(value), .. } =>
-						(NIBBLE_LENGTH, detached_value(db, value, node.data(), prefix.as_prefix())),
+						(L::Nibble::NIBBLE_LENGTH, detached_value(db, value, node.data(), prefix.as_prefix())),
 					NodePlan::NibbledBranch { value: None, .. } |
 					NodePlan::Branch { value: None, .. } => (L::Nibble::NIBBLE_LENGTH, None),
 				};

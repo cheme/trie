@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{
-	nibble::{self, nibble_ops, NibbleOps, NibbleSlice, NibbleVec},
+	nibble::{self, NibbleOps, NibbleSlice, NibbleVec},
 	node_codec::NodeCodec,
 	Bytes, CError, ChildReference, Result, TrieError, TrieHash, TrieLayout,
 };
@@ -23,7 +23,7 @@ use hash_db::Hasher;
 
 use crate::nibble::{ChildIndex, ChildSliceIndex};
 
-use crate::rstd::{borrow::Borrow, marker::PhantomData};
+use crate::rstd::{borrow::Borrow, marker::PhantomData, mem, ops::Range};
 
 /// Partial node key type: offset and owned value of a nibbleslice.
 /// Offset is applied on first byte of array (bytes are right aligned).
@@ -78,7 +78,7 @@ impl NodeHandle<'_> {
 /// TODO param L
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodeHandleOwned<H, N> {
+pub enum NodeHandleOwned<H, const N: usize> {
 	Hash(H),
 	Inline(Box<NodeOwned<H, N>>),
 }
@@ -238,7 +238,7 @@ impl<N: NibbleOps> Node<'_, N> {
 			Self::Extension(n, h) =>
 				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle::<L>()?)),
 			Self::Branch(childs, data) => {
-				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
+				let mut childs_owned = [(); L::Nibble::NIBBLE_LENGTH].map(|_| None);
 				childs
 					.iter()
 					.enumerate()
@@ -252,7 +252,7 @@ impl<N: NibbleOps> Node<'_, N> {
 				Ok(NodeOwned::Branch(childs_owned, data.as_ref().map(|d| d.to_owned_value::<L>())))
 			},
 			Self::NibbledBranch(n, childs, data) => {
-				let mut childs_owned = [(); nibble_ops::NIBBLE_LENGTH].map(|_| None);
+				let mut childs_owned = [(); L::Nibble::NIBBLE_LENGTH].map(|_| None);
 				childs
 					.iter()
 					.enumerate()
@@ -277,7 +277,7 @@ impl<N: NibbleOps> Node<'_, N> {
 /// TODO NodeOwned<L>
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodeOwned<H, N> {
+pub enum NodeOwned<H, const N: usize> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has key slice and value. Value may not be empty.
@@ -286,11 +286,11 @@ pub enum NodeOwned<H, N> {
 	Extension(NibbleVec<N>, NodeHandleOwned<H, N>),
 	/// Branch node; has slice of child nodes (each possibly null)
 	/// and an optional immediate node data.
-	Branch([Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH], Option<ValueOwned<H>>),
+	Branch([Option<NodeHandleOwned<H, N>>; N], Option<ValueOwned<H>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
 	NibbledBranch(
 		NibbleVec<N>,
-		[Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH],
+		[Option<NodeHandleOwned<H, N>>; N],
 		Option<ValueOwned<H>>,
 	),
 	/// Node that represents a value.
@@ -300,7 +300,7 @@ pub enum NodeOwned<H, N> {
 	Value(Bytes, H),
 }
 
-impl<H, N> NodeOwned<H, N>
+impl<H, const N: usize> NodeOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
 	N: NibbleOps,
@@ -335,13 +335,13 @@ where
 
 	/// Returns an iterator over all existing children with their optional nibble.
 	pub fn child_iter(&self) -> impl Iterator<Item = (Option<u8>, &NodeHandleOwned<H, N>)> {
-		enum ChildIter<'a, H> {
+		enum ChildIter<'a, H, N> {
 			Empty,
 			Single(&'a NodeHandleOwned<H, N>, bool),
-			Array(&'a [Option<NodeHandleOwned<H, N>>; nibble_ops::NIBBLE_LENGTH], usize),
+			Array(&'a [Option<NodeHandleOwned<H, N>>; L::Nibble::NIBBLE_LENGTH], usize),
 		}
 
-		impl<'a, H> Iterator for ChildIter<'a, H> {
+		impl<'a, H, N> Iterator for ChildIter<'a, H, N> {
 			type Item = (Option<u8>, &'a NodeHandleOwned<H, N>);
 
 			fn next(&mut self) -> Option<Self::Item> {
@@ -421,13 +421,13 @@ impl<H, N: NibbleOps> NodeOwned<H, N> {
 	pub fn size_in_bytes(&self) -> usize {
 		let self_size = mem::size_of::<Self>();
 
-		fn childs_size<'a, H: 'a>(
+		fn childs_size<'a, H: 'a, N: NibbleOps + 'a>(
 			childs: impl Iterator<Item = &'a Option<NodeHandleOwned<H, N>>>,
 		) -> usize {
 			// If a `child` isn't an inline node, its size is already taken account for by
 			// `self_size`.
 			childs
-				.filter_map(|c: &'a Option<NodeHandleOwned<H, N>| c.as_ref())
+				.filter_map(|c: &'a Option<NodeHandleOwned<H, N>>| c.as_ref())
 				.map(|c| c.as_inline().map_or(0, |n| n.size_in_bytes()))
 				.sum()
 		}

@@ -70,7 +70,7 @@ pub use self::{
 	fatdbmut::FatDBMut,
 	lookup::Lookup,
 	nibble::{
-		nibble_ops, ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4,
+		 ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4,
 		ChildSliceIndex, NibbleOps, NibbleSlice, NibbleVec, Radix16, Radix2, Radix256, Radix4,
 	},
 	recorder::Recorder,

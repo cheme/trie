@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{nibble_ops, NibbleOps, NibbleSlice},
+	nibble::{NibbleOps, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},

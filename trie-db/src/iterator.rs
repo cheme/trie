@@ -14,7 +14,7 @@
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
-	nibble::{nibble_ops, NibbleOps, NibbleSlice, NibbleVec},
+	nibble::{NibbleOps, NibbleSlice, NibbleVec},
 	node::{Node, NodeHandle, NodePlan, OwnedNode, Value},
 	triedb::TrieDB,
 	TrieError, TrieItem, TrieKeyItem,
@@ -51,7 +51,7 @@ impl<L: TrieLayout> Crumb<L> {
 			(Status::At, NodePlan::NibbledBranch { .. }) => Status::AtChild(0),
 			(Status::AtChild(x), NodePlan::Branch { .. }) |
 			(Status::AtChild(x), NodePlan::NibbledBranch { .. })
-				if x < (nibble_ops::NIBBLE_LENGTH - 1) =>
+				if x < (L::Nibble::NIBBLE_LENGTH - 1) =>
 				Status::AtChild(x + 1),
 			_ => Status::Exiting,
 		}
@@ -316,7 +316,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 		// Now seek forward again.
 		self.seek(db, seek)?;
 
-		let prefix_len = prefix.len() * crate::nibble::nibble_ops::NIBBLE_PER_BYTE;
+		let prefix_len = prefix.len() * L::Nibble::NIBBLE_PER_BYTE;
 		let mut len = 0;
 		// look first prefix in trail
 		for i in 0..self.trail.len() {

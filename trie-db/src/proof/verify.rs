@@ -16,10 +16,9 @@
 
 use crate::{
 	nibble::LeftNibbleSlice,
-	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, Value},
 	rstd::{convert::TryInto, iter::Peekable, marker::PhantomData, result::Result, vec, vec::Vec},
-	BranchChildrenSlice, CError, ChildReference, NibbleOps, NodeCodec, TrieHash, TrieLayout,
+	node::BranchChildrenSlice, CError, ChildReference, NibbleOps, NodeCodec, TrieHash, TrieLayout,
 };
 use hash_db::Hasher;
 
