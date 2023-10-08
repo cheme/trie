@@ -16,9 +16,9 @@
 
 use crate::{
 	nibble::LeftNibbleSlice,
-	node::{Node, NodeHandle, Value},
+	node::{BranchChildrenSlice, Node, NodeHandle, Value},
 	rstd::{convert::TryInto, iter::Peekable, marker::PhantomData, result::Result, vec, vec::Vec},
-	node::BranchChildrenSlice, CError, ChildReference, NibbleOps, NodeCodec, TrieHash, TrieLayout,
+	CError, ChildReference, NibbleOps, NodeCodec, TrieHash, TrieLayout,
 };
 use hash_db::Hasher;
 
@@ -85,34 +85,35 @@ impl<HO: std::fmt::Debug, CE: std::error::Error + 'static> std::error::Error for
 	}
 }
 
-struct StackEntry<'a, L: TrieLayout> {
+struct StackEntry<'a, L: TrieLayout<N>, const N: usize> {
 	/// The prefix is the nibble path to the node in the trie.
-	prefix: LeftNibbleSlice<'a, L::Nibble>,
-	node: Node<'a, L::Nibble>,
+	prefix: LeftNibbleSlice<'a, N>,
+	node: Node<'a, N>,
 	is_inline: bool,
 	/// The value associated with this trie node.
 	value: Option<Value<'a>>,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
-	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
+	/// nodes, the index is in [0, NibbleOps::<N>::nibble_length()] and for extension nodes, the
+	/// index is in [0, 1].
 	child_index: usize,
 	/// The child references to use in reconstructing the trie nodes.
-	children: Vec<Option<ChildReference<TrieHash<L>>>>,
+	children: Vec<Option<ChildReference<TrieHash<L, N>>>>,
 	/// Technical to attach lifetime to entry.
-	next_value_hash: Option<TrieHash<L>>,
+	next_value_hash: Option<TrieHash<L, N>>,
 	_marker: PhantomData<L>,
 }
 
-impl<'a, L: TrieLayout> StackEntry<'a, L> {
+impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	fn new(
 		node_data: &'a [u8],
-		prefix: LeftNibbleSlice<'a, L::Nibble>,
+		prefix: LeftNibbleSlice<'a, N>,
 		is_inline: bool,
-	) -> Result<Self, Error<TrieHash<L>, CError<L>>> {
+	) -> Result<Self, Error<TrieHash<L, N>, CError<L, N>>> {
 		let node = L::Codec::decode(node_data).map_err(Error::DecodeError)?;
 		let children_len = match node {
 			Node::Empty | Node::Leaf(..) => 0,
 			Node::Extension(..) => 1,
-			Node::Branch(..) | Node::NibbledBranch(..) => L::Nibble::NIBBLE_LENGTH,
+			Node::Branch(..) | Node::NibbledBranch(..) => NibbleOps::<N>::nibble_length(),
 		};
 		let value = match &node {
 			Node::Empty | Node::Extension(_, _) => None,
@@ -140,7 +141,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	}
 
 	/// Encode this entry to an encoded trie node with data properly reconstructed.
-	fn encode_node(mut self) -> Result<Vec<u8>, Error<TrieHash<L>, CError<L>>> {
+	fn encode_node(mut self) -> Result<Vec<u8>, Error<TrieHash<L, N>, CError<L, N>>> {
 		self.complete_children()?;
 		Ok(match self.node {
 			Node::Empty => L::Codec::empty_node().to_vec(),
@@ -171,7 +172,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 		&mut self,
 		child_prefix: LeftNibbleSlice<'a, L::Nibble>,
 		proof_iter: &mut I,
-	) -> Result<Self, Error<TrieHash<L>, CError<L>>>
+	) -> Result<Self, Error<TrieHash<L, N>, CError<L, N>>>
 	where
 		I: Iterator<Item = &'a [u8]>,
 	{
@@ -202,7 +203,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	}
 
 	/// Populate the remaining references in `children` with references copied the node itself.
-	fn complete_children(&mut self) -> Result<(), Error<TrieHash<L>, CError<L>>> {
+	fn complete_children(&mut self) -> Result<(), Error<TrieHash<L, N>, CError<L, N>>> {
 		match &mut self.node {
 			Node::Extension(_, child) if self.child_index == 0 => {
 				let child_ref = child.clone().try_into().map_err(Error::InvalidChildReference)?;
@@ -210,7 +211,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 				self.child_index += 1;
 			},
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
-				while self.child_index < L::Nibble::NIBBLE_LENGTH {
+				while self.child_index < NibbleOps::<N>::nibble_length() {
 					if let Some(child) = children.at(self.child_index) {
 						let child_ref = child.try_into().map_err(Error::InvalidChildReference)?;
 						self.children[self.child_index] = Some(child_ref);
@@ -227,7 +228,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 		proof_iter: &mut I,
 		child: NodeHandle<'a>,
 		prefix: LeftNibbleSlice<'a, L::Nibble>,
-	) -> Result<Self, Error<TrieHash<L>, CError<L>>>
+	) -> Result<Self, Error<TrieHash<L, N>, CError<L, N>>>
 	where
 		I: Iterator<Item = &'a [u8]>,
 	{
@@ -264,7 +265,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	fn advance_item<I>(
 		&mut self,
 		items_iter: &mut Peekable<I>,
-	) -> Result<Step<'a, L::Nibble>, Error<TrieHash<L>, CError<L>>>
+	) -> Result<Step<'a, L::Nibble>, Error<TrieHash<L, N>, CError<L, N>>>
 	where
 		I: Iterator<Item = (&'a [u8], Option<&'a [u8]>)>,
 	{
@@ -394,7 +395,7 @@ pub fn verify_proof<'a, L, I, K, V>(
 	root: &<L::Hash as Hasher>::Out,
 	proof: &[Vec<u8>],
 	items: I,
-) -> Result<(), Error<TrieHash<L>, CError<L>>>
+) -> Result<(), Error<TrieHash<L, N>, CError<L, N>>>
 where
 	L: TrieLayout,
 	I: IntoIterator<Item = &'a (K, Option<V>)>,
@@ -449,7 +450,7 @@ where
 					if node_data.len() > L::Hash::LENGTH {
 						return Err(Error::InvalidChildReference(node_data))
 					}
-					let mut hash = <TrieHash<L>>::default();
+					let mut hash = <TrieHash<L, N>>::default();
 					hash.as_mut()[..node_data.len()].copy_from_slice(node_data.as_ref());
 					ChildReference::Inline(hash, node_data.len())
 				} else {

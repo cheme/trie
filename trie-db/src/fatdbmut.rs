@@ -22,21 +22,21 @@ use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 /// Additionaly it stores inserted hash-key mappings for later retrieval.
 ///
 /// Use it as a `Trie` or `TrieMut` trait object.
-pub struct FatDBMut<'db, L>
+pub struct FatDBMut<'db, L, const N: usize>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	raw: TrieDBMut<'db, L>,
+	raw: TrieDBMut<'db, L, N>,
 }
 
-impl<'db, L> FatDBMut<'db, L>
+impl<'db, L, const N: usize> FatDBMut<'db, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	/// Create a new trie with the backing database `db` and empty `root`
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
+	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L, N>) -> Self {
 		FatDBMut { raw: TrieDBMutBuilder::new(db, root).build() }
 	}
 
@@ -45,7 +45,7 @@ where
 	/// Returns an error if root does not exist.
 	pub fn from_existing(
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
-		root: &'db mut TrieHash<L>,
+		root: &'db mut TrieHash<L, N>,
 	) -> Self {
 		FatDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build() }
 	}
@@ -61,11 +61,11 @@ where
 	}
 }
 
-impl<'db, L> TrieMut<L> for FatDBMut<'db, L>
+impl<'db, L, const N: usize> TrieMut<L, N> for FatDBMut<'db, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	fn root(&mut self) -> &TrieHash<L> {
+	fn root(&mut self) -> &TrieHash<L, N> {
 		self.raw.root()
 	}
 
@@ -73,11 +73,14 @@ where
 		self.raw.is_empty()
 	}
 
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.raw.contains(L::Hash::hash(key).as_ref())
 	}
 
-	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
+	fn get<'a, 'key>(
+		&'a self,
+		key: &'key [u8],
+	) -> Result<Option<DBValue>, TrieHash<L, N>, CError<L, N>>
 	where
 		'a: 'key,
 	{
@@ -88,7 +91,7 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.insert(hash.as_ref(), value)?;
 		let db = self.raw.db_mut();
@@ -101,7 +104,7 @@ where
 		Ok(out)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.remove(hash.as_ref())?;
 

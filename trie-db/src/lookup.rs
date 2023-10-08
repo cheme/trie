@@ -25,22 +25,22 @@ use crate::{
 use hash_db::{HashDBRef, Hasher, Prefix};
 
 /// Trie lookup helper object.
-pub struct Lookup<'a, 'cache, L: TrieLayout, Q: Query<L::Hash>> {
+pub struct Lookup<'a, 'cache, L: TrieLayout<N>, Q: Query<L::Hash>, const N: usize> {
 	/// database to query from.
 	pub db: &'a dyn HashDBRef<L::Hash, DBValue>,
 	/// Query object to record nodes and transform data.
 	pub query: Q,
 	/// Hash to start at
-	pub hash: TrieHash<L>,
+	pub hash: TrieHash<L, N>,
 	/// Optional cache that should be used to speed up the lookup.
-	pub cache: Option<&'cache mut dyn TrieCache<L::Codec, L::Nibble>>,
+	pub cache: Option<&'cache mut dyn TrieCache<L::Codec, N>>,
 	/// Optional recorder that will be called to record all trie accesses.
-	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
+	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 }
 
-impl<'a, 'cache, L, Q> Lookup<'a, 'cache, L, Q>
+impl<'a, 'cache, L, Q, const N: usize> Lookup<'a, 'cache, L, Q>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 	Q: Query<L::Hash>,
 {
 	/// Load the given value.
@@ -54,9 +54,9 @@ where
 		prefix: Prefix,
 		full_key: &[u8],
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
+		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 		query: Q,
-	) -> Result<Q::Item, TrieHash<L>, CError<L>> {
+	) -> Result<Q::Item, TrieHash<L, N>, CError<L, N>> {
 		match v {
 			Value::Inline(value) => {
 				if let Some(recorder) = recorder {
@@ -92,13 +92,13 @@ where
 	///
 	/// Returns the bytes representing the value and its hash.
 	fn load_owned_value(
-		v: ValueOwned<TrieHash<L>>,
+		v: ValueOwned<TrieHash<L, N>>,
 		prefix: Prefix,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec, L::Nibble>,
+		cache: &mut dyn crate::TrieCache<L::Codec, N>,
 		db: &dyn HashDBRef<L::Hash, DBValue>,
-		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
-	) -> Result<(Bytes, TrieHash<L>), TrieHash<L>, CError<L>> {
+		recorder: &mut Option<&mut dyn TrieRecorder<TrieHash<L, N>, N>>,
+	) -> Result<(Bytes, TrieHash<L, N>), TrieHash<L, N>, CError<L, N>> {
 		match v {
 			ValueOwned::Inline(value, hash) => {
 				if let Some(recorder) = recorder {
@@ -137,10 +137,9 @@ where
 		}
 	}
 
-	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, TrieHash<L>, L::Nibble>)
+	fn record<'b>(&mut self, get_access: impl FnOnce() -> TrieAccess<'b, TrieHash<L, N>, N>)
 	where
-		TrieHash<L>: 'b,
-		L::Nibble: 'b,
+		TrieHash<L, N>: 'b,
 	{
 		if let Some(recorder) = self.recorder.as_mut() {
 			recorder.record(get_access());
@@ -155,8 +154,8 @@ where
 	pub fn lookup_first_descendant(
 		mut self,
 		full_key: &[u8],
-		nibble_key: NibbleSlice<L::Nibble>,
-	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>> {
+		nibble_key: NibbleSlice<N>,
+	) -> Result<Option<MerkleValue<TrieHash<L, N>>>, TrieHash<L, N>, CError<L, N>> {
 		let mut partial = nibble_key;
 		let mut hash = self.hash;
 		let mut key_nibbles = 0;
@@ -377,8 +376,8 @@ where
 	pub fn look_up(
 		mut self,
 		full_key: &[u8],
-		nibble_key: NibbleSlice<L::Nibble>,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+		nibble_key: NibbleSlice<N>,
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>> {
 		match self.cache.take() {
 			Some(cache) => self.look_up_with_cache(full_key, nibble_key, cache),
 			None => self.look_up_without_cache(nibble_key, full_key, Self::load_value),
@@ -392,8 +391,8 @@ where
 	pub fn look_up_hash(
 		mut self,
 		full_key: &[u8],
-		nibble_key: NibbleSlice<L::Nibble>,
-	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		nibble_key: NibbleSlice<N>,
+	) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		match self.cache.take() {
 			Some(cache) => self.look_up_hash_with_cache(full_key, nibble_key, cache),
 			None => self.look_up_without_cache(
@@ -432,9 +431,9 @@ where
 	fn look_up_hash_with_cache(
 		mut self,
 		full_key: &[u8],
-		nibble_key: NibbleSlice<L::Nibble>,
-		cache: &mut dyn crate::TrieCache<L::Codec, L::Nibble>,
-	) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+		nibble_key: NibbleSlice<N>,
+		cache: &mut dyn crate::TrieCache<L::Codec, N>,
+	) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		let value_cache_allowed = self
 			.recorder
 			.as_ref()
@@ -494,9 +493,9 @@ where
 	fn look_up_with_cache(
 		mut self,
 		full_key: &[u8],
-		nibble_key: NibbleSlice<L::Nibble>,
-		cache: &mut dyn crate::TrieCache<L::Codec, L::Nibble>,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+		nibble_key: NibbleSlice<N>,
+		cache: &mut dyn crate::TrieCache<L::Codec, N>,
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>> {
 		let trie_nodes_recorded =
 			self.recorder.as_ref().map(|r| r.trie_nodes_recorded_for_key(full_key));
 
@@ -512,8 +511,8 @@ where
 		};
 
 		let lookup_data = |lookup: &mut Self,
-		                   cache: &mut dyn crate::TrieCache<L::Codec, L::Nibble>|
-		 -> Result<Option<Bytes>, TrieHash<L>, CError<L>> {
+		                   cache: &mut dyn crate::TrieCache<L::Codec, N>|
+		 -> Result<Option<Bytes>, TrieHash<L, N>, CError<L, N>> {
 			let data = lookup.look_up_with_cache_internal(
 				nibble_key,
 				full_key,
@@ -574,18 +573,18 @@ where
 	/// [`Self::lookup_without_cache`].
 	fn look_up_with_cache_internal<R>(
 		&mut self,
-		nibble_key: NibbleSlice<L::Nibble>,
+		nibble_key: NibbleSlice<N>,
 		full_key: &[u8],
-		cache: &mut dyn crate::TrieCache<L::Codec, L::Nibble>,
+		cache: &mut dyn crate::TrieCache<L::Codec, N>,
 		load_value_owned: impl Fn(
-			ValueOwned<TrieHash<L>>,
+			ValueOwned<TrieHash<L, N>>,
 			Prefix,
 			&[u8],
-			&mut dyn crate::TrieCache<L::Codec, L::Nibble>,
+			&mut dyn crate::TrieCache<L::Codec, N>,
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
-		) -> Result<R, TrieHash<L>, CError<L>>,
-	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
+			&mut Option<&mut dyn TrieRecorder<TrieHash<L, N>, N>>,
+		) -> Result<R, TrieHash<L, N>, CError<L, N>>,
+	) -> Result<Option<R>, TrieHash<L, N>, CError<L, N>> {
 		let mut partial = nibble_key;
 		let mut hash = self.hash;
 		let mut key_nibbles = 0;
@@ -749,17 +748,17 @@ where
 	/// [`Self::lookup_with_cache_internal`].
 	fn look_up_without_cache<R>(
 		mut self,
-		nibble_key: NibbleSlice<L::Nibble>,
+		nibble_key: NibbleSlice<N>,
 		full_key: &[u8],
 		load_value: impl Fn(
 			Value,
 			Prefix,
 			&[u8],
 			&dyn HashDBRef<L::Hash, DBValue>,
-			&mut Option<&mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
+			&mut Option<&mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 			Q,
-		) -> Result<R, TrieHash<L>, CError<L>>,
-	) -> Result<Option<R>, TrieHash<L>, CError<L>> {
+		) -> Result<R, TrieHash<L, N>, CError<L, N>>,
+	) -> Result<Option<R>, TrieHash<L, N>, CError<L, N>> {
 		let mut partial = nibble_key;
 		let mut hash = self.hash;
 		let mut key_nibbles = 0;

@@ -22,28 +22,28 @@ use hash_db::{HashDB, Hasher};
 ///
 /// Use it as a `Trie` or `TrieMut` trait object. You can use `raw()` to get the backing `TrieDBMut`
 /// object.
-pub struct SecTrieDBMut<'db, L>
+pub struct SecTrieDBMut<'db, L, const N: usize>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	raw: TrieDBMut<'db, L>,
+	raw: TrieDBMut<'db, L, N>,
 }
 
-impl<'db, L> SecTrieDBMut<'db, L>
+impl<'db, L, const N: usize> SecTrieDBMut<'db, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	/// Create a new trie with the backing database `db` and empty `root`
 	/// Initialize to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L>) -> Self {
+	pub fn new(db: &'db mut dyn HashDB<L::Hash, DBValue>, root: &'db mut TrieHash<L, N>) -> Self {
 		SecTrieDBMut { raw: TrieDBMutBuilder::new(db, root).build() }
 	}
 
 	/// Create a new trie with the backing database `db` and `root`.
 	pub fn from_existing(
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
-		root: &'db mut TrieHash<L>,
+		root: &'db mut TrieHash<L, N>,
 	) -> Self {
 		SecTrieDBMut { raw: TrieDBMutBuilder::from_existing(db, root).build() }
 	}
@@ -59,11 +59,11 @@ where
 	}
 }
 
-impl<'db, L> TrieMut<L> for SecTrieDBMut<'db, L>
+impl<'db, L, const N: usize> TrieMut<L> for SecTrieDBMut<'db, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	fn root(&mut self) -> &TrieHash<L> {
+	fn root(&mut self) -> &TrieHash<L, N> {
 		self.raw.root()
 	}
 
@@ -71,11 +71,14 @@ where
 		self.raw.is_empty()
 	}
 
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.raw.contains(&L::Hash::hash(key).as_ref())
 	}
 
-	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
+	fn get<'a, 'key>(
+		&'a self,
+		key: &'key [u8],
+	) -> Result<Option<DBValue>, TrieHash<L, N>, CError<L, N>>
 	where
 		'a: 'key,
 	{
@@ -86,11 +89,11 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.insert(&L::Hash::hash(key).as_ref(), value)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.remove(&L::Hash::hash(key).as_ref())
 	}
 }

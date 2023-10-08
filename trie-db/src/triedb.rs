@@ -30,26 +30,26 @@ use crate::{
 use hash_db::{HashDBRef, Prefix, EMPTY_PREFIX};
 
 /// A builder for creating a [`TrieDB`].
-pub struct TrieDBBuilder<'db, 'cache, L: TrieLayout> {
+pub struct TrieDBBuilder<'db, 'cache, L: TrieLayout<N>, const N: usize> {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
-	root: &'db TrieHash<L>,
-	cache: Option<&'cache mut dyn TrieCache<L::Codec, L::Nibble>>,
-	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
+	root: &'db TrieHash<L, N>,
+	cache: Option<&'cache mut dyn TrieCache<L::Codec, N>>,
+	recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 }
 
-impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
+impl<'db, 'cache, L: TrieLayout<N>, const N: usize> TrieDBBuilder<'db, 'cache, L, N> {
 	/// Create a new trie-db builder with the backing database `db` and `root`.
 	///
 	/// This doesn't check if `root` exists in the given `db`. If `root` doesn't exist it will fail
 	/// when trying to lookup any key.
 	#[inline]
-	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L>) -> Self {
+	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L, N>) -> Self {
 		Self { db, root, cache: None, recorder: None }
 	}
 
 	/// Use the given `cache` for the db.
 	#[inline]
-	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec, L::Nibble>) -> Self {
+	pub fn with_cache(mut self, cache: &'cache mut dyn TrieCache<L::Codec, N>) -> Self {
 		self.cache = Some(cache);
 		self
 	}
@@ -58,7 +58,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_optional_cache<'ocache: 'cache>(
 		mut self,
-		cache: Option<&'ocache mut dyn TrieCache<L::Codec, L::Nibble>>,
+		cache: Option<&'ocache mut dyn TrieCache<L::Codec, N>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.cache = cache.map(|c| c as _);
@@ -69,7 +69,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_recorder(
 		mut self,
-		recorder: &'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>,
+		recorder: &'cache mut dyn TrieRecorder<TrieHash<L, N>, N>,
 	) -> Self {
 		self.recorder = Some(recorder);
 		self
@@ -79,7 +79,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 	#[inline]
 	pub fn with_optional_recorder<'recorder: 'cache>(
 		mut self,
-		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>,
+		recorder: Option<&'recorder mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 	) -> Self {
 		// Make the compiler happy by "converting" the lifetime
 		self.recorder = recorder.map(|r| r as _);
@@ -88,7 +88,7 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 
 	/// Build the [`TrieDB`].
 	#[inline]
-	pub fn build(self) -> TrieDB<'db, 'cache, L> {
+	pub fn build(self) -> TrieDB<'db, 'cache, L, N> {
 		TrieDB {
 			db: self.db,
 			root: self.root,
@@ -120,19 +120,19 @@ impl<'db, 'cache, L: TrieLayout> TrieDBBuilder<'db, 'cache, L> {
 /// assert!(t.contains(b"foo").unwrap());
 /// assert_eq!(t.get(b"foo").unwrap().unwrap(), b"bar".to_vec());
 /// ```
-pub struct TrieDB<'db, 'cache, L>
+pub struct TrieDB<'db, 'cache, L, const N: usize>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	db: &'db dyn HashDBRef<L::Hash, DBValue>,
-	root: &'db TrieHash<L>,
-	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec, L::Nibble>>>,
-	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L>, L::Nibble>>>,
+	root: &'db TrieHash<L, N>,
+	cache: Option<core::cell::RefCell<&'cache mut dyn TrieCache<L::Codec, N>>>,
+	recorder: Option<core::cell::RefCell<&'cache mut dyn TrieRecorder<TrieHash<L, N>, N>>>,
 }
 
-impl<'db, 'cache, L> TrieDB<'db, 'cache, L>
+impl<'db, 'cache, L, const N: usize> TrieDB<'db, 'cache, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	/// Get the backing database.
 	pub fn db(&'db self) -> &'db dyn HashDBRef<L::Hash, DBValue> {
@@ -152,11 +152,11 @@ where
 	/// However, this will only be done when there is a recorder set.
 	pub(crate) fn get_raw_or_lookup(
 		&self,
-		parent_hash: TrieHash<L>,
+		parent_hash: TrieHash<L, N>,
 		node_handle: NodeHandle,
 		partial_key: Prefix,
 		record_access: bool,
-	) -> Result<(OwnedNode<DBValue, L::Nibble>, Option<TrieHash<L>>), TrieHash<L>, CError<L>> {
+	) -> Result<(OwnedNode<DBValue, N>, Option<TrieHash<L, N>>), TrieHash<L, N>, CError<L, N>> {
 		let (node_hash, node_data) = match node_handle {
 			NodeHandle::Hash(data) => {
 				let node_hash = decode_hash::<L::Hash>(data)
@@ -193,9 +193,9 @@ where
 	/// Fetch a value under the given `hash`.
 	pub(crate) fn fetch_value(
 		&self,
-		hash: TrieHash<L>,
+		hash: TrieHash<L, N>,
 		prefix: Prefix,
-	) -> Result<DBValue, TrieHash<L>, CError<L>> {
+	) -> Result<DBValue, TrieHash<L, N>, CError<L, N>> {
 		let value = self
 			.db
 			.get(&hash, prefix)
@@ -215,15 +215,15 @@ where
 	}
 }
 
-impl<'db, 'cache, L> Trie<L> for TrieDB<'db, 'cache, L>
+impl<'db, 'cache, L, const N: usize> Trie<L> for TrieDB<'db, 'cache, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	fn root(&self) -> &TrieHash<L> {
+	fn root(&self) -> &TrieHash<L, N> {
 		self.root
 	}
 
-	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
@@ -231,10 +231,10 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, N>),
 			recorder: recorder
 				.as_mut()
-				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L, N>, N>),
 		}
 		.look_up_hash(key, NibbleSlice::new(key))
 	}
@@ -243,7 +243,7 @@ where
 		&self,
 		key: &[u8],
 		query: Q,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>> {
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
@@ -251,10 +251,10 @@ where
 			db: self.db,
 			query,
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, N>),
 			recorder: recorder
 				.as_mut()
-				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L, N>, N>),
 		}
 		.look_up(key, NibbleSlice::new(key))
 	}
@@ -262,7 +262,7 @@ where
 	fn lookup_first_descendant(
 		&self,
 		key: &[u8],
-	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<MerkleValue<TrieHash<L, N>>>, TrieHash<L, N>, CError<L, N>> {
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
@@ -270,10 +270,10 @@ where
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
-			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, L::Nibble>),
+			cache: cache.as_mut().map(|c| &mut ***c as &mut dyn TrieCache<L::Codec, N>),
 			recorder: recorder
 				.as_mut()
-				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L>, L::Nibble>),
+				.map(|r| &mut ***r as &mut dyn TrieRecorder<TrieHash<L, N>, N>),
 		}
 		.lookup_first_descendant(key, NibbleSlice::new(key))
 	}
@@ -281,9 +281,9 @@ where
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		TrieDBIterator::new(self).map(|iter| Box::new(iter) as Box<_>)
 	}
@@ -291,9 +291,9 @@ where
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		TrieDBKeyIterator::new(self).map(|iter| Box::new(iter) as Box<_>)
 	}
@@ -301,24 +301,24 @@ where
 
 // This is for pretty debug output only
 #[cfg(feature = "std")]
-struct TrieAwareDebugNode<'db, 'cache, 'a, L>
+struct TrieAwareDebugNode<'db, 'cache, 'a, L, const N: usize>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	trie: &'db TrieDB<'db, 'cache, L>,
+	trie: &'db TrieDB<'db, 'cache, L, N>,
 	node_key: NodeHandle<'a>,
-	partial_key: NibbleVec<L::Nibble>,
+	partial_key: NibbleVec<N>,
 	index: Option<u8>,
 }
 
 #[cfg(feature = "std")]
-impl<'db, 'cache, 'a, L> fmt::Debug for TrieAwareDebugNode<'db, 'cache, 'a, L>
+impl<'db, 'cache, 'a, L, const N: usize> fmt::Debug for TrieAwareDebugNode<'db, 'cache, 'a, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		match self.trie.get_raw_or_lookup(
-			<TrieHash<L>>::default(),
+			<TrieHash<L, N>>::default(),
 			self.node_key,
 			self.partial_key.as_prefix(),
 			false,
@@ -410,9 +410,9 @@ where
 }
 
 #[cfg(feature = "std")]
-impl<'db, 'cache, L> fmt::Debug for TrieDB<'db, 'cache, L>
+impl<'db, 'cache, L, const N: usize> fmt::Debug for TrieDB<'db, 'cache, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 		f.debug_struct("TrieDB")
@@ -430,20 +430,20 @@ where
 }
 
 /// Iterator for going through all values in the trie in pre-order traversal order.
-pub struct TrieDBIterator<'a, 'cache, L: TrieLayout> {
-	db: &'a TrieDB<'a, 'cache, L>,
-	raw_iter: TrieDBRawIterator<L>,
+pub struct TrieDBIterator<'a, 'cache, L: TrieLayout<N>, const N: usize> {
+	db: &'a TrieDB<'a, 'cache, L, N>,
+	raw_iter: TrieDBRawIterator<L, N>,
 }
 
 /// Iterator for going through all of key with values in the trie in pre-order traversal order.
-pub struct TrieDBKeyIterator<'a, 'cache, L: TrieLayout> {
-	db: &'a TrieDB<'a, 'cache, L>,
-	raw_iter: TrieDBRawIterator<L>,
+pub struct TrieDBKeyIterator<'a, 'cache, L: TrieLayout<N>, const N: usize> {
+	db: &'a TrieDB<'a, 'cache, L, N>,
+	raw_iter: TrieDBRawIterator<L, N>,
 }
 
-impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBIterator<'a, 'cache, L, N> {
 	/// Create a new iterator.
-	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L>, CError<L>> {
+	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
 	}
 
@@ -451,7 +451,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 	pub fn new_prefixed(
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
-	) -> Result<Self, TrieHash<L>, CError<L>> {
+	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
 	}
 
@@ -462,7 +462,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
 		start_at: &[u8],
-	) -> Result<Self, TrieHash<L>, CError<L>> {
+	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at)? })
 	}
 
@@ -477,16 +477,18 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout> TrieIterator<L> for TrieDBIterator<'a, 'cache, L> {
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
+	for TrieDBIterator<'a, 'cache, L, N>
+{
 	/// Position the iterator on the first element with key >= `key`
-	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L>, CError<L>> {
+	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L, N>, CError<L, N>> {
 		self.raw_iter.seek(self.db, key).map(|_| ())
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBKeyIterator<'a, 'cache, L, N> {
 	/// Create a new iterator.
-	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L>, CError<L>> {
+	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
 	}
 
@@ -494,7 +496,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 	pub fn new_prefixed(
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
-	) -> Result<Self, TrieHash<L>, CError<L>> {
+	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
 	}
 
@@ -505,7 +507,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 		db: &'a TrieDB<'a, 'cache, L>,
 		prefix: &[u8],
 		start_at: &[u8],
-	) -> Result<TrieDBKeyIterator<'a, 'cache, L>, TrieHash<L>, CError<L>> {
+	) -> Result<TrieDBKeyIterator<'a, 'cache, L>, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at)? })
 	}
 
@@ -520,23 +522,27 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout> TrieIterator<L> for TrieDBKeyIterator<'a, 'cache, L> {
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
+	for TrieDBKeyIterator<'a, 'cache, L, N>
+{
 	/// Position the iterator on the first element with key >= `key`
-	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L>, CError<L>> {
+	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L, N>, CError<L, N>> {
 		self.raw_iter.seek(self.db, key).map(|_| ())
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBIterator<'a, 'cache, L> {
-	type Item = TrieItem<TrieHash<L>, CError<L>>;
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> Iterator for TrieDBIterator<'a, 'cache, L, N> {
+	type Item = TrieItem<TrieHash<L, N>, CError<L, N>>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		self.raw_iter.next_item(self.db)
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBKeyIterator<'a, 'cache, L> {
-	type Item = TrieKeyItem<TrieHash<L>, CError<L>>;
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> Iterator
+	for TrieDBKeyIterator<'a, 'cache, L, N>
+{
+	type Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>;
 
 	fn next(&mut self) -> Option<Self::Item> {
 		self.raw_iter.next_key(self.db)

@@ -70,8 +70,8 @@ pub use self::{
 	fatdbmut::FatDBMut,
 	lookup::Lookup,
 	nibble::{
-		 ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4,
-		ChildSliceIndex, NibbleOps, NibbleSlice, NibbleVec, Radix16, Radix2, Radix256, Radix4,
+		ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4, ChildSliceIndex,
+		NibbleOps, NibbleSlice, NibbleVec, Radix16, Radix2, Radix256, Radix4,
 	},
 	recorder::Recorder,
 	sectriedb::SecTrieDB,
@@ -172,7 +172,7 @@ pub trait Query<H: Hasher> {
 /// If a cache is used, [`Self::Key`] and [`Self::NodeOwned`] are possible
 /// values. Otherwise only [`Self::EncodedNode`] is a possible value.
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum TrieAccess<'a, H, N> {
+pub enum TrieAccess<'a, H, const N: usize> {
 	/// The given [`NodeOwned`] was accessed using its `hash`.
 	NodeOwned { hash: H, node_owned: &'a NodeOwned<H, N> },
 	/// The given `encoded_node` was accessed using its `hash`.
@@ -240,7 +240,7 @@ impl RecordedForKey {
 ///
 /// To build a trie proof a recorder is required that records all trie accesses. These recorded trie
 /// accesses can then be used to create the proof.
-pub trait TrieRecorder<H, N> {
+pub trait TrieRecorder<H, const N: usize> {
 	/// Record the given [`TrieAccess`].
 	///
 	/// Depending on the [`TrieAccess`] a call of [`Self::trie_nodes_recorded_for_key`] afterwards
@@ -264,9 +264,9 @@ where
 }
 
 /// A key-value datastore implemented as a database-backed modified Merkle tree.
-pub trait Trie<L: TrieLayout> {
+pub trait Trie<L: TrieLayout<N>, const N: usize> {
 	/// Return the root of the trie.
-	fn root(&self) -> &TrieHash<L>;
+	fn root(&self) -> &TrieHash<L, N>;
 
 	/// Is the trie empty?
 	fn is_empty(&self) -> bool {
@@ -274,15 +274,15 @@ pub trait Trie<L: TrieLayout> {
 	}
 
 	/// Does the trie contain a given key?
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.get(key).map(|x| x.is_some())
 	}
 
 	/// Returns the hash of the value for `key`.
-	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>>;
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>>;
 
 	/// What is the value of the given key in this trie?
-	fn get(&self, key: &[u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>> {
+	fn get(&self, key: &[u8]) -> Result<Option<DBValue>, TrieHash<L, N>, CError<L, N>> {
 		self.get_with(key, |v: &[u8]| v.to_vec())
 	}
 
@@ -292,7 +292,7 @@ pub trait Trie<L: TrieLayout> {
 		&self,
 		key: &[u8],
 		query: Q,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>>;
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>>;
 
 	/// Look up the [`MerkleValue`] of the node that is the closest descendant for the provided
 	/// key.
@@ -303,42 +303,45 @@ pub trait Trie<L: TrieLayout> {
 	fn lookup_first_descendant(
 		&self,
 		key: &[u8],
-	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>>;
+	) -> Result<Option<MerkleValue<TrieHash<L, N>>>, TrieHash<L, N>, CError<L, N>>;
 
 	/// Returns a depth-first iterator over the elements of trie.
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, N, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	>;
 
 	/// Returns a depth-first iterator over the keys of elemets of trie.
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, N, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	>;
 }
 
 /// A key-value datastore implemented as a database-backed modified Merkle tree.
-pub trait TrieMut<L: TrieLayout> {
+pub trait TrieMut<L: TrieLayout<N>, const N: usize> {
 	/// Return the root of the trie.
-	fn root(&mut self) -> &TrieHash<L>;
+	fn root(&mut self) -> &TrieHash<L, N>;
 
 	/// Is the trie empty?
 	fn is_empty(&self) -> bool;
 
 	/// Does the trie contain a given key?
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.get(key).map(|x| x.is_some())
 	}
 
 	/// What is the value of the given key in this trie?
-	fn get<'a, 'key>(&'a self, key: &'key [u8]) -> Result<Option<DBValue>, TrieHash<L>, CError<L>>
+	fn get<'a, 'key>(
+		&'a self,
+		key: &'key [u8],
+	) -> Result<Option<DBValue>, TrieHash<L, N>, CError<L, N>>
 	where
 		'a: 'key;
 
@@ -348,17 +351,17 @@ pub trait TrieMut<L: TrieLayout> {
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>>;
+	) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>>;
 
 	/// Remove a `key` from the trie. Equivalent to making it equal to the empty
 	/// value. Returns the old value associated with this key, if it existed.
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L>, CError<L>>;
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>>;
 }
 
 /// A trie iterator that also supports random access (`seek()`).
-pub trait TrieIterator<L: TrieLayout>: Iterator {
+pub trait TrieIterator<L: TrieLayout<N>, const N: usize>: Iterator {
 	/// Position the iterator on the first element with key >= `key`
-	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L>, CError<L>>;
+	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L, N>, CError<L, N>>;
 }
 
 /// Trie types
@@ -387,13 +390,13 @@ pub struct TrieFactory {
 
 /// All different kinds of tries.
 /// This is used to prevent a heap allocation for every created trie.
-pub enum TrieKinds<'db, 'cache, L: TrieLayout> {
+pub enum TrieKinds<'db, 'cache, L: TrieLayout<N>, const N: usize> {
 	/// A generic trie db.
-	Generic(TrieDB<'db, 'cache, L>),
+	Generic(TrieDB<'db, 'cache, L, N>),
 	/// A secure trie db.
-	Secure(SecTrieDB<'db, 'cache, L>),
+	Secure(SecTrieDB<'db, 'cache, L, N>),
 	/// A fat trie db.
-	Fat(FatDB<'db, 'cache, L>),
+	Fat(FatDB<'db, 'cache, L, N>),
 }
 
 // wrapper macro for making the match easier to deal with.
@@ -407,8 +410,8 @@ macro_rules! wrapper {
 	}
 }
 
-impl<'db, 'cache, L: TrieLayout> Trie<L> for TrieKinds<'db, 'cache, L> {
-	fn root(&self) -> &TrieHash<L> {
+impl<'db, 'cache, L: TrieLayout<N>, const N: usize> Trie<L, N> for TrieKinds<'db, 'cache, L, N> {
+	fn root(&self) -> &TrieHash<L, N> {
 		wrapper!(self, root,)
 	}
 
@@ -416,11 +419,11 @@ impl<'db, 'cache, L: TrieLayout> Trie<L> for TrieKinds<'db, 'cache, L> {
 		wrapper!(self, is_empty,)
 	}
 
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		wrapper!(self, contains, key)
 	}
 
-	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		wrapper!(self, get_hash, key)
 	}
 
@@ -428,23 +431,23 @@ impl<'db, 'cache, L: TrieLayout> Trie<L> for TrieKinds<'db, 'cache, L> {
 		&self,
 		key: &[u8],
 		query: Q,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>> {
 		wrapper!(self, get_with, key, query)
 	}
 
 	fn lookup_first_descendant(
 		&self,
 		key: &[u8],
-	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<MerkleValue<TrieHash<L, N>>>, TrieHash<L, N>, CError<L, N>> {
 		wrapper!(self, lookup_first_descendant, key)
 	}
 
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, N, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		wrapper!(self, iter,)
 	}
@@ -452,9 +455,9 @@ impl<'db, 'cache, L: TrieLayout> Trie<L> for TrieKinds<'db, 'cache, L> {
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, N, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		wrapper!(self, key_iter,)
 	}
@@ -467,11 +470,11 @@ impl TrieFactory {
 	}
 
 	/// Create new immutable instance of Trie.
-	pub fn readonly<'db, 'cache, L: TrieLayout>(
+	pub fn readonly<'db, 'cache, L: TrieLayout<N>, const N: usize>(
 		&self,
 		db: &'db dyn HashDBRef<L::Hash, DBValue>,
-		root: &'db TrieHash<L>,
-	) -> TrieKinds<'db, 'cache, L> {
+		root: &'db TrieHash<L, N>,
+	) -> TrieKinds<'db, 'cache, L, N> {
 		match self.spec {
 			TrieSpec::Generic => TrieKinds::Generic(TrieDBBuilder::new(db, root).build()),
 			TrieSpec::Secure => TrieKinds::Secure(SecTrieDB::new(db, root)),
@@ -480,11 +483,11 @@ impl TrieFactory {
 	}
 
 	/// Create new mutable instance of Trie.
-	pub fn create<'db, L: TrieLayout + 'db>(
+	pub fn create<'db, L: TrieLayout<N> + 'db, const N: usize>(
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
-		root: &'db mut TrieHash<L>,
-	) -> Box<dyn TrieMut<L> + 'db> {
+		root: &'db mut TrieHash<L, N>,
+	) -> Box<dyn TrieMut<L, N> + 'db> {
 		match self.spec {
 			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::new(db, root).build()),
 			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::new(db, root)),
@@ -493,11 +496,11 @@ impl TrieFactory {
 	}
 
 	/// Create new mutable instance of trie and check for errors.
-	pub fn from_existing<'db, L: TrieLayout + 'db>(
+	pub fn from_existing<'db, L: TrieLayout<N> + 'db, const N: usize>(
 		&self,
 		db: &'db mut dyn HashDB<L::Hash, DBValue>,
-		root: &'db mut TrieHash<L>,
-	) -> Box<dyn TrieMut<L> + 'db> {
+		root: &'db mut TrieHash<L, N>,
+	) -> Box<dyn TrieMut<L, N> + 'db> {
 		match self.spec {
 			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::from_existing(db, root).build()),
 			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::from_existing(db, root)),
@@ -514,7 +517,7 @@ impl TrieFactory {
 /// Trait with definition of trie layout.
 /// Contains all associated trait needed for
 /// a trie definition or implementation.
-pub trait TrieLayout {
+pub trait TrieLayout<const N: usize> {
 	/// If true, the trie will use extension nodes and
 	/// no partial in branch, if false the trie will only
 	/// use branch and node with partials in both.
@@ -525,22 +528,16 @@ pub trait TrieLayout {
 	/// use to store a node value.
 	const MAX_INLINE_VALUE: Option<u32>;
 
-	/// Trie nibble constants. It defines trie radix.
-	type Nibble: NibbleOps;
 	/// Hasher to use for this trie.
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
-	type Codec: NodeCodec<HashOut = TrieHash<Self>, Nibble = Self::Nibble>;
-	/// Array to use with `iter_build`.
-	type ChildRefIndex: ChildIndex<ChildReference<TrieHash<Self>>>;
-	/// Array to use with `triedbmut`.
-	type NodeIndex: ChildIndex<triedbmut::NodeHandle<TrieHash<Self>>>;
+	type Codec: NodeCodec<HashOut = TrieHash<Self, N>, N>;
 }
 
 /// This trait associates a trie definition with preferred methods.
 /// It also contains own default implementations and can be
 /// used to allow switching implementation.
-pub trait TrieConfiguration: Sized + TrieLayout {
+pub trait TrieConfiguration<const N: usize>: Sized + TrieLayout<N> {
 	/// Operation to build a trie db from its ordered iterator over its key/values.
 	fn trie_build<DB, I, A, B>(db: &mut DB, input: I) -> <Self::Hash as Hasher>::Out
 	where
@@ -595,11 +592,9 @@ pub trait TrieConfiguration: Sized + TrieLayout {
 }
 
 /// Alias accessor to hasher hash output type from a `TrieLayout`.
-pub type TrieHash<L> = <<L as TrieLayout>::Hash as Hasher>::Out;
+pub type TrieHash<L, const N: usize> = <<L as TrieLayout<N>>::Hash as Hasher>::Out;
 /// Alias accessor to `NodeCodec` associated `Error` type from a `TrieLayout`.
-pub type CError<L> = <<L as TrieLayout>::Codec as NodeCodec>::Error;
-/// Alias accessor to child slice index from a `TrieLayout`.
-pub type TrieChildRangeIndex<L> = <<L as TrieLayout>::Nibble as NibbleOps>::ChildRangeIndex;
+pub type CError<L, const N: usize> = <<L as TrieLayout<N>>::Codec as NodeCodec<N>>::Error;
 
 /// A value as cached by the [`TrieCache`].
 #[derive(Clone, Debug)]
@@ -686,7 +681,7 @@ impl<H> From<Option<H>> for CachedValue<H> {
 /// correct value is returned. As each trie has a different root, this root can be used to
 /// differentiate values under the same key.
 // TODO on TrieLayout??
-pub trait TrieCache<NC: NodeCodec, N: NibbleOps> {
+pub trait TrieCache<NC: NodeCodec<N>, const N: usize> {
 	/// Lookup value for the given `key`.
 	///
 	/// Returns the `None` if the `key` is unknown or otherwise `Some(_)` with the associated

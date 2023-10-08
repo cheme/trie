@@ -62,7 +62,7 @@ where
 	}
 
 	#[inline(always)]
-	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T>>) {
+	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T, N>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
 			self.0.push((Default::default(), None, depth));
 		}
@@ -106,7 +106,7 @@ where
 
 	fn flush_value(
 		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T, N>>,
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
@@ -134,7 +134,7 @@ where
 
 	fn flush_branch(
 		&mut self,
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T, N>>,
 		ref_branch: impl AsRef<[u8]> + Ord,
 		new_depth: usize,
 		is_last: bool,
@@ -169,11 +169,11 @@ where
 	fn standard_extension(
 		&mut self,
 		key_branch: &[u8],
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T, N>>,
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
-	) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T, N>> {
 		let last = self.0.len() - 1;
 		assert_eq!(self.0[last].2, branch_d);
 
@@ -214,11 +214,11 @@ where
 	fn no_extension(
 		&mut self,
 		key_branch: &[u8],
-		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T, N>>,
 		branch_d: usize,
 		is_root: bool,
 		nkey: Option<(usize, usize)>,
-	) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T, N>> {
 		let (children, v, depth) = self.0.pop().expect("checked");
 
 		debug_assert!(branch_d == depth);
@@ -259,7 +259,7 @@ where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord,
 	B: AsRef<[u8]>,
-	F: ProcessEncodedNode<TrieHash<T>>,
+	F: ProcessEncodedNode<TrieHash<T, N>>,
 {
 	let mut depth_queue = CacheAccum::<T, B>::new();
 	// compare iter ordering
@@ -346,20 +346,20 @@ pub trait ProcessEncodedNode<HO> {
 /// Get trie root and insert visited node in a hash_db.
 /// As for all `ProcessEncodedNode` implementation, it
 /// is only for full trie parsing (not existing trie).
-pub struct TrieBuilder<'a, T: TrieLayout, DB> {
+pub struct TrieBuilder<'a, T: TrieLayout<N>, DB, const N: usize> {
 	db: &'a mut DB,
-	pub root: Option<TrieHash<T>>,
+	pub root: Option<TrieHash<T, N>>,
 }
 
-impl<'a, T: TrieLayout, DB> TrieBuilder<'a, T, DB> {
+impl<'a, T: TrieLayout<N>, DB, const N: usize> TrieBuilder<'a, T, DB, N> {
 	pub fn new(db: &'a mut DB) -> Self {
 		TrieBuilder { db, root: None }
 	}
 }
 
-impl<'a, T, DB> ProcessEncodedNode<TrieHash<T>> for TrieBuilder<'a, T, DB>
+impl<'a, T, DB, const N: usize> ProcessEncodedNode<TrieHash<T, N>> for TrieBuilder<'a, T, DB, N>
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	DB: HashDB<T::Hash, DBValue>,
 {
 	fn process(
@@ -367,7 +367,7 @@ where
 		prefix: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-	) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T, N>> {
 		let len = encoded_node.len();
 		if !is_root && len < <T::Hash as Hasher>::LENGTH {
 			let mut h = <<T::Hash as Hasher>::Out as Default>::default();
@@ -382,30 +382,30 @@ where
 		ChildReference::Hash(hash)
 	}
 
-	fn process_inner_hashed_value(&mut self, prefix: Prefix, value: &[u8]) -> TrieHash<T> {
+	fn process_inner_hashed_value(&mut self, prefix: Prefix, value: &[u8]) -> TrieHash<T, N> {
 		self.db.insert(prefix, value)
 	}
 }
 
 /// Calculate the trie root of the trie.
-pub struct TrieRoot<T: TrieLayout> {
+pub struct TrieRoot<T: TrieLayout<N>, const N: usize> {
 	/// The resulting root.
-	pub root: Option<TrieHash<T>>,
+	pub root: Option<TrieHash<T, N>>,
 }
 
-impl<T: TrieLayout> Default for TrieRoot<T> {
+impl<T: TrieLayout<N>, const N: usize> Default for TrieRoot<T, N> {
 	fn default() -> Self {
 		TrieRoot { root: None }
 	}
 }
 
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRoot<T> {
+impl<T: TrieLayout<N>, const N: usize> ProcessEncodedNode<TrieHash<T, N>> for TrieRoot<T, N> {
 	fn process(
 		&mut self,
 		_: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-	) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T, N>> {
 		let len = encoded_node.len();
 		if !is_root && len < <T::Hash as Hasher>::LENGTH {
 			let mut h = <<T::Hash as Hasher>::Out as Default>::default();
@@ -420,7 +420,7 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRoot<T> {
 		ChildReference::Hash(hash)
 	}
 
-	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T> {
+	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T, N> {
 		<T::Hash as Hasher>::hash(value)
 	}
 }
@@ -441,27 +441,27 @@ impl<T: TrieLayout> Default for TrieRootUnhashed<T> {
 #[cfg(feature = "std")]
 /// Calculate the trie root of the trie.
 /// Print a debug trace.
-pub struct TrieRootPrint<T: TrieLayout> {
+pub struct TrieRootPrint<T: TrieLayout<N>, const N: usize> {
 	/// The resulting root.
-	pub root: Option<TrieHash<T>>,
+	pub root: Option<TrieHash<T, N>>,
 	_ph: PhantomData<T>,
 }
 
 #[cfg(feature = "std")]
-impl<T: TrieLayout> Default for TrieRootPrint<T> {
+impl<T: TrieLayout<N>, const N: usize> Default for TrieRootPrint<T, N> {
 	fn default() -> Self {
 		TrieRootPrint { root: None, _ph: PhantomData }
 	}
 }
 
 #[cfg(feature = "std")]
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootPrint<T> {
+impl<T: TrieLayout<N>, const N: usize> ProcessEncodedNode<TrieHash<T, N>> for TrieRootPrint<T, N> {
 	fn process(
 		&mut self,
 		p: Prefix,
 		encoded_node: Vec<u8>,
 		is_root: bool,
-	) -> ChildReference<TrieHash<T>> {
+	) -> ChildReference<TrieHash<T, N>> {
 		println!("Encoded node: {:x?}", &encoded_node);
 		println!("	with prefix: {:x?}", &p);
 		let len = encoded_node.len();
@@ -480,13 +480,15 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootPrint<T> {
 		ChildReference::Hash(hash)
 	}
 
-	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T> {
+	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T, N> {
 		println!("Hashed node: {:x?}", &value);
 		<T::Hash as Hasher>::hash(value)
 	}
 }
 
-impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
+impl<T: TrieLayout<N>, const N: usize> ProcessEncodedNode<TrieHash<T, N>>
+	for TrieRootUnhashed<T, N>
+{
 	fn process(
 		&mut self,
 		_: Prefix,
@@ -508,7 +510,7 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 		ChildReference::Hash(hash)
 	}
 
-	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T> {
+	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T, N> {
 		<T::Hash as Hasher>::hash(value)
 	}
 }

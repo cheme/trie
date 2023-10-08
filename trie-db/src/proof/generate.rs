@@ -28,30 +28,30 @@ use crate::{
 	TrieChildRangeIndex, TrieDBBuilder, TrieError, TrieHash, TrieLayout,
 };
 
-struct StackEntry<'a, L: TrieLayout> {
+struct StackEntry<'a, L: TrieLayout<N>, const N: usize> {
 	/// The prefix is the nibble path to the node in the trie.
 	prefix: LeftNibbleSlice<'a, L::Nibble>,
 	node: OwnedNode<Vec<u8>, L::Nibble>,
 	/// The hash of the node or None if it is referenced inline.
-	node_hash: Option<TrieHash<L>>,
+	node_hash: Option<TrieHash<L, N>>,
 	/// Whether the value should be omitted in the generated proof.
 	omit_value: bool,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
 	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
 	child_index: usize,
 	/// The child references to use in constructing the proof nodes.
-	children: Vec<Option<ChildReference<TrieHash<L>>>>,
+	children: Vec<Option<ChildReference<TrieHash<L, N>>>>,
 	/// The index into the proof vector that the encoding of this entry should be placed at.
 	output_index: Option<usize>,
 }
 
-impl<'a, L: TrieLayout> StackEntry<'a, L> {
+impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	fn new(
-		prefix: LeftNibbleSlice<'a, L::Nibble>,
+		prefix: LeftNibbleSlice<'a, N>,
 		node_data: Vec<u8>,
-		node_hash: Option<TrieHash<L>>,
+		node_hash: Option<TrieHash<L, N>>,
 		output_index: Option<usize>,
-	) -> TrieResult<Self, TrieHash<L>, CError<L>> {
+	) -> TrieResult<Self, TrieHash<L, N>, CError<L, N>> {
 		let node = OwnedNode::new::<L::Codec>(node_data)
 			.map_err(|err| Box::new(TrieError::DecoderError(node_hash.unwrap_or_default(), err)))?;
 		let children_len = match node.node_plan() {
@@ -71,7 +71,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	}
 
 	/// Encode this entry to an encoded trie node with data properly omitted.
-	fn encode_node(mut self) -> TrieResult<Vec<u8>, TrieHash<L>, CError<L>> {
+	fn encode_node(mut self) -> TrieResult<Vec<u8>, TrieHash<L, N>, CError<L, N>> {
 		let omit_value = self.omit_value;
 		let node_data = self.node.data();
 		let value_with_omission = |value_range: ValuePlan| -> Option<Value> {
@@ -138,8 +138,8 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 		node_data: &[u8],
 		child_handles: &BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
 		child_index: usize,
-		children: &mut [Option<ChildReference<TrieHash<L>>>],
-	) -> TrieResult<(), TrieHash<L>, CError<L>> {
+		children: &mut [Option<ChildReference<TrieHash<L, N>>>],
+	) -> TrieResult<(), TrieHash<L, N>, CError<L, N>> {
 		for i in child_index..L::Nibble::NIBBLE_LENGTH {
 			children[i] = child_handles
 				.at(i)
@@ -196,7 +196,7 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 	fn replacement_child_ref(
 		encoded_child: &[u8],
 		child: &NodeHandlePlan,
-	) -> ChildReference<TrieHash<L>> {
+	) -> ChildReference<TrieHash<L, N>> {
 		match child {
 			NodeHandlePlan::Hash(_) => ChildReference::Inline(TrieHash::<L>::default(), 0),
 			NodeHandlePlan::Inline(_) => {
@@ -218,14 +218,14 @@ impl<'a, L: TrieLayout> StackEntry<'a, L> {
 /// Generate a compact proof for key-value pairs in a trie given a set of keys.
 ///
 /// Assumes inline nodes have only inline children.
-pub fn generate_proof<'a, D, L, I, K>(
+pub fn generate_proof<'a, D, L, I, K, const N: usize>(
 	db: &D,
-	root: &TrieHash<L>,
+	root: &TrieHash<L, N>,
 	keys: I,
-) -> TrieResult<Vec<Vec<u8>>, TrieHash<L>, CError<L>>
+) -> TrieResult<Vec<Vec<u8>>, TrieHash<L, N>, CError<L, N>>
 where
 	D: HashDBRef<L::Hash, DBValue>,
-	L: TrieLayout,
+	L: TrieLayout<N>,
 	I: IntoIterator<Item = &'a K>,
 	K: 'a + AsRef<[u8]>,
 {
@@ -317,7 +317,7 @@ where
 						NodeHandle::Inline(data) => {
 							if data.len() > L::Hash::LENGTH {
 								return Err(Box::new(TrieError::InvalidHash(
-									<TrieHash<L>>::default(),
+									<TrieHash<L, N>>::default(),
 									data.to_vec(),
 								)))
 							}
@@ -378,7 +378,7 @@ enum Step<'a> {
 	FoundHashedValue(Vec<u8>),
 }
 
-fn resolve_value<C: NodeCodec>(
+fn resolve_value<C: NodeCodec<N>, const N: usize>(
 	recorded_nodes: &mut dyn Iterator<Item = Record<C::HashOut>>,
 ) -> TrieResult<Step<'static>, C::HashOut, C::Error> {
 	if let Some(resolve_value) = recorded_nodes.next() {
@@ -390,16 +390,16 @@ fn resolve_value<C: NodeCodec>(
 
 /// Determine the next algorithmic step to take by matching the current key against the current top
 /// entry on the stack.
-fn match_key_to_node<'a, L: TrieLayout>(
+fn match_key_to_node<'a, L: TrieLayout<N>, const N: usize>(
 	node_data: &'a [u8],
 	node_plan: &NodePlan<L::Nibble>,
 	omit_value: &mut bool,
 	child_index: &mut usize,
-	children: &mut [Option<ChildReference<TrieHash<L>>>],
+	children: &mut [Option<ChildReference<TrieHash<L, N>>>],
 	key: &LeftNibbleSlice<L::Nibble>,
 	prefix_len: usize,
-	recorded_nodes: &mut dyn Iterator<Item = Record<TrieHash<L>>>,
-) -> TrieResult<Step<'a>, TrieHash<L>, CError<L>> {
+	recorded_nodes: &mut dyn Iterator<Item = Record<TrieHash<L, N>>>,
+) -> TrieResult<Step<'a>, TrieHash<L, N>, CError<L, N>> {
 	Ok(match node_plan {
 		NodePlan::Empty => Step::FoundValue(None),
 		NodePlan::Leaf { partial: partial_plan, value: value_range } => {
@@ -412,7 +412,7 @@ fn match_key_to_node<'a, L: TrieLayout>(
 					},
 					ValuePlan::Node(..) => {
 						*omit_value = true;
-						resolve_value::<L::Codec>(recorded_nodes)?
+						resolve_value::<L::Codec, N>(recorded_nodes)?
 					},
 				}
 			} else {
@@ -458,18 +458,18 @@ fn match_key_to_node<'a, L: TrieLayout>(
 	})
 }
 
-fn match_key_to_branch_node<'a, 'b, L: TrieLayout>(
+fn match_key_to_branch_node<'a, 'b, L: TrieLayout<N>, const N: usize>(
 	node_data: &'a [u8],
 	value_range: Option<&'b ValuePlan>,
 	child_handles: &'b BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
 	omit_value: &mut bool,
 	child_index: &mut usize,
-	children: &mut [Option<ChildReference<TrieHash<L>>>],
-	key: &'b LeftNibbleSlice<'b, L::Nibble>,
+	children: &mut [Option<ChildReference<TrieHash<L, N>>>],
+	key: &'b LeftNibbleSlice<'b, N>,
 	prefix_len: usize,
-	partial: NibbleSlice<'b, L::Nibble>,
-	recorded_nodes: &mut dyn Iterator<Item = Record<TrieHash<L>>>,
-) -> TrieResult<Step<'a>, TrieHash<L>, CError<L>> {
+	partial: NibbleSlice<'b, N>,
+	recorded_nodes: &mut dyn Iterator<Item = Record<TrieHash<L, N>>>,
+) -> TrieResult<Step<'a>, TrieHash<L, N>, CError<L, N>> {
 	if !key.contains(&partial, prefix_len) {
 		return Ok(Step::FoundValue(None))
 	}
@@ -482,7 +482,7 @@ fn match_key_to_branch_node<'a, 'b, L: TrieLayout>(
 			},
 			Some(ValuePlan::Node(..)) => {
 				*omit_value = true;
-				return resolve_value::<L::Codec>(recorded_nodes)
+				return resolve_value::<L::Codec, N>(recorded_nodes)
 			},
 			None => None,
 		};
@@ -501,10 +501,9 @@ fn match_key_to_branch_node<'a, 'b, L: TrieLayout>(
 			.at(*child_index)
 			.as_ref()
 			.map(|child_plan| {
-				child_plan
-					.build(node_data)
-					.try_into()
-					.map_err(|hash| Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash)))
+				child_plan.build(node_data).try_into().map_err(|hash| {
+					Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash))
+				})
 			})
 			.transpose()?;
 		*child_index += 1;
@@ -522,11 +521,11 @@ fn match_key_to_branch_node<'a, 'b, L: TrieLayout>(
 /// Unwind the stack until the given key is prefixed by the entry at the top of the stack. If the
 /// key is None, unwind the stack completely. As entries are popped from the stack, they are
 /// encoded into proof nodes and added to the finalized proof.
-fn unwind_stack<L: TrieLayout>(
-	stack: &mut Vec<StackEntry<L>>,
+fn unwind_stack<L: TrieLayout<N>, const N: usize>(
+	stack: &mut Vec<StackEntry<L, N>>,
 	proof_nodes: &mut Vec<Vec<u8>>,
-	maybe_key: Option<&LeftNibbleSlice<L::Nibble>>,
-) -> TrieResult<(), TrieHash<L>, CError<L>> {
+	maybe_key: Option<&LeftNibbleSlice<N>>,
+) -> TrieResult<(), TrieHash<L, N>, CError<L, N>> {
 	while let Some(entry) = stack.pop() {
 		match maybe_key {
 			Some(key) if key.starts_with(&entry.prefix) => {

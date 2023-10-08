@@ -61,7 +61,7 @@ impl NodeHandle<'_> {
 	/// Converts this node handle into a [`NodeHandleOwned`].
 	pub fn to_owned_handle<L: TrieLayout>(
 		&self,
-	) -> Result<NodeHandleOwned<TrieHash<L>, L::Nibble>, TrieHash<L>, CError<L>> {
+	) -> Result<NodeHandleOwned<TrieHash<L, N>, L::Nibble>, TrieHash<L, N>, CError<L, N>> {
 		match self {
 			Self::Hash(h) => decode_hash::<L::Hash>(h)
 				.ok_or_else(|| Box::new(TrieError::InvalidHash(Default::default(), h.to_vec())))
@@ -86,7 +86,6 @@ pub enum NodeHandleOwned<H, const N: usize> {
 impl<H, const N: usize> NodeHandleOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
-	N: NibbleOps,
 {
 	/// Returns `self` as a [`ChildReference`].
 	///
@@ -152,7 +151,7 @@ impl<'a> Value<'a> {
 		}
 	}
 
-	pub fn to_owned_value<L: TrieLayout>(&self) -> ValueOwned<TrieHash<L>> {
+	pub fn to_owned_value<L: TrieLayout>(&self) -> ValueOwned<TrieHash<L, N>> {
 		match self {
 			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), L::Hash::hash(data)),
 			Self::Node(hash) => {
@@ -206,7 +205,7 @@ impl<H> ValueOwned<H> {
 /// Type of node in the trie and essential information thereof.
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum Node<'a, N: NibbleOps, const N2: usize> {
+pub enum Node<'a, const N: usize> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has key slice and value. Value may not be empty.
@@ -224,11 +223,11 @@ pub enum Node<'a, N: NibbleOps, const N2: usize> {
 	),
 }
 
-impl<N: NibbleOps> Node<'_, N> {
+impl<const N: usize> Node<'_, N> {
 	/// Converts this node into a [`NodeOwned`].
 	pub fn to_owned_node<L: TrieLayout>(
 		&self,
-	) -> Result<NodeOwned<TrieHash<L>, L::Nibble>, TrieHash<L>, CError<L>>
+	) -> Result<NodeOwned<TrieHash<L, N>, L::Nibble>, TrieHash<L, N>, CError<L, N>>
 	where
 		L: TrieLayout<Nibble = N>,
 	{
@@ -288,11 +287,7 @@ pub enum NodeOwned<H, const N: usize> {
 	/// and an optional immediate node data.
 	Branch([Option<NodeHandleOwned<H, N>>; N], Option<ValueOwned<H>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
-	NibbledBranch(
-		NibbleVec<N>,
-		[Option<NodeHandleOwned<H, N>>; N],
-		Option<ValueOwned<H>>,
-	),
+	NibbledBranch(NibbleVec<N>, [Option<NodeHandleOwned<H, N>>; N], Option<ValueOwned<H>>),
 	/// Node that represents a value.
 	///
 	/// This variant is only constructed when working with a [`crate::TrieCache`]. It is only
@@ -303,7 +298,6 @@ pub enum NodeOwned<H, const N: usize> {
 impl<H, const N: usize> NodeOwned<H, N>
 where
 	H: Default + AsRef<[u8]> + AsMut<[u8]> + Copy,
-	N: NibbleOps,
 {
 	/// Convert to its encoded format.
 	pub fn to_encoded<C>(&self) -> Vec<u8>
@@ -392,7 +386,7 @@ where
 	}
 }
 
-impl<H, N: NibbleOps> NodeOwned<H, N> {
+impl<H, const N: usize> NodeOwned<H, N> {
 	/// Returns the data attached to this node.
 	pub fn data(&self) -> Option<&Bytes> {
 		match &self {
@@ -421,7 +415,7 @@ impl<H, N: NibbleOps> NodeOwned<H, N> {
 	pub fn size_in_bytes(&self) -> usize {
 		let self_size = mem::size_of::<Self>();
 
-		fn childs_size<'a, H: 'a, N: NibbleOps + 'a>(
+		fn childs_size<'a, H: 'a, const N: usize>(
 			childs: impl Iterator<Item = &'a Option<NodeHandleOwned<H, N>>>,
 		) -> usize {
 			// If a `child` isn't an inline node, its size is already taken account for by
@@ -487,7 +481,7 @@ pub struct NibbleSlicePlan<N> {
 	_marker: PhantomData<N>,
 }
 
-impl<N: NibbleOps> NibbleSlicePlan<N> {
+impl<const N: usize> NibbleSlicePlan<N> {
 	/// Construct a nibble slice decode plan.
 	pub fn new(bytes: Range<usize>, offset: usize) -> Self {
 		NibbleSlicePlan { bytes, offset, _marker: PhantomData }
@@ -555,7 +549,7 @@ impl ValuePlan {
 /// ranges that can be used to index into a large byte slice.
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub enum NodePlan<N: NibbleOps, const N2: usize> {
+pub enum NodePlan<const N: usize> {
 	/// Null trie node; could be an empty root or an empty branch entry.
 	Empty,
 	/// Leaf node; has a partial key plan and value.
@@ -564,16 +558,16 @@ pub enum NodePlan<N: NibbleOps, const N2: usize> {
 	Extension { partial: NibbleSlicePlan<N>, child: NodeHandlePlan },
 	/// Branch node; has slice of child nodes (each possibly null)
 	/// and an optional immediate node data.
-	Branch { value: Option<ValuePlan>, children: BranchChildrenNodePlan<N::ChildRangeIndex> },
+	Branch { value: Option<ValuePlan>, children: [Option<NodeHandlePlan>; N] },
 	/// Branch node with support for a nibble (when extension nodes are not used).
 	NibbledBranch {
 		partial: NibbleSlicePlan<N>,
 		value: Option<ValuePlan>,
-		children: BranchChildrenNodePlan<N::ChildRangeIndex>,
+		children: [Option<NodeHandlePlan>; N],
 	},
 }
 
-impl<N: NibbleOps, const N2: usize> NodePlan<N, N2> {
+impl<const N: usize> NodePlan<N> {
 	/// Build a node by decoding a byte slice according to the node plan. It is the responsibility
 	/// of the caller to ensure that the node plan was created for the argument data, otherwise the
 	/// call may decode incorrectly or panic.
@@ -625,14 +619,14 @@ impl<N: NibbleOps, const N2: usize> NodePlan<N, N2> {
 /// the `OwnedNode`. This is useful for trie iterators.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(PartialEq, Eq)]
-pub struct OwnedNode<D: Borrow<[u8]>, N: NibbleOps> {
+pub struct OwnedNode<D: Borrow<[u8]>, const N: usize> {
 	data: D,
 	plan: NodePlan<N>,
 }
 
-impl<D: Borrow<[u8]>, N: NibbleOps> OwnedNode<D, N> {
+impl<D: Borrow<[u8]>, const N: usize> OwnedNode<D, N> {
 	/// Construct an `OwnedNode` by decoding an owned data source according to some codec.
-	pub fn new<C: NodeCodec<Nibble = N>>(data: D) -> core::result::Result<Self, C::Error> {
+	pub fn new<C: NodeCodec>(data: D) -> core::result::Result<Self, C::Error> {
 		let plan = C::decode_plan(data.borrow())?;
 		Ok(OwnedNode { data, plan })
 	}

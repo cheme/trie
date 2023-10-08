@@ -31,32 +31,32 @@ pub struct Record<HO> {
 
 /// Records trie nodes as they pass it.
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct Recorder<L: TrieLayout> {
-	nodes: Vec<Record<TrieHash<L>>>,
+pub struct Recorder<L: TrieLayout<N>, const N: usize> {
+	nodes: Vec<Record<TrieHash<L, N>>>,
 	recorded_keys: BTreeMap<Vec<u8>, RecordedForKey>,
 }
 
-impl<L: TrieLayout> Default for Recorder<L> {
+impl<L: TrieLayout<N>, const N: usize> Default for Recorder<L> {
 	fn default() -> Self {
 		Recorder::new()
 	}
 }
 
-impl<L: TrieLayout> Recorder<L> {
+impl<L: TrieLayout<N>, const N: usize> Recorder<L> {
 	/// Create a new `Recorder` which records all given nodes.
 	pub fn new() -> Self {
 		Self { nodes: Default::default(), recorded_keys: Default::default() }
 	}
 
 	/// Drain all visited records.
-	pub fn drain(&mut self) -> Vec<Record<TrieHash<L>>> {
+	pub fn drain(&mut self) -> Vec<Record<TrieHash<L, N>>> {
 		self.recorded_keys.clear();
 		crate::rstd::mem::take(&mut self.nodes)
 	}
 }
 
-impl<L: TrieLayout> TrieRecorder<TrieHash<L>, L::Nibble> for Recorder<L> {
-	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L>, L::Nibble>) {
+impl<L: TrieLayout<N>, const N: usize> TrieRecorder<TrieHash<L, N>, L::Nibble> for Recorder<L> {
+	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L, N>, L::Nibble>) {
 		match access {
 			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
 				self.nodes.push(Record { hash, data: encoded_node.to_vec() });

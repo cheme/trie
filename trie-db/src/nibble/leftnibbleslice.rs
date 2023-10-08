@@ -25,13 +25,12 @@ use crate::{
 /// right-aligned, meaning it does not support efficient truncation from the right side.
 ///
 /// This is an immutable struct. No operations actually change it.
-pub struct LeftNibbleSlice<'a, N> {
+pub struct LeftNibbleSlice<'a, const N: usize> {
 	bytes: &'a [u8],
 	len: usize,
-	_marker: PhantomData<N>,
 }
 
-impl<'a, N: NibbleOps> LeftNibbleSlice<'a, N> {
+impl<'a, const N: usize> LeftNibbleSlice<'a, N> {
 	/// Constructs a byte-aligned nibble slice from a byte slice.
 	pub fn new(bytes: &'a [u8]) -> Self {
 		LeftNibbleSlice { bytes, len: bytes.len() * N::NIBBLE_PER_BYTE, _marker: PhantomData }
@@ -94,7 +93,7 @@ impl<'a, N: NibbleOps> LeftNibbleSlice<'a, N> {
 	}
 }
 
-impl<'a, N: NibbleOps> PartialEq for LeftNibbleSlice<'a, N> {
+impl<'a, const N: usize> PartialEq for LeftNibbleSlice<'a, N> {
 	fn eq(&self, other: &Self) -> bool {
 		let len = self.len();
 		if other.len() != len {
@@ -120,22 +119,22 @@ impl<'a, N: NibbleOps> PartialEq for LeftNibbleSlice<'a, N> {
 	}
 }
 
-impl<'a, N: NibbleOps> Eq for LeftNibbleSlice<'a, N> {}
+impl<'a, const N: usize> Eq for LeftNibbleSlice<'a, N> {}
 
-impl<'a, N: NibbleOps> PartialOrd for LeftNibbleSlice<'a, N> {
+impl<'a, const N: usize> PartialOrd for LeftNibbleSlice<'a, N> {
 	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
 		Some(self.cmp(other))
 	}
 }
 
-impl<'a, N: NibbleOps> Ord for LeftNibbleSlice<'a, N> {
+impl<'a, const N: usize> Ord for LeftNibbleSlice<'a, N> {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self.cmp(other)
 	}
 }
 
 #[cfg(feature = "std")]
-impl<'a, N: NibbleOps> std::fmt::Debug for LeftNibbleSlice<'a, N> {
+impl<'a, const N: usize> std::fmt::Debug for LeftNibbleSlice<'a, N> {
 	fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
 		for i in 0..self.len() {
 			let nibble = self.at(i).expect("i < self.len(); qed");
@@ -151,18 +150,17 @@ impl<'a, N: NibbleOps> std::fmt::Debug for LeftNibbleSlice<'a, N> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::nibble::Radix16;
 
 	#[test]
 	fn test_len() {
-		assert_eq!(LeftNibbleSlice::<Radix16>::new(&[]).len(), 0);
-		assert_eq!(LeftNibbleSlice::<Radix16>::new(&b"hello"[..]).len(), 10);
-		assert_eq!(LeftNibbleSlice::<Radix16>::new(&b"hello"[..]).truncate(7).len(), 7);
+		assert_eq!(LeftNibbleSlice::<16>::new(&[]).len(), 0);
+		assert_eq!(LeftNibbleSlice::<16>::new(&b"hello"[..]).len(), 10);
+		assert_eq!(LeftNibbleSlice::<16>::new(&b"hello"[..]).truncate(7).len(), 7);
 	}
 
 	#[test]
 	fn test_at() {
-		let slice = LeftNibbleSlice::<Radix16>::new(&b"\x01\x23\x45\x67"[..]).truncate(7);
+		let slice = LeftNibbleSlice::<16>::new(&b"\x01\x23\x45\x67"[..]).truncate(7);
 		assert_eq!(slice.at(0), Some(0));
 		assert_eq!(slice.at(6), Some(6));
 		assert_eq!(slice.at(7), None);
@@ -171,59 +169,57 @@ mod tests {
 
 	#[test]
 	fn test_starts_with() {
-		assert!(LeftNibbleSlice::<Radix16>::new(b"hello")
-			.starts_with(&LeftNibbleSlice::<Radix16>::new(b"heli").truncate(7)));
-		assert!(!LeftNibbleSlice::<Radix16>::new(b"hello")
-			.starts_with(&LeftNibbleSlice::<Radix16>::new(b"heli").truncate(8)));
+		assert!(LeftNibbleSlice::<16>::new(b"hello")
+			.starts_with(&LeftNibbleSlice::<16>::new(b"heli").truncate(7)));
+		assert!(!LeftNibbleSlice::<16>::new(b"hello")
+			.starts_with(&LeftNibbleSlice::<16>::new(b"heli").truncate(8)));
 	}
 
 	#[test]
 	fn test_contains() {
-		assert!(LeftNibbleSlice::<Radix16>::new(b"hello")
-			.contains(&NibbleSlice::new_offset(b"ello", 0), 2));
-		assert!(LeftNibbleSlice::<Radix16>::new(b"hello")
-			.contains(&NibbleSlice::new_offset(b"ello", 1), 3));
-		assert!(!LeftNibbleSlice::<Radix16>::new(b"hello")
-			.contains(&NibbleSlice::new_offset(b"allo", 1), 3));
-		assert!(!LeftNibbleSlice::<Radix16>::new(b"hello")
+		assert!(
+			LeftNibbleSlice::<16>::new(b"hello").contains(&NibbleSlice::new_offset(b"ello", 0), 2)
+		);
+		assert!(
+			LeftNibbleSlice::<16>::new(b"hello").contains(&NibbleSlice::new_offset(b"ello", 1), 3)
+		);
+		assert!(
+			!LeftNibbleSlice::<16>::new(b"hello").contains(&NibbleSlice::new_offset(b"allo", 1), 3)
+		);
+		assert!(!LeftNibbleSlice::<16>::new(b"hello")
 			.contains(&NibbleSlice::new_offset(b"ello!", 1), 3));
 	}
 
 	#[test]
 	fn test_cmp() {
-		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hallo") < LeftNibbleSlice::<Radix16>::new(b"hello")
-		);
-		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hello") > LeftNibbleSlice::<Radix16>::new(b"hallo")
-		);
+		assert!(LeftNibbleSlice::<16>::new(b"hallo") < LeftNibbleSlice::<16>::new(b"hello"));
+		assert!(LeftNibbleSlice::<16>::new(b"hello") > LeftNibbleSlice::<16>::new(b"hallo"));
 		assert_eq!(
-			LeftNibbleSlice::<Radix16>::new(b"hello")
-				.cmp(&LeftNibbleSlice::<Radix16>::new(b"hello")),
+			LeftNibbleSlice::<16>::new(b"hello").cmp(&LeftNibbleSlice::<16>::new(b"hello")),
 			Ordering::Equal
 		);
 
 		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hello\x10") <
-				LeftNibbleSlice::<Radix16>::new(b"hello\x20").truncate(11)
+			LeftNibbleSlice::<16>::new(b"hello\x10") <
+				LeftNibbleSlice::<16>::new(b"hello\x20").truncate(11)
 		);
 		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hello\x20").truncate(11) >
-				LeftNibbleSlice::<Radix16>::new(b"hello\x10")
+			LeftNibbleSlice::<16>::new(b"hello\x20").truncate(11) >
+				LeftNibbleSlice::<16>::new(b"hello\x10")
 		);
 
 		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hello\x10").truncate(11) <
-				LeftNibbleSlice::<Radix16>::new(b"hello\x10")
+			LeftNibbleSlice::<16>::new(b"hello\x10").truncate(11) <
+				LeftNibbleSlice::<16>::new(b"hello\x10")
 		);
 		assert!(
-			LeftNibbleSlice::<Radix16>::new(b"hello\x10") >
-				LeftNibbleSlice::<Radix16>::new(b"hello\x10").truncate(11)
+			LeftNibbleSlice::<16>::new(b"hello\x10") >
+				LeftNibbleSlice::<16>::new(b"hello\x10").truncate(11)
 		);
 		assert_eq!(
-			LeftNibbleSlice::<Radix16>::new(b"hello\x10")
+			LeftNibbleSlice::<16>::new(b"hello\x10")
 				.truncate(11)
-				.cmp(&LeftNibbleSlice::<Radix16>::new(b"hello\x10").truncate(11)),
+				.cmp(&LeftNibbleSlice::<16>::new(b"hello\x10").truncate(11)),
 			Ordering::Equal
 		);
 	}

@@ -40,8 +40,6 @@ pub trait NodeCodec<const N: usize>: Sized {
 	/// Codec error type.
 	type Error: Error;
 
-	type Nibble: NibbleOps;
-
 	/// Output type of encoded node hasher.
 	type HashOut: AsRef<[u8]>
 		+ AsMut<[u8]>

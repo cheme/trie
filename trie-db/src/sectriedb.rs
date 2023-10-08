@@ -21,22 +21,22 @@ use hash_db::{HashDBRef, Hasher};
 /// A `Trie` implementation which hashes keys and uses a generic `HashDB` backing database.
 ///
 /// Use it as a `Trie` trait object. You can use `raw()` to get the backing `TrieDB` object.
-pub struct SecTrieDB<'db, 'cache, L>
+pub struct SecTrieDB<'db, 'cache, L, const N: usize>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	raw: TrieDB<'db, 'cache, L>,
+	raw: TrieDB<'db, 'cache, L, N>,
 }
 
-impl<'db, 'cache, L> SecTrieDB<'db, 'cache, L>
+impl<'db, 'cache, L, const N: usize> SecTrieDB<'db, 'cache, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
 	/// Create a new trie with the backing database `db` and `root`.
 	///
 	/// Initialise to the state entailed by the genesis block.
 	/// This guarantees the trie is built correctly.
-	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L>) -> Self {
+	pub fn new(db: &'db dyn HashDBRef<L::Hash, DBValue>, root: &'db TrieHash<L, N>) -> Self {
 		SecTrieDB { raw: TrieDBBuilder::new(db, root).build() }
 	}
 
@@ -51,19 +51,19 @@ where
 	}
 }
 
-impl<'db, 'cache, L> Trie<L> for SecTrieDB<'db, 'cache, L>
+impl<'db, 'cache, L, const N: usize> Trie<L, N> for SecTrieDB<'db, 'cache, L, N>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 {
-	fn root(&self) -> &TrieHash<L> {
+	fn root(&self) -> &TrieHash<L, N> {
 		self.raw.root()
 	}
 
-	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L>, CError<L>> {
+	fn contains(&self, key: &[u8]) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.raw.contains(L::Hash::hash(key).as_ref())
 	}
 
-	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L>>, TrieHash<L>, CError<L>> {
+	fn get_hash(&self, key: &[u8]) -> Result<Option<TrieHash<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.get_hash(key)
 	}
 
@@ -71,23 +71,23 @@ where
 		&self,
 		key: &[u8],
 		query: Q,
-	) -> Result<Option<Q::Item>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<Q::Item>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.get_with(L::Hash::hash(key).as_ref(), query)
 	}
 
 	fn lookup_first_descendant(
 		&self,
 		key: &[u8],
-	) -> Result<Option<MerkleValue<TrieHash<L>>>, TrieHash<L>, CError<L>> {
+	) -> Result<Option<MerkleValue<TrieHash<L, N>>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.lookup_first_descendant(key)
 	}
 
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		TrieDB::iter(&self.raw)
 	}
@@ -95,9 +95,9 @@ where
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L>, CError<L>>> + 'a>,
-		TrieHash<L>,
-		CError<L>,
+		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		TrieHash<L, N>,
+		CError<L, N>,
 	> {
 		TrieDB::key_iter(&self.raw)
 	}

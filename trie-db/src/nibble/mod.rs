@@ -29,18 +29,19 @@ mod nibblevec;
 // Work-around absence of constant function for math pow.
 const TWO_EXP: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
 
-/// Struct for methods depending on radix
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
-pub struct NibbleOps<const N: usize>
-{
+/// Struct for methods depending on radix
+pub struct NibbleOps<const N: usize>;
+impl<const N: usize> NibbleOps<N> {
 	/// Single nibble length in bit.
-	const BIT_PER_NIBBLE: usize = N.trailing_zeros() as usize;
+	const fn bit_per_nibble() -> usize {
+		N.trailing_zeros() as usize
+	}
 	/// Number of nibble per byte.
-	const NIBBLE_PER_BYTE: usize = 8 / Self::BIT_PER_NIBBLE;
-	/// Number of child for a branch (trie radix).
-	/// TODO rem
-	const NIBBLE_LENGTH: usize = N;
+	const fn nibble_per_byte() -> usize {
+		8 / Self::bit_per_nibble()
+	}
 
 	/// Padding bitmasks, internally use for working on padding byte.
 	/// Length of this array is `Self::BIT_PER_NIBBLE`.
@@ -228,14 +229,13 @@ pub struct NibbleVec<const N: usize> {
 /// }
 /// ```
 #[derive(Copy, Clone)]
-pub struct NibbleSlice<'a, N> {
+pub struct NibbleSlice<'a, const N: usize> {
 	data: &'a [u8],
 	offset: usize,
-	_marker: PhantomData<N>,
 }
 
 /// Iterator type for a nibble slice.
-pub struct NibbleSliceIterator<'a, N: NibbleOps> {
+pub struct NibbleSliceIterator<'a, const N: usize> {
 	p: &'a NibbleSlice<'a, N>,
 	i: usize,
 }
