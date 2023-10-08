@@ -57,10 +57,10 @@ pub trait NodeCodec<const N: usize>: Sized {
 	fn hashed_null_node() -> Self::HashOut;
 
 	/// Decode bytes to a `NodePlan`. Returns `Self::E` on failure.
-	fn decode_plan(data: &[u8]) -> Result<NodePlan<Self::Nibble, N>, Self::Error>;
+	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error>;
 
 	/// Decode bytes to a `Node`. Returns `Self::E` on failure.
-	fn decode<'a>(data: &'a [u8]) -> Result<Node<'a, Self::Nibble, N>, Self::Error> {
+	fn decode<'a>(data: &'a [u8]) -> Result<Node<'a, N>, Self::Error> {
 		Ok(Self::decode_plan(data)?.build(data))
 	}
 

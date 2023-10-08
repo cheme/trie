@@ -104,7 +104,7 @@ impl<const N: usize> NibbleOps<N> {
 
 	/// Get u8 nibble value at a given index in a `NibbleSlice`.
 	#[inline(always)]
-	pub fn at(s: &NibbleSlice<Self>, ix: usize) -> u8 {
+	pub fn at(s: &NibbleSlice<N>, ix: usize) -> u8 {
 		// same as left with offset
 		Self::left_nibble_at(&s.data[..], s.offset + ix)
 	}

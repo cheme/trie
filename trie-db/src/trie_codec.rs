@@ -54,6 +54,7 @@ struct EncoderStackEntry<L: TrieLayout<N>, const N: usize> {
 	/// The encoding of the subtrie nodes rooted at this entry, which is built up in
 	/// `encode_compact`.
 	output_index: usize,
+	_marker: PhantomData<L>,
 }
 
 impl<L: TrieLayout<N>, const N: usize> EncoderStackEntry<L, N> {
@@ -203,7 +204,7 @@ impl<L: TrieLayout<N>, const N: usize> EncoderStackEntry<L, N> {
 /// followed by node encoded with 0 length value and the value
 /// as a standalone vec.
 fn detached_value<L: TrieLayout<N>, const N: usize>(
-	db: &TrieDB<L>,
+	db: &TrieDB<L, N>,
 	value: &ValuePlan,
 	node_data: &[u8],
 	node_prefix: Prefix,
@@ -232,7 +233,7 @@ fn detached_value<L: TrieLayout<N>, const N: usize>(
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
 pub fn encode_compact<L, const N: usize>(
-	db: &TrieDB<L>,
+	db: &TrieDB<L, N>,
 ) -> Result<Vec<Vec<u8>>, TrieHash<L, N>, CError<L, N>>
 where
 	L: TrieLayout<N>,

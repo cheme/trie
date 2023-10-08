@@ -59,7 +59,7 @@ where
 	}
 }
 
-impl<'db, L, const N: usize> TrieMut<L> for SecTrieDBMut<'db, L, N>
+impl<'db, L, const N: usize> TrieMut<L, N> for SecTrieDBMut<'db, L, N>
 where
 	L: TrieLayout<N>,
 {
@@ -89,11 +89,11 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.insert(&L::Hash::hash(key).as_ref(), value)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		self.raw.remove(&L::Hash::hash(key).as_ref())
 	}
 }

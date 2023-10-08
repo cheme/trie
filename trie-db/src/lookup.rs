@@ -38,7 +38,7 @@ pub struct Lookup<'a, 'cache, L: TrieLayout<N>, Q: Query<L::Hash>, const N: usiz
 	pub recorder: Option<&'cache mut dyn TrieRecorder<TrieHash<L, N>, N>>,
 }
 
-impl<'a, 'cache, L, Q, const N: usize> Lookup<'a, 'cache, L, Q>
+impl<'a, 'cache, L, Q, const N: usize> Lookup<'a, 'cache, L, Q, N>
 where
 	L: TrieLayout<N>,
 	Q: Query<L::Hash>,

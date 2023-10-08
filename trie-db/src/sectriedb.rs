@@ -41,12 +41,12 @@ where
 	}
 
 	/// Get a reference to the underlying raw `TrieDB` struct.
-	pub fn raw(&self) -> &TrieDB<'db, 'cache, L> {
+	pub fn raw(&self) -> &TrieDB<'db, 'cache, L, N> {
 		&self.raw
 	}
 
 	/// Get a mutable reference to the underlying raw `TrieDB` struct.
-	pub fn raw_mut(&mut self) -> &mut TrieDB<'db, 'cache, L> {
+	pub fn raw_mut(&mut self) -> &mut TrieDB<'db, 'cache, L, N> {
 		&mut self.raw
 	}
 }
@@ -85,7 +85,7 @@ where
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
@@ -95,7 +95,7 @@ where
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {

@@ -36,13 +36,13 @@ pub struct Recorder<L: TrieLayout<N>, const N: usize> {
 	recorded_keys: BTreeMap<Vec<u8>, RecordedForKey>,
 }
 
-impl<L: TrieLayout<N>, const N: usize> Default for Recorder<L> {
+impl<L: TrieLayout<N>, const N: usize> Default for Recorder<L, N> {
 	fn default() -> Self {
 		Recorder::new()
 	}
 }
 
-impl<L: TrieLayout<N>, const N: usize> Recorder<L> {
+impl<L: TrieLayout<N>, const N: usize> Recorder<L, N> {
 	/// Create a new `Recorder` which records all given nodes.
 	pub fn new() -> Self {
 		Self { nodes: Default::default(), recorded_keys: Default::default() }
@@ -55,8 +55,8 @@ impl<L: TrieLayout<N>, const N: usize> Recorder<L> {
 	}
 }
 
-impl<L: TrieLayout<N>, const N: usize> TrieRecorder<TrieHash<L, N>, L::Nibble> for Recorder<L> {
-	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L, N>, L::Nibble>) {
+impl<L: TrieLayout<N>, const N: usize> TrieRecorder<TrieHash<L, N>, N> for Recorder<L, N> {
+	fn record<'a>(&mut self, access: TrieAccess<'a, TrieHash<L, N>, N>) {
 		match access {
 			TrieAccess::EncodedNode { hash, encoded_node, .. } => {
 				self.nodes.push(Record { hash, data: encoded_node.to_vec() });

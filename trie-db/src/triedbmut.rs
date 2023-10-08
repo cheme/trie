@@ -69,7 +69,7 @@ fn empty_children<C: Default>() -> Box<C> {
 
 /// Type alias to indicate the nible covers a full key,
 /// therefore its left side is a full prefix.
-type NibbleFullKey<'key, N> = NibbleSlice<'key, N>;
+type NibbleFullKey<'key, const N: usize> = NibbleSlice<'key, N>;
 
 /// Value representation for Node.
 #[derive(Clone, Eq)]
@@ -84,7 +84,7 @@ pub enum Value<L: TrieLayout<N>, const N: usize> {
 	NewNode(Option<TrieHash<L, N>>, Bytes),
 }
 
-impl<L: TrieLayout<N>, const N: usize> PartialEq<Self> for Value<L> {
+impl<L: TrieLayout<N>, const N: usize> PartialEq<Self> for Value<L, N> {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
 			(Value::Inline(v), Value::Inline(ov)) => v == ov,
@@ -98,7 +98,7 @@ impl<L: TrieLayout<N>, const N: usize> PartialEq<Self> for Value<L> {
 	}
 }
 
-impl<'a, L: TrieLayout<N>, const N: usize> From<EncodedValue<'a>> for Value<L> {
+impl<'a, L: TrieLayout<N>, const N: usize> From<EncodedValue<'a>> for Value<L, N> {
 	fn from(v: EncodedValue<'a>) -> Self {
 		match v {
 			EncodedValue::Inline(value) => Value::Inline(value.into()),
@@ -111,7 +111,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> From<EncodedValue<'a>> for Value<L> {
 	}
 }
 
-impl<L: TrieLayout<N>, const N: usize> From<&ValueOwned<TrieHash<L, N>>> for Value<L> {
+impl<L: TrieLayout<N>, const N: usize> From<&ValueOwned<TrieHash<L, N>>> for Value<L, N> {
 	fn from(val: &ValueOwned<TrieHash<L, N>>) -> Self {
 		match val {
 			ValueOwned::Inline(data, _) => Self::Inline(data.clone()),
@@ -120,7 +120,7 @@ impl<L: TrieLayout<N>, const N: usize> From<&ValueOwned<TrieHash<L, N>>> for Val
 	}
 }
 
-impl<L: TrieLayout<N>, const N: usize> From<(Bytes, Option<u32>)> for Value<L> {
+impl<L: TrieLayout<N>, const N: usize> From<(Bytes, Option<u32>)> for Value<L, N> {
 	fn from((v, threshold): (Bytes, Option<u32>)) -> Self {
 		match v {
 			value =>
@@ -239,7 +239,7 @@ impl<'a> Debug for ToHex<'a> {
 }
 
 #[cfg(feature = "std")]
-impl<L: TrieLayout<N>, const N: usize> Debug for Value<L> {
+impl<L: TrieLayout<N>, const N: usize> Debug for Value<L, N> {
 	fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
 		match self {
 			Self::Inline(value) => write!(fmt, "Some({:?})", ToHex(value)),
@@ -938,7 +938,7 @@ where
 		handle: NodeHandle<TrieHash<L, N>>,
 		key: &mut NibbleFullKey<N>,
 		value: Bytes,
-		old_val: &mut Option<Value<L>>,
+		old_val: &mut Option<Value<L, N>>,
 	) -> Result<(StorageHandle, bool), TrieHash<L, N>, CError<L, N>> {
 		let h = match handle {
 			NodeHandle::InMemory(h) => h,
@@ -957,8 +957,8 @@ where
 
 	fn replace_old_value(
 		&mut self,
-		old_value: &mut Option<Value<L>>,
-		stored_value: Option<Value<L>>,
+		old_value: &mut Option<Value<L, N>>,
+		stored_value: Option<Value<L, N>>,
 		prefix: Prefix,
 	) {
 		match &stored_value {
@@ -980,7 +980,7 @@ where
 		node: Node<L, N>,
 		key: &mut NibbleFullKey<N>,
 		value: Bytes,
-		old_val: &mut Option<Value<L>>,
+		old_val: &mut Option<Value<L, N>>,
 	) -> Result<InsertAction<L, N>, TrieHash<L, N>, CError<L, N>> {
 		let partial = *key;
 
@@ -1328,7 +1328,7 @@ where
 		&mut self,
 		handle: NodeHandle<TrieHash<L, N>>,
 		key: &mut NibbleFullKey<N>,
-		old_val: &mut Option<Value<L>>,
+		old_val: &mut Option<Value<L, N>>,
 	) -> Result<Option<(StorageHandle, bool)>, TrieHash<L, N>, CError<L, N>> {
 		let stored = match handle {
 			NodeHandle::InMemory(h) => self.storage.destroy(h),
@@ -1350,7 +1350,7 @@ where
 		&mut self,
 		node: Node<L, N>,
 		key: &mut NibbleFullKey<N>,
-		old_val: &mut Option<Value<L>>,
+		old_val: &mut Option<Value<L, N>>,
 	) -> Result<Action<L, N>, TrieHash<L, N>, CError<L, N>> {
 		let partial = *key;
 		Ok(match (node, partial.is_empty()) {
@@ -1802,7 +1802,7 @@ where
 					},
 				);
 
-				fn cache_child_values<L: TrieLayout<N>>(
+				fn cache_child_values<L: TrieLayout<N>, const N: usize>(
 					node: &NodeOwned<TrieHash<L, N>, N>,
 					values_to_cache: &mut Vec<(Vec<u8>, CachedValue<TrieHash<L, N>>)>,
 					full_key: NibbleVec<N>,
@@ -1936,7 +1936,7 @@ where
 	}
 }
 
-impl<'a, L, const N: usize> TrieMut<L> for TrieDBMut<'a, L, N>
+impl<'a, L, const N: usize> TrieMut<L, N> for TrieDBMut<'a, L, N>
 where
 	L: TrieLayout<N>,
 {
@@ -1969,7 +1969,7 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		if !L::ALLOW_EMPTY && value.is_empty() {
 			return self.remove(key)
 		}
@@ -1991,7 +1991,7 @@ where
 		Ok(old_val)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		#[cfg(feature = "std")]
 		trace!(target: "trie", "remove: key={:?}", ToHex(key));
 
@@ -2027,7 +2027,7 @@ where
 }
 
 /// combine two NodeKeys
-fn combine_key<N: NibbleOps>(start: &mut NodeKey, end: (usize, &[u8])) {
+fn combine_key<const N: usize>(start: &mut NodeKey, end: (usize, &[u8])) {
 	debug_assert!(start.0 < NibbleOps::<N>::nibble_per_byte());
 	debug_assert!(end.0 < NibbleOps::<N>::nibble_per_byte());
 	let final_offset = (start.0 + end.0) % NibbleOps::<N>::nibble_per_byte();

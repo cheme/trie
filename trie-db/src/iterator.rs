@@ -71,7 +71,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	}
 
 	/// Create a new iterator.
-	pub fn new(db: &TrieDB<L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
+	pub fn new(db: &TrieDB<L, N>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		let mut r =
 			TrieDBRawIterator { trail: Vec::with_capacity(8), key_nibbles: NibbleVec::new() };
 		let (root_node, root_hash) = db.get_raw_or_lookup(
@@ -86,7 +86,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 
 	/// Create a new iterator, but limited to a given prefix.
 	pub fn new_prefixed(
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		prefix: &[u8],
 	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		let mut iter = TrieDBRawIterator::new(db)?;
@@ -99,7 +99,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// It then do a seek operation from prefixed context (using `seek` lose
 	/// prefix context by default).
 	pub fn new_prefixed_then_seek(
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		prefix: &[u8],
 		start_at: &[u8],
 	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
@@ -116,7 +116,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 
 	/// Fetch value by hash at a current node height
 	pub(crate) fn fetch_value(
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		key: &[u8],
 		prefix: Prefix,
 	) -> Result<DBValue, TrieHash<L, N>, CError<L, N>> {
@@ -133,7 +133,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// where we limit iteration to 'key' as a prefix.
 	pub(crate) fn seek(
 		&mut self,
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		key: &[u8],
 	) -> Result<bool, TrieHash<L, N>, CError<L, N>> {
 		self.trail.clear();
@@ -272,7 +272,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// or returned after this operation.
 	fn prefix(
 		&mut self,
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		prefix: &[u8],
 	) -> Result<(), TrieHash<L, N>, CError<L, N>> {
 		if self.seek(db, prefix)? {
@@ -291,7 +291,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// or returned after this operation.
 	fn prefix_then_seek(
 		&mut self,
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 		prefix: &[u8],
 		seek: &[u8],
 	) -> Result<(), TrieHash<L, N>, CError<L, N>> {
@@ -358,7 +358,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// Must be called with the same `db` as when the iterator was created.
 	pub(crate) fn next_raw_item(
 		&mut self,
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 	) -> Option<
 		Result<
 			(&NibbleVec<N>, Option<&TrieHash<L, N>>, &Arc<OwnedNode<DBValue, N>>),
@@ -457,7 +457,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// Fetches the next trie item.
 	///
 	/// Must be called with the same `db` as when the iterator was created.
-	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L, N>, CError<L, N>>> {
+	pub fn next_item(&mut self, db: &TrieDB<L, N>) -> Option<TrieItem<TrieHash<L, N>, CError<L, N>>> {
 		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
@@ -508,7 +508,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(
 		&mut self,
-		db: &TrieDB<L>,
+		db: &TrieDB<L, N>,
 	) -> Option<TrieKeyItem<TrieHash<L, N>, CError<L, N>>> {
 		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
@@ -554,17 +554,17 @@ pub struct TrieDBNodeIterator<'a, 'cache, L: TrieLayout<N>, const N: usize> {
 
 impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBNodeIterator<'a, 'cache, L, N> {
 	/// Create a new iterator.
-	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
+	pub fn new(db: &'a TrieDB<'a, 'cache, L, N>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { raw_iter: TrieDBRawIterator::new(db)?, db })
 	}
 
 	/// Restore an iterator from a raw iterator.
-	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L>, raw_iter: TrieDBRawIterator<L>) -> Self {
+	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L, N>, raw_iter: TrieDBRawIterator<L, N>) -> Self {
 		Self { db, raw_iter }
 	}
 
 	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
+	pub fn into_raw(self) -> TrieDBRawIterator<L, N> {
 		self.raw_iter
 	}
 
@@ -599,7 +599,7 @@ impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBNodeIterator<'a, 'cache
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L, N>
 	for TrieDBNodeIterator<'a, 'cache, L, N>
 {
 	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L, N>, CError<L, N>> {

@@ -385,19 +385,19 @@ fn match_key_to_branch_node<'a, N: NibbleOps>(
 	}
 }
 
-enum Step<'a, N> {
+enum Step<'a, cont N: usize> {
 	Descend(LeftNibbleSlice<'a, N>),
 	UnwindStack,
 }
 
 /// Verify a compact proof for key-value pairs in a trie given a root hash.
-pub fn verify_proof<'a, L, I, K, V>(
+pub fn verify_proof<'a, L, I, K, V, const N: usize>(
 	root: &<L::Hash as Hasher>::Out,
 	proof: &[Vec<u8>],
 	items: I,
 ) -> Result<(), Error<TrieHash<L, N>, CError<L, N>>>
 where
-	L: TrieLayout,
+	L: TrieLayout<N>,
 	I: IntoIterator<Item = &'a (K, Option<V>)>,
 	K: 'a + AsRef<[u8]>,
 	V: 'a + AsRef<[u8]>,

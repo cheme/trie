@@ -215,7 +215,7 @@ where
 	}
 }
 
-impl<'db, 'cache, L, const N: usize> Trie<L> for TrieDB<'db, 'cache, L, N>
+impl<'db, 'cache, L, const N: usize> Trie<L, N> for TrieDB<'db, 'cache, L, N>
 where
 	L: TrieLayout<N>,
 {
@@ -281,7 +281,7 @@ where
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
@@ -291,7 +291,7 @@ where
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
@@ -443,13 +443,13 @@ pub struct TrieDBKeyIterator<'a, 'cache, L: TrieLayout<N>, const N: usize> {
 
 impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBIterator<'a, 'cache, L, N> {
 	/// Create a new iterator.
-	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
+	pub fn new(db: &'a TrieDB<'a, 'cache, L, N>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
 	pub fn new_prefixed(
-		db: &'a TrieDB<'a, 'cache, L>,
+		db: &'a TrieDB<'a, 'cache, L, N>,
 		prefix: &[u8],
 	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
@@ -459,7 +459,7 @@ impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBIterator<'a, 'cache, L,
 	/// It then do a seek operation from prefixed context (using `seek` lose
 	/// prefix context by default).
 	pub fn new_prefixed_then_seek(
-		db: &'a TrieDB<'a, 'cache, L>,
+		db: &'a TrieDB<'a, 'cache, L, N>,
 		prefix: &[u8],
 		start_at: &[u8],
 	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
@@ -467,17 +467,17 @@ impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBIterator<'a, 'cache, L,
 	}
 
 	/// Restore an iterator from a raw iterator.
-	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L>, raw_iter: TrieDBRawIterator<L>) -> Self {
+	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L, N>, raw_iter: TrieDBRawIterator<L, N>) -> Self {
 		Self { db, raw_iter }
 	}
 
 	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
+	pub fn into_raw(self) -> TrieDBRawIterator<L, N> {
 		self.raw_iter
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L, N>
 	for TrieDBIterator<'a, 'cache, L, N>
 {
 	/// Position the iterator on the first element with key >= `key`
@@ -488,13 +488,13 @@ impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
 
 impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBKeyIterator<'a, 'cache, L, N> {
 	/// Create a new iterator.
-	pub fn new(db: &'a TrieDB<'a, 'cache, L>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
+	pub fn new(db: &'a TrieDB<'a, 'cache, L, N>) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new(db)? })
 	}
 
 	/// Create a new iterator, but limited to a given prefix.
 	pub fn new_prefixed(
-		db: &'a TrieDB<'a, 'cache, L>,
+		db: &'a TrieDB<'a, 'cache, L, N>,
 		prefix: &[u8],
 	) -> Result<Self, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed(db, prefix)? })
@@ -504,25 +504,25 @@ impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieDBKeyIterator<'a, 'cache,
 	/// It then do a seek operation from prefixed context (using `seek` lose
 	/// prefix context by default).
 	pub fn new_prefixed_then_seek(
-		db: &'a TrieDB<'a, 'cache, L>,
+		db: &'a TrieDB<'a, 'cache, L, N>,
 		prefix: &[u8],
 		start_at: &[u8],
-	) -> Result<TrieDBKeyIterator<'a, 'cache, L>, TrieHash<L, N>, CError<L, N>> {
+	) -> Result<TrieDBKeyIterator<'a, 'cache, L, N>, TrieHash<L, N>, CError<L, N>> {
 		Ok(Self { db, raw_iter: TrieDBRawIterator::new_prefixed_then_seek(db, prefix, start_at)? })
 	}
 
 	/// Restore an iterator from a raw iterator.
-	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L>, raw_iter: TrieDBRawIterator<L>) -> Self {
+	pub fn from_raw(db: &'a TrieDB<'a, 'cache, L, N>, raw_iter: TrieDBRawIterator<L, N>) -> Self {
 		Self { db, raw_iter }
 	}
 
 	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
+	pub fn into_raw(self) -> TrieDBRawIterator<L, N> {
 		self.raw_iter
 	}
 }
 
-impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L>
+impl<'a, 'cache, L: TrieLayout<N>, const N: usize> TrieIterator<L, N>
 	for TrieDBKeyIterator<'a, 'cache, L, N>
 {
 	/// Position the iterator on the first element with key >= `key`

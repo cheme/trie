@@ -569,7 +569,7 @@ pub trait TrieConfiguration<const N: usize>: Sized + TrieLayout<N> {
 		B: AsRef<[u8]>,
 	{
 		let mut cb = TrieRootUnhashed::<Self>::default();
-		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
+		trie_visit::<Self, _, _, _, _, N>(input.into_iter(), &mut cb);
 		cb.root.unwrap_or_default()
 	}
 	/// Encoding of index as a key (when reusing general trie for

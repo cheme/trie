@@ -48,7 +48,7 @@ where
 	}
 }
 
-impl<'db, 'cache, L, const N: usize> Trie<L> for FatDB<'db, 'cache, L, N>
+impl<'db, 'cache, L, const N: usize> Trie<L, N> for FatDB<'db, 'cache, L, N>
 where
 	L: TrieLayout<N>,
 {
@@ -82,7 +82,7 @@ where
 	fn iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
@@ -92,7 +92,7 @@ where
 	fn key_iter<'a>(
 		&'a self,
 	) -> Result<
-		Box<dyn TrieIterator<L, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
+		Box<dyn TrieIterator<L, N, Item = TrieKeyItem<TrieHash<L, N>, CError<L, N>>> + 'a>,
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {

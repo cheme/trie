@@ -30,14 +30,14 @@ use crate::{
 
 struct StackEntry<'a, L: TrieLayout<N>, const N: usize> {
 	/// The prefix is the nibble path to the node in the trie.
-	prefix: LeftNibbleSlice<'a, L::Nibble>,
-	node: OwnedNode<Vec<u8>, L::Nibble>,
+	prefix: LeftNibbleSlice<'a, N>,
+	node: OwnedNode<Vec<u8>, N>,
 	/// The hash of the node or None if it is referenced inline.
 	node_hash: Option<TrieHash<L, N>>,
 	/// Whether the value should be omitted in the generated proof.
 	omit_value: bool,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
-	/// nodes, the index is in [0, NIBBLE_LENGTH] and for extension nodes, the index is in [0, 1].
+	/// nodes, the index is in [0, nibble_length()] and for extension nodes, the index is in [0, 1].
 	child_index: usize,
 	/// The child references to use in constructing the proof nodes.
 	children: Vec<Option<ChildReference<TrieHash<L, N>>>>,
@@ -57,7 +57,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 		let children_len = match node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } => 0,
 			NodePlan::Extension { .. } => 1,
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => L::Nibble::NIBBLE_LENGTH,
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => NibbleOps::<N>::nibble_length(),
 		};
 		Ok(StackEntry {
 			prefix,
@@ -133,14 +133,14 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	/// `child_handles`.
 	///
 	/// Preconditions:
-	/// - children has size NIBBLE_LENGTH.
+	/// - children has size nibble_length.
 	fn complete_branch_children(
 		node_data: &[u8],
 		child_handles: &BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
 		child_index: usize,
 		children: &mut [Option<ChildReference<TrieHash<L, N>>>],
 	) -> TrieResult<(), TrieHash<L, N>, CError<L, N>> {
-		for i in child_index..L::Nibble::NIBBLE_LENGTH {
+		for i in child_index..NibbleOps::<N>::nibble_length() {
 			children[i] = child_handles
 				.at(i)
 				.as_ref()
@@ -175,10 +175,10 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 			},
 			NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } => {
 				assert!(
-					self.child_index < L::Nibble::NIBBLE_LENGTH,
-					"extension nodes have at most NIBBLE_LENGTH children; \
+					self.child_index < NibbleOps::<N>::nibble_length(),
+					"extension nodes have at most nibble_length children; \
 					set_child is called when the only child is popped from the stack; \
-					child_index is <NIBBLE_LENGTH before child is pushed to the stack; qed"
+					child_index is <nibble_length before child is pushed to the stack; qed"
 				);
 				children
 					.at(self.child_index)
@@ -392,11 +392,11 @@ fn resolve_value<C: NodeCodec<N>, const N: usize>(
 /// entry on the stack.
 fn match_key_to_node<'a, L: TrieLayout<N>, const N: usize>(
 	node_data: &'a [u8],
-	node_plan: &NodePlan<L::Nibble>,
+	node_plan: &NodePlan<N>,
 	omit_value: &mut bool,
 	child_index: &mut usize,
 	children: &mut [Option<ChildReference<TrieHash<L, N>>>],
-	key: &LeftNibbleSlice<L::Nibble>,
+	key: &LeftNibbleSlice<N>,
 	prefix_len: usize,
 	recorded_nodes: &mut dyn Iterator<Item = Record<TrieHash<L, N>>>,
 ) -> TrieResult<Step<'a>, TrieHash<L, N>, CError<L, N>> {

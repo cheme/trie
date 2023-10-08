@@ -59,9 +59,9 @@ pub enum NodeHandle<'a> {
 
 impl NodeHandle<'_> {
 	/// Converts this node handle into a [`NodeHandleOwned`].
-	pub fn to_owned_handle<L: TrieLayout>(
+	pub fn to_owned_handle<L: TrieLayout<N>, const N: usize>(
 		&self,
-	) -> Result<NodeHandleOwned<TrieHash<L, N>, L::Nibble>, TrieHash<L, N>, CError<L, N>> {
+	) -> Result<NodeHandleOwned<TrieHash<L, N>, N>, TrieHash<L, N>, CError<L, N>> {
 		match self {
 			Self::Hash(h) => decode_hash::<L::Hash>(h)
 				.ok_or_else(|| Box::new(TrieError::InvalidHash(Default::default(), h.to_vec())))
@@ -93,7 +93,7 @@ where
 	///
 	/// This function panics if `self == Self::Inline(_)` and the inline node encoded length is
 	/// greater then the length of the hash.
-	fn as_child_reference<C: NodeCodec<HashOut = H>>(&self) -> ChildReference<H> {
+	fn as_child_reference<C: NodeCodec<N, HashOut = H>>(&self) -> ChildReference<H> {
 		match self {
 			NodeHandleOwned::Hash(h) => ChildReference::Hash(*h),
 			NodeHandleOwned::Inline(n) => {
@@ -108,7 +108,7 @@ where
 	}
 }
 
-impl<H, N> NodeHandleOwned<H, N> {
+impl<H, const N: usize> NodeHandleOwned<H, N> {
 	/// Returns `self` as inline node.
 	pub fn as_inline(&self) -> Option<&NodeOwned<H, N>> {
 		match self {
@@ -151,7 +151,7 @@ impl<'a> Value<'a> {
 		}
 	}
 
-	pub fn to_owned_value<L: TrieLayout>(&self) -> ValueOwned<TrieHash<L, N>> {
+	pub fn to_owned_value<L: TrieLayout<N>, const N: usize>(&self) -> ValueOwned<TrieHash<L, N>> {
 		match self {
 			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), L::Hash::hash(data)),
 			Self::Node(hash) => {
@@ -214,30 +214,27 @@ pub enum Node<'a, const N: usize> {
 	Extension(NibbleSlice<'a, N>, NodeHandle<'a>),
 	/// Branch node; has slice of child nodes (each possibly null)
 	/// and an optional immediate node data.
-	Branch(BranchChildrenSlice<'a, N::ChildRangeIndex>, Option<Value<'a>>),
+	Branch([Option<NodeHandle<'a>>; N], Option<Value<'a>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
 	NibbledBranch(
 		NibbleSlice<'a, N>,
-		BranchChildrenSlice<'a, N::ChildRangeIndex>,
+		[Option<NodeHandle<'a>>; N],
 		Option<Value<'a>>,
 	),
 }
 
 impl<const N: usize> Node<'_, N> {
 	/// Converts this node into a [`NodeOwned`].
-	pub fn to_owned_node<L: TrieLayout>(
+	pub fn to_owned_node<L: TrieLayout<N>>(
 		&self,
-	) -> Result<NodeOwned<TrieHash<L, N>, L::Nibble>, TrieHash<L, N>, CError<L, N>>
-	where
-		L: TrieLayout<Nibble = N>,
-	{
+	) -> Result<NodeOwned<TrieHash<L, N>, N>, TrieHash<L, N>, CError<L, N>> {
 		match self {
 			Self::Empty => Ok(NodeOwned::Empty),
 			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value::<L>())),
 			Self::Extension(n, h) =>
 				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle::<L>()?)),
 			Self::Branch(childs, data) => {
-				let mut childs_owned = [(); L::Nibble::NIBBLE_LENGTH].map(|_| None);
+				let mut childs_owned = [(); N].map(|_| None);
 				childs
 					.iter()
 					.enumerate()
@@ -251,7 +248,7 @@ impl<const N: usize> Node<'_, N> {
 				Ok(NodeOwned::Branch(childs_owned, data.as_ref().map(|d| d.to_owned_value::<L>())))
 			},
 			Self::NibbledBranch(n, childs, data) => {
-				let mut childs_owned = [(); L::Nibble::NIBBLE_LENGTH].map(|_| None);
+				let mut childs_owned = [(); N].map(|_| None);
 				childs
 					.iter()
 					.enumerate()
@@ -302,7 +299,7 @@ where
 	/// Convert to its encoded format.
 	pub fn to_encoded<C>(&self) -> Vec<u8>
 	where
-		C: NodeCodec<HashOut = H>,
+		C: NodeCodec<N, HashOut = H>,
 	{
 		match self {
 			Self::Empty => C::empty_node().to_vec(),
@@ -329,13 +326,13 @@ where
 
 	/// Returns an iterator over all existing children with their optional nibble.
 	pub fn child_iter(&self) -> impl Iterator<Item = (Option<u8>, &NodeHandleOwned<H, N>)> {
-		enum ChildIter<'a, H, N> {
+		enum ChildIter<'a, H, const N: usize> {
 			Empty,
 			Single(&'a NodeHandleOwned<H, N>, bool),
-			Array(&'a [Option<NodeHandleOwned<H, N>>; L::Nibble::NIBBLE_LENGTH], usize),
+			Array(&'a [Option<NodeHandleOwned<H, N>>; N], usize),
 		}
 
-		impl<'a, H, N> Iterator for ChildIter<'a, H, N> {
+		impl<'a, H, const N: usize> Iterator for ChildIter<'a, H, N> {
 			type Item = (Option<u8>, &'a NodeHandleOwned<H, N>);
 
 			fn next(&mut self) -> Option<Self::Item> {
@@ -475,10 +472,9 @@ impl NodeHandlePlan {
 /// `NibbleSlicePlan` is created by parsing a byte slice and can be reused multiple times.
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
-pub struct NibbleSlicePlan<N> {
+pub struct NibbleSlicePlan<const N: usize> {
 	bytes: Range<usize>,
 	offset: usize,
-	_marker: PhantomData<N>,
 }
 
 impl<const N: usize> NibbleSlicePlan<N> {
@@ -489,7 +485,7 @@ impl<const N: usize> NibbleSlicePlan<N> {
 
 	/// Returns the nibble length of the slice.
 	pub fn len(&self) -> usize {
-		(self.bytes.end - self.bytes.start) * N::NIBBLE_PER_BYTE - self.offset
+		(self.bytes.end - self.bytes.start) * NibbleOps::<N>::nibble_per_byte() - self.offset
 	}
 
 	/// Build a nibble slice by decoding a byte slice according to the plan. It is the
@@ -571,7 +567,7 @@ impl<const N: usize> NodePlan<N> {
 	/// Build a node by decoding a byte slice according to the node plan. It is the responsibility
 	/// of the caller to ensure that the node plan was created for the argument data, otherwise the
 	/// call may decode incorrectly or panic.
-	pub fn build<'a, 'b>(&'a self, data: &'b [u8]) -> Node<'b, N, N2> {
+	pub fn build<'a, 'b>(&'a self, data: &'b [u8]) -> Node<'b, N> {
 		match self {
 			NodePlan::Empty => Node::Empty,
 			NodePlan::Leaf { partial, value } => Node::Leaf(partial.build(data), value.build(data)),
@@ -626,7 +622,7 @@ pub struct OwnedNode<D: Borrow<[u8]>, const N: usize> {
 
 impl<D: Borrow<[u8]>, const N: usize> OwnedNode<D, N> {
 	/// Construct an `OwnedNode` by decoding an owned data source according to some codec.
-	pub fn new<C: NodeCodec>(data: D) -> core::result::Result<Self, C::Error> {
+	pub fn new<C: NodeCodec<N>>(data: D) -> core::result::Result<Self, C::Error> {
 		let plan = C::decode_plan(data.borrow())?;
 		Ok(OwnedNode { data, plan })
 	}

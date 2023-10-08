@@ -29,21 +29,21 @@ use hash_db::{HashDB, Hasher, Prefix};
 
 type CacheNode<HO> = Option<ChildReference<HO>>;
 
-type ArrayNode<T> = <T as TrieLayout>::ChildRefIndex;
+type ArrayNode<T, const N: usize> = [CacheNode<TrieHash<T, N>>; N];
 
 /// Struct containing iteration cache, can be at most the length of the lowest nibble.
 ///
 /// Note that it is not memory optimal (all depth are allocated even if some are empty due
 /// to node partial).
 /// Three field are used, a cache over the children, an optional associated value and the depth.
-struct CacheAccum<T: TrieLayout, V>(Vec<(ArrayNode<T>, Option<V>, usize)>);
+struct CacheAccum<T: TrieLayout<N>, V, const N: usize>(Vec<(ArrayNode<T, N>, Option<V>, usize)>);
 
 /// Initially allocated cache depth.
 const INITIAL_DEPTH: usize = 10;
 
-impl<T, V> CacheAccum<T, V>
+impl<T, V, const N: usize> CacheAccum<T, V, N>
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	V: AsRef<[u8]>,
 {
 	fn new() -> Self {
@@ -253,9 +253,9 @@ where
 /// This is the main entry point of this module.
 /// Calls to each node occurs ordered by byte key value but with longest keys first (from node to
 /// branch to root), this differs from standard byte array ordering a bit.
-pub fn trie_visit<T, I, A, B, F>(input: I, callback: &mut F)
+pub fn trie_visit<T, I, A, B, F, const N: usize>(input: I, callback: &mut F)
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord,
 	B: AsRef<[u8]>,
@@ -426,13 +426,13 @@ impl<T: TrieLayout<N>, const N: usize> ProcessEncodedNode<TrieHash<T, N>> for Tr
 }
 
 /// Get the trie root node encoding.
-pub struct TrieRootUnhashed<T: TrieLayout> {
+pub struct TrieRootUnhashed<T: TrieLayout<N>, const N: usize> {
 	/// The resulting encoded root.
 	pub root: Option<Vec<u8>>,
 	_ph: PhantomData<T>,
 }
 
-impl<T: TrieLayout> Default for TrieRootUnhashed<T> {
+impl<T: TrieLayout<N>, const N: usize> Default for TrieRootUnhashed<T, N> {
 	fn default() -> Self {
 		TrieRootUnhashed { root: None, _ph: PhantomData }
 	}

@@ -91,7 +91,7 @@ where
 		&mut self,
 		key: &[u8],
 		value: &[u8],
-	) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.insert(hash.as_ref(), value)?;
 		let db = self.raw.db_mut();
@@ -104,7 +104,7 @@ where
 		Ok(out)
 	}
 
-	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L>>, TrieHash<L, N>, CError<L, N>> {
+	fn remove(&mut self, key: &[u8]) -> Result<Option<Value<L, N>>, TrieHash<L, N>, CError<L, N>> {
 		let hash = L::Hash::hash(key);
 		let out = self.raw.remove(hash.as_ref())?;
 
