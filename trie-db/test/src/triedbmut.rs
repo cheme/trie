@@ -62,11 +62,11 @@ fn unpopulate_trie<'db, T: TrieLayout>(
 	true
 }
 
-fn reference_hashed_null_node<T: TrieLayout>() -> <T::Hash as Hasher>::Out {
+fn reference_hashed_null_node<T: TrieLayout<N>, const N: usize>() -> <T::Hash as Hasher>::Out {
 	if T::USE_EXTENSION {
-		<ReferenceNodeCodec<T::Hash> as NodeCodec>::hashed_null_node()
+		<ReferenceNodeCodec<T::Hash, N> as NodeCodec>::hashed_null_node()
 	} else {
-		<ReferenceNodeCodecNoExt<T::Hash> as NodeCodec>::hashed_null_node()
+		<ReferenceNodeCodecNoExt<T::Hash, N> as NodeCodec>::hashed_null_node()
 	}
 }
 

@@ -105,94 +105,64 @@ macro_rules! test_layouts_no_meta {
 #[derive(Default, Clone)]
 pub struct ExtensionLayout;
 
-impl TrieLayout for ExtensionLayout {
+impl TrieLayout<16> for ExtensionLayout {
 	const USE_EXTENSION: bool = true;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = RefHasher;
-	type Codec = ReferenceNodeCodec<RefHasher, Radix16, BitMap16>;
-	type Nibble = Radix16;
-	type ChildRefIndex = ChildIndex16<ChildReference<TrieHash<Self>>>;
-	type NodeIndex = ChildIndex16<NodeHandle<TrieHash<Self>>>;
+	type Codec = ReferenceNodeCodec<RefHasher, 16>;
 }
 
-impl TrieConfiguration for ExtensionLayout {}
+impl TrieConfiguration<16> for ExtensionLayout {}
 
 /// Trie layout without extension nodes, allowing
 /// generic hasher.
-pub struct GenericNoExtensionLayout<H, N, C, B>(PhantomData<(H, N, C, B)>);
+pub struct GenericNoExtensionLayout<H, const N: usize>(PhantomData<H>);
 
-impl<H, N, C, B> Default for GenericNoExtensionLayout<H, N, C, B> {
+impl<H, const N: usize> Default for GenericNoExtensionLayout<H, N> {
 	fn default() -> Self {
 		GenericNoExtensionLayout(PhantomData)
 	}
 }
 
-impl<H, N, C, B> Clone for GenericNoExtensionLayout<H, N, C, B> {
+impl<H, const N: usize> Clone for GenericNoExtensionLayout<H, N> {
 	fn clone(&self) -> Self {
 		GenericNoExtensionLayout(PhantomData)
 	}
 }
 
-impl<
-		H: Hasher,
-		C: ChildIndex<ChildReference<<H as Hasher>::Out>>,
-		B: BitMap<Error = CodecError>,
-		const N: usize,
-	> TrieLayout<N> for GenericNoExtensionLayout<H, C, B, N>
-{
+impl<H: Hasher, const N: usize> TrieLayout<N> for GenericNoExtensionLayout<H, N> {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = H;
-	type Codec = ReferenceNodeCodecNoExt<H, B, N>;
+	type Codec = ReferenceNodeCodecNoExt<H, N>;
 }
 
-impl<
-		H: Hasher,
-		N: NibbleOps,
-		C: ChildIndex<ChildReference<H::Out>>,
-		B: BitMap<Error = CodecError>,
-	> TrieConfiguration for GenericNoExtensionLayout<H, N, C, B>
-{
-}
+impl<H: Hasher, const N: usize> TrieConfiguration<N> for GenericNoExtensionLayout<H, N> {}
 
 /// Trie layout without extension nodes.
-pub type NoExtensionLayout = GenericNoExtensionLayout<
-	RefHasher,
-	Radix16,
-	ChildIndex16<ChildReference<<RefHasher as Hasher>::Out>>,
-	BitMap16,
->;
+pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher, 16>;
 
 /// Trie layout without extension nodes.
-pub type NoExtensionLayoutQuarter = GenericNoExtensionLayout<
-	RefHasher,
-	Radix4,
-	ChildIndex4<ChildReference<<RefHasher as Hasher>::Out>>,
-	BitMap4,
->;
+pub type NoExtensionLayoutQuarter = GenericNoExtensionLayout<RefHasher, 4>;
 
 /// Trie that allows empty values.
 #[derive(Default, Clone)]
-pub struct AllowEmptyLayout;
+pub struct AllowEmptyLayout<const N: usize>;
 
-impl TrieLayout for AllowEmptyLayout {
+impl<const N: usize> TrieLayout<N> for AllowEmptyLayout<N> {
 	const USE_EXTENSION: bool = true;
 	const ALLOW_EMPTY: bool = true;
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = RefHasher;
-	type Codec = ReferenceNodeCodec<RefHasher>;
-	type Codec = ReferenceNodeCodec<RefHasher, Radix16, BitMap16>;
-	type Nibble = Radix16;
-	type ChildRefIndex = ChildIndex16<ChildReference<TrieHash<Self>>>;
-	type NodeIndex = ChildIndex16<NodeHandle<TrieHash<Self>>>;
+	type Codec = ReferenceNodeCodec<RefHasher, N>;
 }
 
-impl<H: Hasher> TrieConfiguration for GenericNoExtensionLayout<H> {}
+impl<H: Hasher, const N: usize> TrieConfiguration<N> for GenericNoExtensionLayout<H, N> {}
 
 /// Trie layout without extension nodes.
-pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher>;
+pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher, 16>;
 
 /// Children bitmap codec for radix 16 trie.
 pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size()]);
@@ -200,20 +170,20 @@ pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size()]);
 /// 1 byte header plus bitmap
 pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size() + 1]);
 
-impl<const N: usize> Default for BuffBitMap<N> {
+impl<const N: usize> Default for BuffBitmap<N> {
 	fn default() -> Self {
 		BuffBitmap([0u8; NibbleOps::<N>::bitmap_size() + 1])
 	}
 }
 
-impl<const N: usize> BitMap<N> {
+impl<const N: usize> Bitmap<N> {
 	pub fn decode(data: &[u8]) -> Result<Self, Self::Error> {
 		if data.len() < NibbleOps::<N>::bitmap_size() {
 			return Err("End of data".into())
 		}
 		let mut v = [0u8; NibbleOps::<N>::bitmap_size()];
 		v[..].copy_from_slice(&data[..]);
-		Ok(BitMap(v))
+		Ok(Bitmap(v))
 	}
 
 	pub fn value_at(&self, i: usize) -> bool {
@@ -234,28 +204,32 @@ impl<const N: usize> BitMap<N> {
 	}
 }
 
-pub type RefTrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, ExtensionLayout>;
-pub type RefTrieDBNoExtQ<'a, 'cache> = trie_db::TrieDB<'a, 'cache, NoExtensionLayoutQuarter>;
-pub type RefTrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, ExtensionLayout>;
-pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, ExtensionLayout>;
-pub type RefTrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, ExtensionLayout>;
-pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout>;
-pub type RefTrieDBMutNoExtQ<'a> = trie_db::TrieDBMut<'a, NoExtensionLayoutQuarter>;
-pub type RefFatDB<'a> = trie_db::FatDB<'a, ExtensionLayout>;
-pub type RefTrieDBMutNoExtBuilder<'a> = trie_db::TrieDBMutBuilder<'a, NoExtensionLayout>;
-pub type RefTrieDBMutAllowEmpty<'a> = trie_db::TrieDBMut<'a, AllowEmptyLayout>;
-pub type RefTrieDBMutAllowEmptyBuilder<'a> = trie_db::TrieDBMutBuilder<'a, AllowEmptyLayout>;
-pub type RefTestTrieDBCache = TestTrieCache<ExtensionLayout>;
-pub type RefTestTrieDBCacheNoExt = TestTrieCache<NoExtensionLayout>;
-pub type RefFatDB<'a, 'cache> = trie_db::FatDB<'a, 'cache, ExtensionLayout>;
-pub type RefFatDBMut<'a> = trie_db::FatDBMut<'a, ExtensionLayout>;
-pub type RefSecTrieDB<'a, 'cache> = trie_db::SecTrieDB<'a, 'cache, ExtensionLayout>;
-pub type RefSecTrieDBMut<'a> = trie_db::SecTrieDBMut<'a, ExtensionLayout>;
-pub type RefLookup<'a, 'cache, Q> = trie_db::Lookup<'a, 'cache, ExtensionLayout, Q>;
-pub type RefLookupNoExt<'a, 'cache, Q> = trie_db::Lookup<'a, 'cache, NoExtensionLayout, Q>;
-pub type RefLookupNoExtQ<'a, 'cache, Q> = trie_db::Lookup<'a, 'cache, NoExtensionLayoutQuarter, Q>;
+pub type RefTrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, ExtensionLayout, 16>;
+pub type RefTrieDBNoExtQ<'a, 'cache> = trie_db::TrieDB<'a, 'cache, NoExtensionLayoutQuarter, 4>;
+pub type RefTrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, ExtensionLayout, 16>;
+pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, ExtensionLayout, 16>;
+pub type RefTrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, ExtensionLayout, 16>;
+pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout, 16>;
+pub type RefTrieDBMutNoExtQ<'a> = trie_db::TrieDBMut<'a, NoExtensionLayoutQuarter, 4>;
+pub type RefFatDB<'a, 'cache> = trie_db::FatDB<'a, 'cache, ExtensionLayout, 16>;
+pub type RefTrieDBMutNoExtBuilder<'a> = trie_db::TrieDBMutBuilder<'a, NoExtensionLayout, 16>;
+pub type RefTrieDBMutAllowEmpty<'a> = trie_db::TrieDBMut<'a, AllowEmptyLayout<16>, 16>;
+pub type RefTrieDBMutAllowEmptyBuilder<'a> =
+	trie_db::TrieDBMutBuilder<'a, AllowEmptyLayout<16>, 16>;
+pub type RefTestTrieDBCache = TestTrieCache<ExtensionLayout, 16>;
+pub type RefTestTrieDBCacheNoExt = TestTrieCache<NoExtensionLayout, 16>;
+pub type RefFatDB<'a, 'cache> = trie_db::FatDB<'a, 'cache, ExtensionLayout, 16>;
+pub type RefFatDBMut<'a> = trie_db::FatDBMut<'a, ExtensionLayout, 16>;
+pub type RefSecTrieDB<'a, 'cache> = trie_db::SecTrieDB<'a, 'cache, ExtensionLayout, 16>;
+pub type RefSecTrieDBMut<'a> = trie_db::SecTrieDBMut<'a, ExtensionLayout, 16>;
+pub type RefLookup<'a, 'cache, Q> = trie_db::Lookup<'a, 'cache, ExtensionLayout, Q, 16>;
+pub type RefLookupNoExt<'a, 'cache, Q> = trie_db::Lookup<'a, 'cache, NoExtensionLayout, Q, 16>;
+pub type RefLookupNoExtQ<'a, 'cache, Q> =
+	trie_db::Lookup<'a, 'cache, NoExtensionLayoutQuarter, Q, 4>;
 
-pub fn reference_trie_root<T: TrieLayout, I, A, B>(input: I) -> <T::Hash as Hasher>::Out
+pub fn reference_trie_root<T: TrieLayout<N>, I, A, B, const N: usize>(
+	input: I,
+) -> <T::Hash as Hasher>::Out
 where
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
@@ -282,9 +256,11 @@ where
 	m.into_iter().collect()
 }
 
-pub fn reference_trie_root_iter_build<T, I, A, B>(input: I) -> <T::Hash as Hasher>::Out
+pub fn reference_trie_root_iter_build<T, I, A, B, const N: usize>(
+	input: I,
+) -> <T::Hash as Hasher>::Out
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
@@ -359,20 +335,20 @@ enum NodeKindNoExt {
 /// For stream variant with extension.
 fn branch_node(has_value: bool, has_children: impl Iterator<Item = bool>) -> [u8; 3] {
 	let mut result = [0, 0, 0];
-	branch_node_buffered::<BitMap16, _>(has_value, has_children, &mut result[..]);
+	branch_node_buffered::<Bitmap16, _>(has_value, has_children, &mut result[..]);
 	result
 }
 
 /// Encoding of branch header and children bitmap for any radix.
 /// For codec/stream variant with extension.
-fn branch_node_buffered<BITMAP: BitMap, I: Iterator<Item = bool>>(
+fn branch_node_buffered<I: Iterator<Item = bool>, const N: usize>(
 	has_value: bool,
 	has_children: I,
 	output: &mut [u8],
 ) {
 	let first = if has_value { BRANCH_NODE_WITH_VALUE } else { BRANCH_NODE_NO_VALUE };
 	output[0] = first;
-	BITMAP::encode(has_children, &mut output[1..]);
+	Bitmap::<N>::encode(has_children, &mut output[1..]);
 }
 
 /// Encoding of children bitmap (for trie stream radix 16).
@@ -571,14 +547,14 @@ impl Decode for NodeHeaderNoExt {
 
 /// Simple reference implementation of a `NodeCodec`.
 #[derive(Default, Clone)]
-pub struct ReferenceNodeCodec<H, I, BITMAP>(PhantomData<(H, I, BITMAP)>);
+pub struct ReferenceNodeCodec<H, const N: usize>(PhantomData<H>);
 
 /// Simple reference implementation of a `NodeCodec`.
 /// Even if implementation follows initial specification of
 /// https://github.com/w3f/polkadot-re-spec/issues/8, this may
 /// not follow it in the future, it is mainly the testing codec without extension node.
 #[derive(Default, Clone)]
-pub struct ReferenceNodeCodecNoExt<H, BITMAP, const N: usize>(PhantomData<(H, BITMAP)>);
+pub struct ReferenceNodeCodecNoExt<H, const N: usize>(PhantomData<H>);
 
 // TODO used??
 fn partial_to_key<const N: usize>(partial: Partial, offset: u8, over: u8) -> Vec<u8> {
@@ -587,13 +563,13 @@ fn partial_to_key<const N: usize>(partial: Partial, offset: u8, over: u8) -> Vec
 	assert!(nibble_count < over as usize);
 	let mut output = vec![offset + nibble_count as u8];
 	if number_nibble_encoded > 0 {
-		output.push(N::pad_right(number_nibble_encoded as u8, (partial.0).1));
+		output.push(NibbleOps::<N>::pad_right(number_nibble_encoded as u8, (partial.0).1));
 	}
 	output.extend_from_slice(&partial.1[..]);
 	output
 }
 
-fn partial_from_iterator_to_key<N: NibbleOps, I: Iterator<Item = u8>>(
+fn partial_from_iterator_to_key<I: Iterator<Item = u8>, const N: usize>(
 	partial: I,
 	nibble_count: usize,
 	offset: u8,
@@ -606,7 +582,7 @@ fn partial_from_iterator_to_key<N: NibbleOps, I: Iterator<Item = u8>>(
 	output
 }
 
-fn partial_from_iterator_encode<N: NibbleOps, I: Iterator<Item = u8>>(
+fn partial_from_iterator_encode<I: Iterator<Item = u8>, const N: usize>(
 	partial: I,
 	nibble_count: usize,
 	node_kind: NodeKindNoExt,
@@ -622,28 +598,6 @@ fn partial_from_iterator_encode<N: NibbleOps, I: Iterator<Item = u8>>(
 			NodeHeaderNoExt::Branch(false, nibble_count).encode_to(&mut output),
 	};
 	output.extend(partial);
-	output
-}
-
-// TODO used?
-fn partial_encode<N: NibbleOps>(partial: Partial, node_kind: NodeKindNoExt) -> Vec<u8> {
-	let number_nibble_encoded = (partial.0).0 as usize;
-	let nibble_count = partial.1.len() * N + number_nibble_encoded;
-
-	let nibble_count = ::std::cmp::min(NIBBLE_SIZE_BOUND_NO_EXT, nibble_count);
-
-	let mut output = Vec::with_capacity(3 + partial.1.len());
-	match node_kind {
-		NodeKindNoExt::Leaf => NodeHeaderNoExt::Leaf(nibble_count).encode_to(&mut output),
-		NodeKindNoExt::BranchWithValue =>
-			NodeHeaderNoExt::Branch(true, nibble_count).encode_to(&mut output),
-		NodeKindNoExt::BranchNoValue =>
-			NodeHeaderNoExt::Branch(false, nibble_count).encode_to(&mut output),
-	};
-	if number_nibble_encoded > 0 {
-		output.push(N::pad_right(number_nibble_encoded as u8, (partial.0).1));
-	}
-	output.extend_from_slice(&partial.1[..]);
 	output
 }
 
@@ -693,16 +647,13 @@ impl<'a> Input for ByteSliceInput<'a> {
 }
 
 // NOTE: what we'd really like here is:
-// `impl<H: Hasher> NodeCodec<H> for RlpNodeCodec<H> where <KeccakHasher as Hasher>::Out: Decodable`
+// `impl<H: Hasher> NodeCodec<H> for RlpNodeCodec<H> where <RefHasher as Hasher>::Out: Decodable`
 // but due to the current limitations of Rust const evaluation we can't do
-// `const HASHED_NULL_NODE: <KeccakHasher as Hasher>::Out = <KeccakHasher as Hasher>::Out( … … )`.
+// `const HASHED_NULL_NODE: <RefHasher as Hasher>::Out = <RefHasher as Hasher>::Out( … … )`.
 // Perhaps one day soon?
-impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
-	for ReferenceNodeCodec<H, N, BITMAP>
-{
+impl<H: Hasher, const N: usize> NodeCodec for ReferenceNodeCodec<H, N> {
 	type Error = CodecError;
 	type HashOut = H::Out;
-	type Nibble = N;
 
 	fn hashed_null_node() -> <H as Hasher>::Out {
 		H::hash(<Self as NodeCodec>::empty_node())
@@ -713,8 +664,8 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 		match NodeHeader::decode(&mut input)? {
 			NodeHeader::Null => Ok(NodePlan::Empty),
 			NodeHeader::Branch(has_value) => {
-				let bitmap_range = input.take(BITMAP::ENCODED_LEN)?;
-				let bitmap = BITMAP::decode(&data[bitmap_range])?;
+				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size)?;
+				let bitmap = Bitmap::<N>::decode(&data[bitmap_range])?;
 
 				let value = if has_value {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
@@ -755,7 +706,7 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 			},
 			NodeHeader::Extension(nibble_count) => {
 				let partial = input.take((nibble_count + (N - 1)) / N)?;
-				let partial_padding = N::number_padding(nibble_count);
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let range = input.take(count)?;
 				let child = if count == H::LENGTH {
@@ -770,7 +721,7 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 			},
 			NodeHeader::Leaf(nibble_count) => {
 				let partial = input.take((nibble_count + (N - 1)) / N)?;
-				let partial_padding = N::number_padding(nibble_count);
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = input.take(count)?;
 				Ok(NodePlan::Leaf {
@@ -825,8 +776,8 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 		children: impl Iterator<Item = impl Borrow<Option<ChildReference<Self::HashOut>>>>,
 		maybe_value: Option<Value>,
 	) -> Vec<u8> {
-		let mut output = vec![0; BITMAP::ENCODED_LEN + 1];
-		let mut prefix: BITMAP::Buffer = Default::default();
+		let mut output = vec![0; NibbleOps::<N>::bitmap_size() + 1];
+		let mut prefix: BuffBitmap<N> = Default::default();
 		let have_value = match maybe_value {
 			Some(Value::Inline(value)) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -847,8 +798,8 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 			},
 			None => false,
 		});
-		branch_node_buffered::<BITMAP, _>(have_value, has_children, prefix.as_mut());
-		output[0..BITMAP::ENCODED_LEN + 1].copy_from_slice(prefix.as_ref());
+		branch_node_buffered::<_, N>(have_value, has_children, prefix.as_mut());
+		output[0..prefix.0.len()].copy_from_slice(prefix.0.as_ref());
 		output
 	}
 
@@ -862,9 +813,7 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 	}
 }
 
-impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
-	for ReferenceNodeCodecNoExt<H, BITMAP, N>
-{
+impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	type Error = CodecError;
 	type HashOut = <H as Hasher>::Out;
 
@@ -885,14 +834,14 @@ impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
 				let padding_length = N - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
-					N::pad_left(padding_length as u8, data[input.offset]) != 0
+					NibbleOps::<N>::pad_left(padding_length as u8, data[input.offset]) != 0
 				{
 					return Err(CodecError::from("Bad format"))
 				}
 				let partial = input.take((nibble_count + (N - 1)) / N)?;
-				let partial_padding = N::number_padding(nibble_count);
-				let bitmap_range = input.take(BITMAP::ENCODED_LEN)?;
-				let bitmap = BITMAP::decode(&data[bitmap_range])?;
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
+				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size())?;
+				let bitmap = Bitmap::<N>::decode(&data[bitmap_range])?;
 				let value = if has_value {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 					Some(ValuePlan::Inline(input.take(count)?))
@@ -991,8 +940,8 @@ impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
 			)
 		};
 		let bitmap_index = output.len();
-		let mut bitmap: BITMAP::Buffer = Default::default();
-		(0..BITMAP_LENGTH).for_each(|_| output.push(0));
+		let mut bitmap: BuffBitmap = Default::default();
+		(0..NibbleOps::<N>::bitmap_size()).for_each(|_| output.push(0));
 		match maybe_value {
 			Some(Value::Inline(value)) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -1002,7 +951,7 @@ impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
 			None => (),
 		}
 
-		BITMAP::encode(
+		Bitmap::<N>::encode(
 			children.map(|maybe_child| match maybe_child.borrow() {
 				Some(ChildReference::Hash(h)) => {
 					h.as_ref().encode_to(&mut output);
@@ -1016,8 +965,8 @@ impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
 			}),
 			bitmap.as_mut(),
 		);
-		output[bitmap_index..bitmap_index + BITMAP::ENCODED_LEN]
-			.copy_from_slice(&bitmap.as_ref()[..BITMAP::ENCODED_LEN]);
+		output[bitmap_index..bitmap_index + NibbleOps::<N>::bitmap_size()]
+			.copy_from_slice(&bitmap.as_ref()[..NibbleOps::<N>::bitmap_size()]);
 		output
 	}
 }
@@ -1137,8 +1086,8 @@ where
 /// This uses a radix 4 trie.
 pub fn compare_implementations_no_extension_q(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
-	mut memdb: impl hash_db::HashDB<KeccakHasher, DBValue>,
-	mut hashdb: impl hash_db::HashDB<KeccakHasher, DBValue>,
+	mut memdb: impl hash_db::HashDB<RefHasher, DBValue>,
+	mut hashdb: impl hash_db::HashDB<RefHasher, DBValue>,
 ) {
 	let root_new = {
 		let mut cb = TrieBuilder::new(&mut hashdb);
@@ -1279,10 +1228,10 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
 /// Example trie cache implementation.
 ///
 /// Should not be used for anything in production.
-pub struct TestTrieCache<L: TrieLayout> {
+pub struct TestTrieCache<L: TrieLayout<N>, const N: usize> {
 	/// In a real implementation we need to make sure that this is unique per trie root.
-	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L>>>,
-	node_cache: HashMap<TrieHash<L>, NodeOwned<TrieHash<L>>>,
+	value_cache: HashMap<Vec<u8>, trie_db::CachedValue<TrieHash<L, N>>>,
+	node_cache: HashMap<TrieHash<L, N>, NodeOwned<TrieHash<L, N>, N>>,
 }
 
 impl<L: TrieLayout> TestTrieCache<L> {
@@ -1368,13 +1317,12 @@ mod tests {
 		const N: usize = 16;
 		// + 1 for 0 added byte of nibble encode
 		let input = vec![0u8; (NIBBLE_SIZE_BOUND_NO_EXT as usize + 1) / 2 + 1];
-		let enc = <ReferenceNodeCodecNoExt<KeccakHasher, BitMap16, N> as NodeCodec>::leaf_node(
+		let enc = <ReferenceNodeCodecNoExt<RefHasher, N> as NodeCodec<N>>::leaf_node(
 			input.iter().cloned(),
 			input.len() * N,
 			Value::Inline(&[1]),
 		);
-		let dec = <ReferenceNodeCodecNoExt<KeccakHasher, BitMap16, N> as NodeCodec>::decode(&enc)
-			.unwrap();
+		let dec = <ReferenceNodeCodecNoExt<RefHasher, N> as NodeCodec<N>>::decode(&enc).unwrap();
 		let o_sl = if let Node::Leaf(sl, _) = dec { Some(sl) } else { None };
 		assert!(o_sl.is_some());
 	}
