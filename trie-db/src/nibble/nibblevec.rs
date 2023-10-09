@@ -32,7 +32,7 @@ impl<const N: usize> Default for NibbleVec<N> {
 impl<const N: usize> NibbleVec<N> {
 	/// Make a new `NibbleVec`.
 	pub fn new() -> Self {
-		NibbleVec { inner: BackingByteVec::new(), len: 0, _marker: PhantomData }
+		NibbleVec { inner: BackingByteVec::new(), len: 0 }
 	}
 
 	/// Length of the `NibbleVec`.
@@ -49,14 +49,14 @@ impl<const N: usize> NibbleVec<N> {
 	/// Try to get the nibble at the given offset.
 	#[inline]
 	pub fn at(&self, idx: usize) -> u8 {
-		let ix = idx / NibbleOps::<N>::nibble_per_byte();
-		let pad = idx % NibbleOps::<N>::nibble_per_byte();
+		let ix = idx / N;
+		let pad = idx % N;
 		NibbleOps::<N>::at_left(pad as u8, self.inner[ix])
 	}
 
 	/// Push a nibble onto the `NibbleVec`. Ignores the high 4 bits.
 	pub fn push(&mut self, nibble: u8) {
-		let i = self.len % NibbleOps::<N>::nibble_per_byte();
+		let i = self.len % N;
 
 		if i == 0 {
 			self.inner.push(NibbleOps::<N>::push_at_left(0, nibble, 0));
@@ -77,7 +77,7 @@ impl<const N: usize> NibbleVec<N> {
 		}
 		let byte = self.inner.pop().expect("len != 0; inner has last elem; qed");
 		self.len -= 1;
-		let i_new = self.len % NibbleOps::<N>::nibble_per_byte();
+		let i_new = self.len % N;
 		if i_new != 0 {
 			self.inner.push(NibbleOps::<N>::pad_left(i_new as u8, byte));
 		}
@@ -94,13 +94,12 @@ impl<const N: usize> NibbleVec<N> {
 			return
 		}
 		let end = self.len - n;
-		let end_index = end / NibbleOps::<N>::nibble_per_byte() +
-			if end % NibbleOps::<N>::nibble_per_byte() == 0 { 0 } else { 1 };
+		let end_index = end / N + if end % N == 0 { 0 } else { 1 };
 		(end_index..self.inner.len()).for_each(|_| {
 			self.inner.pop();
 		});
 		self.len = end;
-		let pos = self.len % NibbleOps::<N>::nibble_per_byte();
+		let pos = self.len % N;
 		if pos != 0 {
 			let kl = self.inner.len() - 1;
 			self.inner[kl] = NibbleOps::<N>::pad_left(pos as u8, self.inner[kl]);
@@ -109,8 +108,8 @@ impl<const N: usize> NibbleVec<N> {
 
 	/// Get `Prefix` representation of this `NibbleVec`.
 	pub fn as_prefix(&self) -> Prefix {
-		let split = self.len / NibbleOps::<N>::nibble_per_byte();
-		let pos = (self.len % NibbleOps::<N>::nibble_per_byte()) as u8;
+		let split = self.len / N;
+		let pos = (self.len % N) as u8;
 		if pos == 0 {
 			(&self.inner[..split], (0, 0))
 		} else {
@@ -125,9 +124,9 @@ impl<const N: usize> NibbleVec<N> {
 		}
 
 		let final_len = self.len + v.len;
-		let offset = self.len % NibbleOps::<N>::nibble_per_byte();
-		let final_offset = final_len % NibbleOps::<N>::nibble_per_byte();
-		let last_index = self.len / NibbleOps::<N>::nibble_per_byte();
+		let offset = self.len % N;
+		let final_offset = final_len % N;
+		let last_index = self.len / N;
 		if offset > 0 {
 			let (s1, s2) = NibbleOps::<N>::split_shifts(offset);
 			self.inner[last_index] =
@@ -146,26 +145,23 @@ impl<const N: usize> NibbleVec<N> {
 	/// Append a `Partial`. Can be slow (alignement of partial).
 	pub fn append_partial(&mut self, (start_byte, sl): Partial) {
 		for i in (1..=start_byte.0).rev() {
-			let ix = NibbleOps::<N>::nibble_per_byte() - i as usize;
+			let ix = N - i as usize;
 			self.push(NibbleOps::<N>::at_left(ix as u8, start_byte.1));
 		}
-		let pad = self.inner.len() * NibbleOps::<N>::nibble_per_byte() - self.len;
+		let pad = self.inner.len() * N - self.len;
 		if pad == 0 {
 			self.inner.extend_from_slice(&sl[..]);
 		} else {
 			let kend = self.inner.len() - 1;
 			if sl.len() > 0 {
-				self.inner[kend] = NibbleOps::<N>::pad_left(
-					(NibbleOps::<N>::nibble_per_byte() - pad) as u8,
-					self.inner[kend],
-				);
+				self.inner[kend] = NibbleOps::<N>::pad_left((N - pad) as u8, self.inner[kend]);
 				let (s1, s2) = NibbleOps::<N>::split_shifts(pad);
 				self.inner[kend] |= sl[0] >> s1;
 				(0..sl.len() - 1).for_each(|i| self.inner.push(sl[i] << s2 | sl[i + 1] >> s1));
 				self.inner.push(sl[sl.len() - 1] << s2);
 			}
 		}
-		self.len += sl.len() * NibbleOps::<N>::nibble_per_byte();
+		self.len += sl.len() * N;
 	}
 
 	/// Utility function for chaining two optional appending
@@ -214,7 +210,7 @@ impl<const N: usize> NibbleVec<N> {
 
 	/// Try to treat this `NibbleVec` as a `NibbleSlice`. Works only if there is no padding.
 	pub fn as_nibbleslice(&self) -> Option<NibbleSlice<N>> {
-		if self.len % NibbleOps::<N>::nibble_per_byte() == 0 {
+		if self.len % N == 0 {
 			Some(NibbleSlice::new(self.inner()))
 		} else {
 			None
@@ -226,11 +222,11 @@ impl<const N: usize> NibbleVec<N> {
 		if self.len() < other.len() {
 			return false
 		}
-		let byte_len = other.len() / NibbleOps::<N>::nibble_per_byte();
+		let byte_len = other.len() / N;
 		if &self.inner[..byte_len] != &other.inner[..byte_len] {
 			return false
 		}
-		for pad in 0..(other.len() - byte_len * NibbleOps::<N>::nibble_per_byte()) {
+		for pad in 0..(other.len() - byte_len * N) {
 			let self_nibble = NibbleOps::<N>::at_left(pad as u8, self.inner[byte_len]);
 			let other_nibble = NibbleOps::<N>::at_left(pad as u8, other.inner[byte_len]);
 			if self_nibble != other_nibble {
@@ -261,7 +257,7 @@ impl<const N: usize> NibbleVec<N> {
 
 	/// Return an iterator over `Partial` bytes representation.
 	pub fn right_iter<'a>(&'a self) -> impl Iterator<Item = u8> + 'a {
-		let shift = self.len % NibbleOps::<N>::nibble_per_byte();
+		let shift = self.len % N;
 		let require_padding = shift != 0;
 		let mut ix = 0;
 		let inner = &self.inner;
@@ -326,15 +322,15 @@ mod tests {
 	fn push_pop_inner<const N: usize>() {
 		let mut v = NibbleVec::<N>::new();
 
-		for i in 0..(NibbleOps::<N>::nibble_per_byte() * 3) {
-			let iu8 = (i % NibbleOps::<N>::nibble_per_byte()) as u8;
+		for i in 0..(N * 3) {
+			let iu8 = (i % N) as u8;
 			v.push(iu8);
 			assert_eq!(v.len() - 1, i);
 			assert_eq!(v.at(i), iu8);
 		}
 
-		for i in (0..(NibbleOps::<N>::nibble_per_byte() * 3)).rev() {
-			let iu8 = (i % NibbleOps::<N>::nibble_per_byte()) as u8;
+		for i in (0..(N * 3)).rev() {
+			let iu8 = (i % N) as u8;
 			let a = v.pop();
 			assert_eq!(a, Some(iu8));
 			assert_eq!(v.len(), i);

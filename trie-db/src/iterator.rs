@@ -51,7 +51,7 @@ impl<L: TrieLayout<N>, const N: usize> Crumb<L, N> {
 			(Status::At, NodePlan::NibbledBranch { .. }) => Status::AtChild(0),
 			(Status::AtChild(x), NodePlan::Branch { .. }) |
 			(Status::AtChild(x), NodePlan::NibbledBranch { .. })
-				if x < (NibbleOps::<N>::nibble_length() - 1) =>
+				if x < (N - 1) =>
 				Status::AtChild(x + 1),
 			_ => Status::Exiting,
 		}
@@ -120,7 +120,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 		key: &[u8],
 		prefix: Prefix,
 	) -> Result<DBValue, TrieHash<L, N>, CError<L, N>> {
-		let mut res = TrieHash::<L>::default();
+		let mut res = TrieHash::<L, N>::default();
 		res.as_mut().copy_from_slice(key);
 		db.fetch_value(res, prefix)
 	}
@@ -199,7 +199,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 						crumb.status = Status::AtChild(i as usize);
 						self.key_nibbles.push(i);
 
-						if let Some(child) = &children.at(i as usize) {
+						if let Some(child) = &children[i as usize] {
 							full_key_nibbles += 1;
 							partial = partial.mid(1);
 
@@ -220,7 +220,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 							if slice < partial {
 								crumb.status = Status::Exiting;
 								self.key_nibbles.append_partial(slice.right());
-								self.key_nibbles.push((NibbleOps::<N>::nibble_length() - 1) as u8);
+								self.key_nibbles.push((N - 1) as u8);
 								return Ok(false)
 							}
 							return Ok(slice.starts_with(&partial))
@@ -238,7 +238,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 						self.key_nibbles.append_partial(slice.right());
 						self.key_nibbles.push(i);
 
-						if let Some(child) = &children.at(i as usize) {
+						if let Some(child) = &children[i as usize] {
 							full_key_nibbles += 1;
 							partial = partial.mid(1);
 
@@ -323,7 +323,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 		// Now seek forward again.
 		self.seek(db, seek)?;
 
-		let prefix_len = prefix.len() * NibbleOps::<N>::nibble_per_byte();
+		let prefix_len = prefix.len() * N;
 		let mut len = 0;
 		// look first prefix in trail
 		for i in 0..self.trail.len() {
@@ -424,7 +424,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 				},
 				(Status::AtChild(i), NodePlan::Branch { children, .. }) |
 				(Status::AtChild(i), NodePlan::NibbledBranch { children, .. }) => {
-					if let Some(child) = &children.at(i) {
+					if let Some(child) = &children[i] {
 						self.key_nibbles.pop();
 						self.key_nibbles.push(i as u8);
 
@@ -457,7 +457,10 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 	/// Fetches the next trie item.
 	///
 	/// Must be called with the same `db` as when the iterator was created.
-	pub fn next_item(&mut self, db: &TrieDB<L, N>) -> Option<TrieItem<TrieHash<L, N>, CError<L, N>>> {
+	pub fn next_item(
+		&mut self,
+		db: &TrieDB<L, N>,
+	) -> Option<TrieItem<TrieHash<L, N>, CError<L, N>>> {
 		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,

@@ -37,7 +37,8 @@ struct StackEntry<'a, L: TrieLayout<N>, const N: usize> {
 	/// Whether the value should be omitted in the generated proof.
 	omit_value: bool,
 	/// The next entry in the stack is a child of the preceding entry at this index. For branch
-	/// nodes, the index is in [0, nibble_length()] and for extension nodes, the index is in [0, 1].
+	/// nodes, the index is in [0, nibble_length()] and for extension nodes, the index is in [0,
+	/// 1].
 	child_index: usize,
 	/// The child references to use in constructing the proof nodes.
 	children: Vec<Option<ChildReference<TrieHash<L, N>>>>,
@@ -57,7 +58,8 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 		let children_len = match node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } => 0,
 			NodePlan::Extension { .. } => 1,
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => NibbleOps::<N>::nibble_length(),
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } =>
+				NibbleOps::<N>::nibble_length(),
 		};
 		Ok(StackEntry {
 			prefix,

@@ -35,31 +35,30 @@ const TWO_EXP: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
 pub struct NibbleOps<const N: usize>;
 impl<const N: usize> NibbleOps<N> {
 	/// Single nibble length in bit.
-	const fn bit_per_nibble() -> usize {
+	pub const fn bit_per_nibble() -> usize {
 		N.trailing_zeros() as usize
-	}
-	/// Number of nibble per byte.
-	const fn nibble_per_byte() -> usize {
-		8 / Self::bit_per_nibble()
 	}
 
 	/// Padding bitmasks, internally use for working on padding byte.
-	/// Length of this array is `Self::BIT_PER_NIBBLE`.
+	/// Length of this array is `Self::bit_per_nibble`.
 	/// The first element of each pair is a bit mask to apply,
 	/// the second element is a right shift to apply in some case.
 	///	const PADDING_BITMASK: &'static [(u8, usize)] = &[
 	/// Similar to following const function.
 	/// ```rust
-	/// const BIT_PER_NIBBLE: usize = 4;
+	/// const bit_per_nibble: usize = 4;
 	/// const fn padding_bitmask(ix: usize) -> (u8, usize) {
-	///   //assert!(ix < 8 / BIT_PER_NIBBLE);
-	///   let offset = BIT_PER_NIBBLE * ix;
+	///   //assert!(ix < 8 / bit_per_nibble);
+	///   let offset = bit_per_nibble * ix;
 	///   (255u8 >> offset, 8 - offset)
 	/// }
 	/// ```
-	const PADDING_BITMASK: &'static [(u8, usize)]; // TODO EMCH rewrite to remove this const (does not help readability).
-	/// Last nibble index as u8, a convenience constant for iteration on all nibble.
-	const LAST_NIBBLE_INDEX: u8 = (Self::NIBBLE_PER_BYTE - 1) as u8;
+	//	const PADDING_BITMASK: &'static [(u8, usize)]; // TODO EMCH rewrite to remove this const
+	// (does not help readability).
+	pub const fn padding_bitmask(ix: usize) -> (u8, usize) {
+		let offset = Self::bit_per_nibble() * ix;
+		(255u8 >> offset, 8 - offset)
+	}
 
 	/// Pad left aligned representation for a given number of element.
 	/// Mask a byte from a `ix` > 0 (ix being content).
@@ -67,8 +66,8 @@ impl<const N: usize> NibbleOps<N> {
 	#[inline(always)]
 	pub fn pad_left(ix: u8, b: u8) -> u8 {
 		debug_assert!(ix > 0); // 0 does not pad anything TODO EMCH allow 0
-		b & !Self::PADDING_BITMASK[ix as usize].0
-		//b & !(255u8 >> (Self::BIT_PER_NIBBLE * ix)) // TODO EMCH compare perf with that
+		b & !Self::padding_bitmask(ix as usize).0
+		//b & !(255u8 >> (Self::bit_per_nibble * ix)) // TODO EMCH compare perf with that
 	}
 
 	/// Pad right aligned representation for a given number of element.
@@ -80,8 +79,8 @@ impl<const N: usize> NibbleOps<N> {
 		// it means there is calls to pad_right where we do not use the number
 		// of elements!
 		if ix > 0 {
-			b & !(255u8 << (Self::BIT_PER_NIBBLE * (Self::NIBBLE_PER_BYTE - ix as usize)))
-		//b & Self::PADDING_BITMASK[Self::NIBBLE_PER_BYTE - ix as usize].0
+			b & !(255u8 << (Self::bit_per_nibble() * (N - ix as usize)))
+		//b & Self::PADDING_BITMASK[N - ix as usize].0
 		} else {
 			b
 		}
@@ -91,14 +90,14 @@ impl<const N: usize> NibbleOps<N> {
 	#[inline(always)]
 	pub fn at_left(ix: u8, b: u8) -> u8 {
 		// TODO EMCH compare perf without padding bitmask
-		(b & Self::PADDING_BITMASK[ix as usize].0) >> Self::PADDING_BITMASK[ix as usize].1
+		(b & Self::padding_bitmask(ix as usize).0) >> Self::padding_bitmask(ix as usize).1
 	}
 
 	/// Get u8 nibble value at a given index in a left aligned array.
 	#[inline(always)]
 	pub fn left_nibble_at(v1: &[u8], mut ix: usize) -> u8 {
-		let pad = ix % Self::NIBBLE_PER_BYTE;
-		ix = ix / Self::NIBBLE_PER_BYTE;
+		let pad = ix % N;
+		ix = ix / N;
 		Self::at_left(pad as u8, v1[ix])
 	}
 
@@ -113,14 +112,14 @@ impl<const N: usize> NibbleOps<N> {
 	/// Note that existing value must be null (padded with 0).
 	#[inline(always)]
 	pub fn push_at_left(ix: u8, v: u8, into: u8) -> u8 {
-		//into | (v << (8 - (BIT_PER_NIBBLE * ix)))
-		into | (v << Self::PADDING_BITMASK[ix as usize].1)
+		//into | (v << (8 - (bit_per_nibble * ix)))
+		into | (v << Self::padding_bitmask(ix as usize).1)
 	}
 
 	#[inline]
 	/// Calculate the number of needed padding for an array of nibble length `i`.
 	pub fn number_padding(i: usize) -> usize {
-		(Self::NIBBLE_PER_BYTE - (i % Self::NIBBLE_PER_BYTE)) % Self::NIBBLE_PER_BYTE
+		(N - (i % N)) % N
 	}
 
 	/// Count the biggest common depth between two left aligned packed nibble slice.
@@ -128,21 +127,21 @@ impl<const N: usize> NibbleOps<N> {
 		let upper_bound = cmp::min(v1.len(), v2.len());
 		for a in 0..upper_bound {
 			if v1[a] != v2[a] {
-				return a * Self::NIBBLE_PER_BYTE + Self::left_common(v1[a], v2[a])
+				return a * N + Self::left_common(v1[a], v2[a])
 			}
 		}
-		upper_bound * Self::NIBBLE_PER_BYTE
+		upper_bound * N
 	}
 
 	/// Calculate the number of common nibble between two left aligned bytes.
 	#[inline(always)]
 	pub fn left_common(a: u8, b: u8) -> usize {
-		((a ^ b).leading_zeros() as usize) / Self::BIT_PER_NIBBLE
+		((a ^ b).leading_zeros() as usize) / NibbleOps::<N>::bit_per_nibble()
 		/*		let mut i = 0;
-		while i < Self::NIBBLE_PER_BYTE {
+		while i < N {
 			//if (a >> Self::PADDING_BITMASK[i].1)
 			//	!= (b >> Self::PADDING_BITMASK[i].1) {
-			let offset = i * Self::BIT_PER_NIBBLE;
+			let offset = i * Self::bit_per_nibble;
 			if (a >> offset) != (b >> offset) {
 				break;
 			}
@@ -158,7 +157,7 @@ impl<const N: usize> NibbleOps<N> {
 	#[inline(always)]
 	pub fn split_shifts(pad: usize) -> (usize, usize) {
 		debug_assert!(pad > 0);
-		let s1 = Self::PADDING_BITMASK[pad - 1].1;
+		let s1 = Self::padding_bitmask(pad - 1).1;
 		let s2 = 8 - s1;
 		(s1, s2)
 	}

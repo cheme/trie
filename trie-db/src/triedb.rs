@@ -247,7 +247,7 @@ where
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
-		Lookup::<L, Q> {
+		Lookup::<L, Q, N> {
 			db: self.db,
 			query,
 			hash: *self.root,
@@ -266,7 +266,7 @@ where
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
-		Lookup::<L, _> {
+		Lookup::<L, _, N> {
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,
@@ -351,7 +351,7 @@ where
 					disp.finish()
 				},
 				Node::Branch(ref nodes, ref value) => {
-					let nodes: Vec<TrieAwareDebugNode<L>> = nodes
+					let nodes: Vec<TrieAwareDebugNode<L, N>> = nodes
 						.iter()
 						.into_iter()
 						.enumerate()
@@ -373,7 +373,7 @@ where
 					disp.finish()
 				},
 				Node::NibbledBranch(slice, nodes, value) => {
-					let nodes: Vec<TrieAwareDebugNode<L>> = nodes
+					let nodes: Vec<TrieAwareDebugNode<L, N>> = nodes
 						.iter()
 						.enumerate()
 						.filter_map(|(i, n)| n.map(|n| (i, n)))

@@ -69,10 +69,7 @@ pub use self::{
 	fatdb::{FatDB, FatDBIterator},
 	fatdbmut::FatDBMut,
 	lookup::Lookup,
-	nibble::{
-		ChildIndex, ChildIndex16, ChildIndex2, ChildIndex256, ChildIndex4, ChildSliceIndex,
-		NibbleOps, NibbleSlice, NibbleVec, Radix16, Radix2, Radix256, Radix4,
-	},
+	nibble::{NibbleOps, NibbleSlice, NibbleVec},
 	recorder::Recorder,
 	sectriedb::SecTrieDB,
 	sectriedbmut::SecTrieDBMut,
@@ -489,9 +486,9 @@ impl TrieFactory {
 		root: &'db mut TrieHash<L, N>,
 	) -> Box<dyn TrieMut<L, N> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::new(db, root).build()),
-			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::new(db, root)),
-			TrieSpec::Fat => Box::new(FatDBMut::<L>::new(db, root)),
+			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L, N>::new(db, root).build()),
+			TrieSpec::Secure => Box::new(SecTrieDBMut::<L, N>::new(db, root)),
+			TrieSpec::Fat => Box::new(FatDBMut::<L, N>::new(db, root)),
 		}
 	}
 
@@ -502,9 +499,10 @@ impl TrieFactory {
 		root: &'db mut TrieHash<L, N>,
 	) -> Box<dyn TrieMut<L, N> + 'db> {
 		match self.spec {
-			TrieSpec::Generic => Box::new(TrieDBMutBuilder::<L>::from_existing(db, root).build()),
-			TrieSpec::Secure => Box::new(SecTrieDBMut::<L>::from_existing(db, root)),
-			TrieSpec::Fat => Box::new(FatDBMut::<L>::from_existing(db, root)),
+			TrieSpec::Generic =>
+				Box::new(TrieDBMutBuilder::<L, N>::from_existing(db, root).build()),
+			TrieSpec::Secure => Box::new(SecTrieDBMut::<L, N>::from_existing(db, root)),
+			TrieSpec::Fat => Box::new(FatDBMut::<L, N>::from_existing(db, root)),
 		}
 	}
 
@@ -546,8 +544,8 @@ pub trait TrieConfiguration<const N: usize>: Sized + TrieLayout<N> {
 		A: AsRef<[u8]> + Ord,
 		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieBuilder::<Self, DB>::new(db);
-		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
+		let mut cb = TrieBuilder::<Self, DB, N>::new(db);
+		trie_visit::<Self, _, _, _, _, N>(input.into_iter(), &mut cb);
 		cb.root.unwrap_or_default()
 	}
 	/// Determines a trie root given its ordered contents, closed form.
@@ -557,8 +555,8 @@ pub trait TrieConfiguration<const N: usize>: Sized + TrieLayout<N> {
 		A: AsRef<[u8]> + Ord,
 		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieRoot::<Self>::default();
-		trie_visit::<Self, _, _, _, _>(input.into_iter(), &mut cb);
+		let mut cb = TrieRoot::<Self, N>::default();
+		trie_visit::<Self, _, _, _, _, N>(input.into_iter(), &mut cb);
 		cb.root.unwrap_or_default()
 	}
 	/// Determines a trie root node's data given its ordered contents, closed form.
@@ -568,7 +566,7 @@ pub trait TrieConfiguration<const N: usize>: Sized + TrieLayout<N> {
 		A: AsRef<[u8]> + Ord,
 		B: AsRef<[u8]>,
 	{
-		let mut cb = TrieRootUnhashed::<Self>::default();
+		let mut cb = TrieRootUnhashed::<Self, N>::default();
 		trie_visit::<Self, _, _, _, _, N>(input.into_iter(), &mut cb);
 		cb.root.unwrap_or_default()
 	}

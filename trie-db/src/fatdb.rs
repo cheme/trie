@@ -86,7 +86,7 @@ where
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
-		FatDBIterator::<L>::new(&self.raw).map(|iter| Box::new(iter) as Box<_>)
+		FatDBIterator::<L, N>::new(&self.raw).map(|iter| Box::new(iter) as Box<_>)
 	}
 
 	fn key_iter<'a>(
@@ -96,7 +96,7 @@ where
 		TrieHash<L, N>,
 		CError<L, N>,
 	> {
-		FatDBKeyIterator::<L>::new(&self.raw).map(|iter| Box::new(iter) as Box<_>)
+		FatDBKeyIterator::<L, N>::new(&self.raw).map(|iter| Box::new(iter) as Box<_>)
 	}
 }
 

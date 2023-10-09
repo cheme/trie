@@ -54,7 +54,7 @@ where
 	#[inline(always)]
 	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((Default::default(), None, depth));
+			self.0.push(([None; N], None, depth));
 		}
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
@@ -64,7 +64,7 @@ where
 	#[inline(always)]
 	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T, N>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((Default::default(), None, depth));
+			self.0.push(([None; N], None, depth));
 		}
 
 		let last = self.0.len() - 1;
@@ -110,13 +110,10 @@ where
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
-		let nibble_value = T::Nibble::left_nibble_at(&k2.as_ref()[..], target_depth);
+		let nibble_value = NibbleOps::<N>::left_nibble_at(&k2.as_ref()[..], target_depth);
 		// is it a branch value (two candidate same ix)
-		let nkey = NibbleSlice::<T::Nibble>::new_offset(&k2.as_ref()[..], target_depth + 1);
-		let pr = NibbleSlice::<T::Nibble>::new_offset(
-			&k2.as_ref()[..],
-			k2.as_ref().len() * T::Nibble::NIBBLE_PER_BYTE - nkey.len(),
-		);
+		let nkey = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], target_depth + 1);
+		let pr = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * N - nkey.len());
 
 		let hashed;
 		let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
@@ -159,7 +156,7 @@ where
 			};
 			if !is_root {
 				// put hash in parent
-				let nibble: u8 = T::Nibble::left_nibble_at(&ref_branch.as_ref()[..], llix);
+				let nibble: u8 = NibbleOps::<N>::left_nibble_at(&ref_branch.as_ref()[..], llix);
 				self.set_node(llix, nibble as usize, Some(h));
 			}
 		}
@@ -180,14 +177,14 @@ where
 		let (children, v, depth) = self.0.pop().expect("checked");
 
 		debug_assert!(branch_d == depth);
-		let pr = NibbleSlice::<T::Nibble>::new_offset(&key_branch, branch_d);
+		let pr = NibbleSlice::<N>::new_offset(&key_branch, branch_d);
 
 		let hashed;
 		let value = if let Some(v) = v.as_ref() {
 			Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
 				value
 			} else {
-				let mut prefix = NibbleSlice::<T::Nibble>::new_offset(&key_branch, 0);
+				let mut prefix = NibbleSlice::<N>::new_offset(&key_branch, 0);
 				prefix.advance(branch_d);
 				hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
 				Value::Node(hashed.as_ref())
@@ -201,7 +198,7 @@ where
 		let branch_hash = callback.process(pr.left(), encoded, is_root && nkey.is_none());
 
 		if let Some(nkeyix) = nkey {
-			let pr = NibbleSlice::<T::Nibble>::new_offset(&key_branch, nkeyix.0);
+			let pr = NibbleSlice::<N>::new_offset(&key_branch, nkeyix.0);
 			let nib = pr.right_range_iter(nkeyix.1);
 			let encoded = T::Codec::extension_node(nib, nkeyix.1, branch_hash);
 			callback.process(pr.left(), encoded, is_root)
@@ -224,13 +221,13 @@ where
 		debug_assert!(branch_d == depth);
 		// encode branch
 		let nkeyix = nkey.unwrap_or((branch_d, 0));
-		let pr = NibbleSlice::<T::Nibble>::new_offset(&key_branch, nkeyix.0);
+		let pr = NibbleSlice::<N>::new_offset(&key_branch, nkeyix.0);
 		let hashed;
 		let value = if let Some(v) = v.as_ref() {
 			Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
 				value
 			} else {
-				let mut prefix = NibbleSlice::<T::Nibble>::new_offset(&key_branch, 0);
+				let mut prefix = NibbleSlice::<N>::new_offset(&key_branch, 0);
 				prefix.advance(branch_d);
 				hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
 				Value::Node(hashed.as_ref())
@@ -261,7 +258,7 @@ where
 	B: AsRef<[u8]>,
 	F: ProcessEncodedNode<TrieHash<T, N>>,
 {
-	let mut depth_queue = CacheAccum::<T, B>::new();
+	let mut depth_queue = CacheAccum::<T, B, N>::new();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
 	if let Some(mut previous_value) = iter_input.next() {
@@ -272,10 +269,10 @@ where
 		for (k, v) in iter_input {
 			single = false;
 			let common_depth =
-				T::Nibble::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
+				NibbleOps::<N>::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
 			// 0 is a reserved value : could use option
 			let depth_item = common_depth;
-			if common_depth == previous_value.0.as_ref().len() * T::Nibble::NIBBLE_PER_BYTE {
+			if common_depth == previous_value.0.as_ref().len() * N {
 				// the new key include the previous one : branch value case
 				// just stored value at branch depth
 				depth_queue.set_cache_value(common_depth, Some(previous_value.1));
@@ -296,11 +293,9 @@ where
 		if single {
 			// one single element corner case
 			let (k2, v2) = previous_value;
-			let nkey = NibbleSlice::<T::Nibble>::new_offset(&k2.as_ref()[..], last_depth);
-			let pr = NibbleSlice::<T::Nibble>::new_offset(
-				&k2.as_ref()[..],
-				k2.as_ref().len() * T::Nibble::NIBBLE_PER_BYTE - nkey.len(),
-			);
+			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
+			let pr =
+				NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * N - nkey.len());
 
 			let hashed;
 			let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {

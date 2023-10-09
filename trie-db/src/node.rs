@@ -216,11 +216,7 @@ pub enum Node<'a, const N: usize> {
 	/// and an optional immediate node data.
 	Branch([Option<NodeHandle<'a>>; N], Option<Value<'a>>),
 	/// Branch node with support for a nibble (when extension nodes are not used).
-	NibbledBranch(
-		NibbleSlice<'a, N>,
-		[Option<NodeHandle<'a>>; N],
-		Option<Value<'a>>,
-	),
+	NibbledBranch(NibbleSlice<'a, N>, [Option<NodeHandle<'a>>; N], Option<Value<'a>>),
 }
 
 impl<const N: usize> Node<'_, N> {
@@ -485,7 +481,7 @@ impl<const N: usize> NibbleSlicePlan<N> {
 
 	/// Returns the nibble length of the slice.
 	pub fn len(&self) -> usize {
-		(self.bytes.end - self.bytes.start) * NibbleOps::<N>::nibble_per_byte() - self.offset
+		(self.bytes.end - self.bytes.start) * N - self.offset
 	}
 
 	/// Build a nibble slice by decoding a byte slice according to the plan. It is the

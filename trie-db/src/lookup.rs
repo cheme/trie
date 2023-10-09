@@ -66,7 +66,7 @@ where
 				Ok(query.decode(&value))
 			},
 			Value::Node(hash) => {
-				let mut res = TrieHash::<L>::default();
+				let mut res = TrieHash::<L, N>::default();
 				res.as_mut().copy_from_slice(hash);
 				if let Some(value) = db.get(&res, prefix) {
 					if let Some(recorder) = recorder {
@@ -415,7 +415,7 @@ where
 								recoder.record(TrieAccess::Hash { full_key });
 							}
 
-							let mut hash = TrieHash::<L>::default();
+							let mut hash = TrieHash::<L, N>::default();
 							hash.as_mut().copy_from_slice(hash_bytes);
 							hash
 						},
@@ -833,7 +833,7 @@ where
 								Ok(None)
 							}
 						} else {
-							match children.at(partial.at(0) as usize) {
+							match children[partial.at(0) as usize] {
 								Some(x) => {
 									partial = partial.mid(1);
 									key_nibbles += 1;
@@ -870,7 +870,7 @@ where
 								Ok(None)
 							}
 						} else {
-							match children.at(partial.at(slice.len()) as usize) {
+							match children[partial.at(slice.len()) as usize] {
 								Some(x) => {
 									partial = partial.mid(slice.len() + 1);
 									key_nibbles += slice.len() + 1;

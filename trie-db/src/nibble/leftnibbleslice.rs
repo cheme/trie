@@ -33,11 +33,7 @@ pub struct LeftNibbleSlice<'a, const N: usize> {
 impl<'a, const N: usize> LeftNibbleSlice<'a, N> {
 	/// Constructs a byte-aligned nibble slice from a byte slice.
 	pub fn new(bytes: &'a [u8]) -> Self {
-		LeftNibbleSlice {
-			bytes,
-			len: bytes.len() * NibbleOps::<N>::nibble_per_byte(),
-			_marker: PhantomData,
-		}
+		LeftNibbleSlice { bytes, len: bytes.len() * N }
 	}
 
 	/// Returns the length of the slice in nibbles.
@@ -58,7 +54,7 @@ impl<'a, const N: usize> LeftNibbleSlice<'a, N> {
 	/// Returns a new slice truncated from the right side to the given length. If the given length
 	/// is greater than that of this slice, the function just returns a copy.
 	pub fn truncate(&self, len: usize) -> Self {
-		LeftNibbleSlice { bytes: self.bytes, len: cmp::min(len, self.len), _marker: PhantomData }
+		LeftNibbleSlice { bytes: self.bytes, len: cmp::min(len, self.len) }
 	}
 
 	/// Returns whether the given slice is a prefix of this one.
@@ -74,7 +70,7 @@ impl<'a, const N: usize> LeftNibbleSlice<'a, N> {
 
 	fn cmp(&self, other: &Self) -> Ordering {
 		let common_len = cmp::min(self.len(), other.len());
-		let common_byte_len = common_len / NibbleOps::<N>::nibble_per_byte();
+		let common_byte_len = common_len / N;
 
 		// Quickly compare the common prefix of the byte slices.
 		match self.bytes[..common_byte_len].cmp(&other.bytes[..common_byte_len]) {
@@ -83,7 +79,7 @@ impl<'a, const N: usize> LeftNibbleSlice<'a, N> {
 		}
 
 		// Compare nibble-by-nibble (either 0 or 1 nibbles) any after the common byte prefix.
-		for i in (common_byte_len * NibbleOps::<N>::nibble_per_byte())..common_len {
+		for i in (common_byte_len * N)..common_len {
 			let a = self.at(i).expect("i < len; len == self.len() qed");
 			let b = other.at(i).expect("i < len; len == other.len(); qed");
 			match a.cmp(&b) {
@@ -105,13 +101,13 @@ impl<'a, const N: usize> PartialEq for LeftNibbleSlice<'a, N> {
 		}
 
 		// Quickly compare the common prefix of the byte slices.
-		let byte_len = len / NibbleOps::<N>::nibble_per_byte();
+		let byte_len = len / N;
 		if self.bytes[..byte_len] != other.bytes[..byte_len] {
 			return false
 		}
 
 		// Compare nibble-by-nibble (either 0 or 1 nibbles) any after the common byte prefix.
-		for i in (byte_len * NibbleOps::<N>::nibble_per_byte())..len {
+		for i in (byte_len * N)..len {
 			let a = self.at(i).expect("i < len; len == self.len() qed");
 			let b = other.at(i).expect("i < len; len == other.len(); qed");
 			if a != b {

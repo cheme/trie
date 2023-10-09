@@ -170,7 +170,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 
 	fn advance_child_index<I>(
 		&mut self,
-		child_prefix: LeftNibbleSlice<'a, L::Nibble>,
+		child_prefix: LeftNibbleSlice<'a, N>,
 		proof_iter: &mut I,
 	) -> Result<Self, Error<TrieHash<L, N>, CError<L, N>>>
 	where
@@ -227,7 +227,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	fn make_child_entry<I>(
 		proof_iter: &mut I,
 		child: NodeHandle<'a>,
-		prefix: LeftNibbleSlice<'a, L::Nibble>,
+		prefix: LeftNibbleSlice<'a, N>,
 	) -> Result<Self, Error<TrieHash<L, N>, CError<L, N>>>
 	where
 		I: Iterator<Item = &'a [u8]>,
@@ -265,7 +265,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	fn advance_item<I>(
 		&mut self,
 		items_iter: &mut Peekable<I>,
-	) -> Result<Step<'a, L::Nibble>, Error<TrieHash<L, N>, CError<L, N>>>
+	) -> Result<Step<'a, N>, Error<TrieHash<L, N>, CError<L, N>>>
 	where
 		I: Iterator<Item = (&'a [u8], Option<&'a [u8]>)>,
 	{
@@ -305,7 +305,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	}
 }
 
-enum ValueMatch<'a, N> {
+enum ValueMatch<'a, const N: usize> {
 	/// The key matches a leaf node, so the value at the key must be present.
 	MatchesLeaf,
 	/// The key matches a branch node, so the value at the key may or may not be present.
@@ -320,10 +320,10 @@ enum ValueMatch<'a, N> {
 
 /// Determines whether a node on the stack carries a value at the given key or whether any nodes
 /// in the subtrie do. The prefix of the node is given by the first `prefix_len` nibbles of `key`.
-fn match_key_to_node<'a, N: NibbleOps, const N2: usize>(
+fn match_key_to_node<'a, const N: usize>(
 	key: &LeftNibbleSlice<'a, N>,
 	prefix_len: usize,
-	node: &Node<N, N2>,
+	node: &Node<N>,
 ) -> ValueMatch<'a, N> {
 	match node {
 		Node::Empty => ValueMatch::NotFound,
@@ -362,10 +362,10 @@ fn match_key_to_node<'a, N: NibbleOps, const N2: usize>(
 /// Determines whether a branch node on the stack carries a value at the given key or whether any
 /// nodes in the subtrie do. The key of the branch node value is given by the first
 /// `prefix_plus_partial_len` nibbles of `key`.
-fn match_key_to_branch_node<'a, N: NibbleOps>(
+fn match_key_to_branch_node<'a, const N: usize>(
 	key: &LeftNibbleSlice<'a, N>,
 	prefix_plus_partial_len: usize,
-	children: &BranchChildrenSlice<N::ChildRangeIndex>,
+	children: &[Option<NodeHandle>; N],
 	value: Option<&Value>,
 ) -> ValueMatch<'a, N> {
 	if key.len() == prefix_plus_partial_len {
@@ -385,7 +385,7 @@ fn match_key_to_branch_node<'a, N: NibbleOps>(
 	}
 }
 
-enum Step<'a, cont N: usize> {
+enum Step<'a, const N: usize> {
 	Descend(LeftNibbleSlice<'a, N>),
 	UnwindStack,
 }
