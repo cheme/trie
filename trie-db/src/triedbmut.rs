@@ -63,7 +63,7 @@ impl<H> From<StorageHandle> for NodeHandle<H> {
 	}
 }
 
-fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
+pub fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
 	use core::mem::{ManuallyDrop, MaybeUninit};
 	let mut buf: MaybeUninit<[Option<C>; N]> = MaybeUninit::uninit();
 	let b = unsafe { &mut *buf.as_mut_ptr() };

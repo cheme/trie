@@ -102,24 +102,3 @@ pub trait NodeCodec<const N: usize>: Sized {
 		value: Option<Value>,
 	) -> Vec<u8>;
 }
-
-/// Bitmap encoder for the number of children nodes.
-pub trait BitMap: Sized {
-	/// length to encode the bitmap
-	const ENCODED_LEN: usize;
-	/// Codec error type.
-	type Error: Error;
-
-	/// Codec buffer to use.
-	type Buffer: AsRef<[u8]> + AsMut<[u8]> + Default;
-
-	/// Decode bitmap from its encoded full slice.
-	fn decode(data: &[u8]) -> Result<Self, Self::Error>;
-
-	/// Return wether the bitmap registered a value for a branch
-	/// child index.
-	fn value_at(&self, i: usize) -> bool;
-
-	/// Encode bitmap, output slice must be of right length.
-	fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]);
-}

@@ -18,6 +18,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Output};
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
+	empty_children_option,
 	node::{BranchChildrenNodePlan, NibbleSlicePlan, NodeHandlePlan, NodePlan},
 	trie_visit,
 	triedbmut::ChildReference,
@@ -29,10 +30,10 @@ pub use trie_db::{
 	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
 	proof, trie_visit,
 	triedbmut::{ChildReference, NodeHandle},
-	BitMap, ChildIndex, ChildIndex16, ChildIndex4, DBValue, NibbleOps, NibbleSlice, NibbleVec,
-	NodeCodec, Radix16, Radix4, Record, Recorder, Trie, TrieBuilder, TrieConfiguration, TrieDB,
-	TrieDBBuilder, TrieDBIterator, TrieDBMut, TrieDBMutBuilder, TrieDBNodeIterator, TrieError,
-	TrieHash, TrieIterator, TrieLayout, TrieMut, TrieRoot,
+	ChildIndex, DBValue, NibbleOps, NibbleSlice, NibbleVec, NodeCodec, Record, Recorder, Trie,
+	TrieBuilder, TrieConfiguration, TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBMut,
+	TrieDBMutBuilder, TrieDBNodeIterator, TrieError, TrieHash, TrieIterator, TrieLayout, TrieMut,
+	TrieRoot,
 };
 pub use trie_root::TrieStream;
 use trie_root::{Hasher, Value as TrieStreamValue};
@@ -135,19 +136,16 @@ impl<H, N, C, B> Clone for GenericNoExtensionLayout<H, N, C, B> {
 
 impl<
 		H: Hasher,
-		N: NibbleOps,
 		C: ChildIndex<ChildReference<<H as Hasher>::Out>>,
 		B: BitMap<Error = CodecError>,
-	> TrieLayout for GenericNoExtensionLayout<H, N, C, B>
+		const N: usize,
+	> TrieLayout<N> for GenericNoExtensionLayout<H, C, B, N>
 {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = None;
 	type Hash = H;
-	type Nibble = N;
-	type Codec = ReferenceNodeCodecNoExt<H, N, B>;
-	type ChildRefIndex = ChildIndex16<ChildReference<<H as Hasher>::Out>>;
-	type NodeIndex = ChildIndex16<NodeHandle<<H as Hasher>::Out>>;
+	type Codec = ReferenceNodeCodecNoExt<H, B, N>;
 }
 
 impl<
@@ -197,157 +195,42 @@ impl<H: Hasher> TrieConfiguration for GenericNoExtensionLayout<H> {}
 pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher>;
 
 /// Children bitmap codec for radix 16 trie.
-/// BE representation.
-pub struct BitMap256([u8; 32]);
+pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size()]);
 
-pub struct BuffBitMap256([u8; 33]);
+/// 1 byte header plus bitmap
+pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size() + 1]);
 
-impl Default for BuffBitMap256 {
+impl<const N: usize> Default for BuffBitMap<N> {
 	fn default() -> Self {
-		BuffBitMap256([
-			0u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0,
-		])
+		BuffBitmap([0u8; NibbleOps::<N>::bitmap_size() + 1])
 	}
 }
 
-impl AsRef<[u8]> for BuffBitMap256 {
-	fn as_ref(&self) -> &[u8] {
-		&self.0[..]
-	}
-}
-
-impl AsMut<[u8]> for BuffBitMap256 {
-	fn as_mut(&mut self) -> &mut [u8] {
-		&mut self.0[..]
-	}
-}
-
-impl BitMap for BitMap256 {
-	const ENCODED_LEN: usize = 32;
-	type Error = CodecError;
-	type Buffer = BuffBitMap256; // need a byte for header
-
-	fn decode(data: &[u8]) -> Result<Self, Self::Error> {
-		if data.len() < 32 {
+impl<const N: usize> BitMap<N> {
+	pub fn decode(data: &[u8]) -> Result<Self, Self::Error> {
+		if data.len() < NibbleOps::<N>::bitmap_size() {
 			return Err("End of data".into())
 		}
-		let mut v = [0u8; 32];
+		let mut v = [0u8; NibbleOps::<N>::bitmap_size()];
 		v[..].copy_from_slice(&data[..]);
-		Ok(BitMap256(v))
+		Ok(BitMap(v))
 	}
 
-	fn value_at(&self, i: usize) -> bool {
+	pub fn value_at(&self, i: usize) -> bool {
 		let ix = i / 8;
+		let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
 		let i = i % 8;
 		self.0.as_ref()[ix] & (0b1000_0000 >> i) != 0
 	}
 
-	fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
+	pub fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
 		for (i, v) in has_children.enumerate() {
 			if v {
-				output[i / 8] |= 0b1000_0000 >> (i % 8);
+				let ix = i / 8;
+				let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
+				output[ix] |= 0b1000_0000 >> (i % 8);
 			}
 		}
-	}
-}
-
-/// Children bitmap codec for radix 16 trie.
-/// LE representation.
-pub struct BitMap16(u16);
-
-impl BitMap for BitMap16 {
-	const ENCODED_LEN: usize = 2;
-	type Error = CodecError;
-	type Buffer = [u8; 3]; // need a byte for header
-
-	fn decode(data: &[u8]) -> Result<Self, Self::Error> {
-		Ok(u16::decode(&mut &data[..]).map(|v| BitMap16(v))?)
-	}
-
-	fn value_at(&self, i: usize) -> bool {
-		self.0 & (1u16 << i) != 0
-	}
-
-	fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
-		let mut bitmap: u16 = 0;
-		let mut cursor: u16 = 1;
-		for v in has_children {
-			if v {
-				bitmap |= cursor
-			}
-			cursor <<= 1;
-		}
-		output[0] = (bitmap % 256) as u8;
-		output[1] = (bitmap / 256) as u8;
-	}
-}
-
-/// Children bitmap codec for radix 4 trie.
-pub struct BitMap4(u8);
-
-impl BitMap for BitMap4 {
-	const ENCODED_LEN: usize = 1;
-	type Error = CodecError;
-	type Buffer = [u8; 2]; // need a byte for header
-
-	fn decode(data: &[u8]) -> Result<Self, Self::Error> {
-		if data.len() == 0 || data[0] & 0xf0 != 0 {
-			Err("Bad format".into())
-		} else {
-			Ok(BitMap4(data[0]))
-		}
-	}
-
-	fn value_at(&self, i: usize) -> bool {
-		self.0 & (1u8 << i) != 0
-	}
-
-	fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
-		let mut bitmap: u8 = 0;
-		let mut cursor: u8 = 1;
-		for v in has_children {
-			if v {
-				bitmap |= cursor
-			}
-			cursor <<= 1;
-		}
-		output[0] = bitmap;
-	}
-}
-
-/// Children bitmap codec for radix 2 trie.
-/// Note that this could possibly be merge into the header byte,
-/// so it is test only implementation.
-pub struct BitMap2(u8);
-
-impl BitMap for BitMap2 {
-	const ENCODED_LEN: usize = 1;
-	type Error = CodecError;
-	type Buffer = [u8; 2]; // need a byte for header
-
-	fn decode(data: &[u8]) -> Result<Self, Self::Error> {
-		if data.len() == 0 || data[0] & 0b11111100 != 0 {
-			Err("Bad format".into())
-		} else {
-			Ok(BitMap2(data[0]))
-		}
-	}
-
-	fn value_at(&self, i: usize) -> bool {
-		self.0 & (1u8 << i) != 0
-	}
-
-	fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
-		let mut bitmap: u8 = 0;
-		let mut cursor: u8 = 1;
-		for v in has_children {
-			if v {
-				bitmap |= cursor
-			}
-			cursor <<= 1;
-		}
-		output[0] = bitmap;
 	}
 }
 
@@ -695,12 +578,12 @@ pub struct ReferenceNodeCodec<H, I, BITMAP>(PhantomData<(H, I, BITMAP)>);
 /// https://github.com/w3f/polkadot-re-spec/issues/8, this may
 /// not follow it in the future, it is mainly the testing codec without extension node.
 #[derive(Default, Clone)]
-pub struct ReferenceNodeCodecNoExt<H, I, BITMAP>(PhantomData<(H, I, BITMAP)>);
+pub struct ReferenceNodeCodecNoExt<H, BITMAP, const N: usize>(PhantomData<(H, BITMAP)>);
 
 // TODO used??
-fn partial_to_key<N: NibbleOps>(partial: Partial, offset: u8, over: u8) -> Vec<u8> {
+fn partial_to_key<const N: usize>(partial: Partial, offset: u8, over: u8) -> Vec<u8> {
 	let number_nibble_encoded = (partial.0).0 as usize;
-	let nibble_count = partial.1.len() * N::NIBBLE_PER_BYTE + number_nibble_encoded;
+	let nibble_count = partial.1.len() * N + number_nibble_encoded;
 	assert!(nibble_count < over as usize);
 	let mut output = vec![offset + nibble_count as u8];
 	if number_nibble_encoded > 0 {
@@ -717,7 +600,7 @@ fn partial_from_iterator_to_key<N: NibbleOps, I: Iterator<Item = u8>>(
 	over: u8,
 ) -> Vec<u8> {
 	assert!(nibble_count < over as usize);
-	let mut output = Vec::with_capacity(1 + (nibble_count / N::NIBBLE_PER_BYTE));
+	let mut output = Vec::with_capacity(1 + (nibble_count / N));
 	output.push(offset + nibble_count as u8);
 	output.extend(partial);
 	output
@@ -730,7 +613,7 @@ fn partial_from_iterator_encode<N: NibbleOps, I: Iterator<Item = u8>>(
 ) -> Vec<u8> {
 	let nibble_count = ::std::cmp::min(NIBBLE_SIZE_BOUND_NO_EXT, nibble_count);
 
-	let mut output = Vec::with_capacity(3 + (nibble_count / N::NIBBLE_PER_BYTE));
+	let mut output = Vec::with_capacity(3 + (nibble_count / N));
 	match node_kind {
 		NodeKindNoExt::Leaf => NodeHeaderNoExt::Leaf(nibble_count).encode_to(&mut output),
 		NodeKindNoExt::BranchWithValue =>
@@ -745,7 +628,7 @@ fn partial_from_iterator_encode<N: NibbleOps, I: Iterator<Item = u8>>(
 // TODO used?
 fn partial_encode<N: NibbleOps>(partial: Partial, node_kind: NodeKindNoExt) -> Vec<u8> {
 	let number_nibble_encoded = (partial.0).0 as usize;
-	let nibble_count = partial.1.len() * N::NIBBLE_PER_BYTE + number_nibble_encoded;
+	let nibble_count = partial.1.len() * N + number_nibble_encoded;
 
 	let nibble_count = ::std::cmp::min(NIBBLE_SIZE_BOUND_NO_EXT, nibble_count);
 
@@ -840,7 +723,9 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 					None
 				};
 				let mut error: ::std::result::Result<(), Self::Error> = Ok(());
-				let children = BranchChildrenNodePlan::new((0..N::NIBBLE_LENGTH).map(|i| {
+				let mut children = empty_children_option::<N>();
+
+				let children = BranchChildrenNodePlan::new((0..N).map(|i| {
 					if bitmap.value_at(i) {
 						let count = match <Compact<u32>>::decode(&mut input) {
 							Ok(c) => c.0 as usize,
@@ -869,8 +754,7 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 				Ok(NodePlan::Branch { value, children })
 			},
 			NodeHeader::Extension(nibble_count) => {
-				let partial =
-					input.take((nibble_count + (N::NIBBLE_PER_BYTE - 1)) / N::NIBBLE_PER_BYTE)?;
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
 				let partial_padding = N::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let range = input.take(count)?;
@@ -885,8 +769,7 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 				})
 			},
 			NodeHeader::Leaf(nibble_count) => {
-				let partial =
-					input.take((nibble_count + (N::NIBBLE_PER_BYTE - 1)) / N::NIBBLE_PER_BYTE)?;
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
 				let partial_padding = N::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = input.take(count)?;
@@ -979,12 +862,11 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 	}
 }
 
-impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
-	for ReferenceNodeCodecNoExt<H, N, BITMAP>
+impl<H: Hasher, BITMAP: BitMap<Error = CodecError>, const N: usize> NodeCodec
+	for ReferenceNodeCodecNoExt<H, BITMAP, N>
 {
 	type Error = CodecError;
 	type HashOut = <H as Hasher>::Out;
-	type Nibble = N;
 
 	fn hashed_null_node() -> <H as Hasher>::Out {
 		H::hash(<Self as NodeCodec>::empty_node())
@@ -999,16 +881,15 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 		Ok(match NodeHeaderNoExt::decode(&mut input)? {
 			NodeHeaderNoExt::Null => NodePlan::Empty,
 			NodeHeaderNoExt::Branch(has_value, nibble_count) => {
-				let nibble_with_padding = nibble_count % N::NIBBLE_PER_BYTE;
-				let padding_length = N::NIBBLE_PER_BYTE - nibble_with_padding;
+				let nibble_with_padding = nibble_count % N;
+				let padding_length = N - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
 					N::pad_left(padding_length as u8, data[input.offset]) != 0
 				{
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial =
-					input.take((nibble_count + (N::NIBBLE_PER_BYTE - 1)) / N::NIBBLE_PER_BYTE)?;
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
 				let partial_padding = N::number_padding(nibble_count);
 				let bitmap_range = input.take(BITMAP::ENCODED_LEN)?;
 				let bitmap = BITMAP::decode(&data[bitmap_range])?;
@@ -1018,34 +899,18 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 				} else {
 					None
 				};
-				let mut error: ::std::result::Result<(), Self::Error> = Ok(());
-				let children = BranchChildrenNodePlan::new((0..N::NIBBLE_LENGTH).map(|i| {
+				let mut children = empty_children_option::<_, N>();
+				for i in 0..N {
 					if bitmap.value_at(i) {
-						let count = match <Compact<u32>>::decode(&mut input) {
-							Ok(c) => c.0 as usize,
-							Err(e) => {
-								error = Err(e);
-								return None
-							},
-						};
-						let range = match input.take(count) {
-							Ok(i) => i,
-							Err(e) => {
-								error = Err(e);
-								return None
-							},
-						};
-						if count == H::LENGTH {
-							Some(NodeHandlePlan::Hash(range))
+						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						let range = input.take(count)?;
+						children[i] = Some(if count == H::LENGTH {
+							NodeHandlePlan::Hash(range)
 						} else {
-							Some(NodeHandlePlan::Inline(range))
-						}
-					} else {
-						None
+							NodeHandlePlan::Inline(range)
+						});
 					}
-				}));
-				error?;
-
+				}
 				NodePlan::NibbledBranch {
 					partial: NibbleSlicePlan::new(partial, partial_padding),
 					value,
@@ -1053,17 +918,16 @@ impl<H: Hasher, N: NibbleOps, BITMAP: BitMap<Error = CodecError>> NodeCodec
 				}
 			},
 			NodeHeaderNoExt::Leaf(nibble_count) => {
-				let nibble_with_padding = nibble_count % N::NIBBLE_PER_BYTE;
-				let padding_length = N::NIBBLE_PER_BYTE - nibble_with_padding;
+				let nibble_with_padding = nibble_count % N;
+				let padding_length = N - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
-					N::pad_left(padding_length as u8, data[input.offset]) != 0
+					NibbleOps::<N>::pad_left(padding_length as u8, data[input.offset]) != 0
 				{
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial =
-					input.take((nibble_count + (N::NIBBLE_PER_BYTE - 1)) / N::NIBBLE_PER_BYTE)?;
-				let partial_padding = N::number_padding(nibble_count);
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = ValuePlan::Inline(input.take(count)?);
 
@@ -1474,7 +1338,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::Nibble> for TestTrieCache<L>
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use trie_db::{nibble_ops::NIBBLE_PER_BYTE, node::Node};
+	use trie_db::node::Node;
 
 	const _: fn() -> () = || {
 		struct AssertTrieDBRawIteratorIsSendAndSync
@@ -1501,17 +1365,16 @@ mod tests {
 
 	#[test]
 	fn too_big_nibble_length() {
+		const N: usize = 16;
 		// + 1 for 0 added byte of nibble encode
 		let input = vec![0u8; (NIBBLE_SIZE_BOUND_NO_EXT as usize + 1) / 2 + 1];
-		let enc =
-			<ReferenceNodeCodecNoExt<KeccakHasher, Radix16, BitMap16> as NodeCodec>::leaf_node(
-				input.iter().cloned(),
-				input.len() * NIBBLE_PER_BYTE,
-				Value::Inline(&[1]),
-			);
-		let dec =
-			<ReferenceNodeCodecNoExt<KeccakHasher, Radix16, BitMap16> as NodeCodec>::decode(&enc)
-				.unwrap();
+		let enc = <ReferenceNodeCodecNoExt<KeccakHasher, BitMap16, N> as NodeCodec>::leaf_node(
+			input.iter().cloned(),
+			input.len() * N,
+			Value::Inline(&[1]),
+		);
+		let dec = <ReferenceNodeCodecNoExt<KeccakHasher, BitMap16, N> as NodeCodec>::decode(&enc)
+			.unwrap();
 		let o_sl = if let Node::Leaf(sl, _) = dec { Some(sl) } else { None };
 		assert!(o_sl.is_some());
 	}

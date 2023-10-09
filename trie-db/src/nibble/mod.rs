@@ -39,6 +39,14 @@ impl<const N: usize> NibbleOps<N> {
 		N.trailing_zeros() as usize
 	}
 
+	pub const fn bitmap_size() -> usize {
+		if N % 8 == 0 {
+			N / 8
+		} else {
+			N / 8 + 1
+		}
+	}
+
 	/// Padding bitmasks, internally use for working on padding byte.
 	/// Length of this array is `Self::bit_per_nibble`.
 	/// The first element of each pair is a bit mask to apply,

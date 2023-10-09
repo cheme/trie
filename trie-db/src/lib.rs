@@ -28,7 +28,7 @@ mod rstd {
 		fmt, hash, iter, marker, mem, ops, rc, result, slice, sync, vec,
 	};
 }
-
+pub use triedbmut::empty_children_option;
 #[cfg(not(feature = "std"))]
 mod rstd {
 	pub use alloc::{
