@@ -529,7 +529,7 @@ pub trait TrieLayout<const N: usize> {
 	/// Hasher to use for this trie.
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
-	type Codec: NodeCodec<HashOut = TrieHash<Self, N>, N>;
+	type Codec: NodeCodec<N, HashOut = TrieHash<Self, N>>;
 }
 
 /// This trait associates a trie definition with preferred methods.

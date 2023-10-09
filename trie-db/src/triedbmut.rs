@@ -65,23 +65,23 @@ impl<H> From<StorageHandle> for NodeHandle<H> {
 
 fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
 	use core::mem::{ManuallyDrop, MaybeUninit};
-	let mut buf: MaybeUninit<[MaybeUninit<Option<C>>; N]> = MaybeUninit::uninit();
+	let mut buf: MaybeUninit<[Option<C>; N]> = MaybeUninit::uninit();
 	let b = unsafe { &mut *buf.as_mut_ptr() };
 	for i in 0..N {
-		b[i] = MaybeUninit::new(None);
+		b[i] = None;
 	}
-	let buf: [MaybeUninit<V>; N] = unsafe { buf.assume_init() };
+	let buf: [Option<C>; N] = unsafe { buf.assume_init() };
 	Box::new(buf)
 }
 
 fn empty_children_default<C: Default, const N: usize>() -> Box<[C; N]> {
 	use core::mem::{ManuallyDrop, MaybeUninit};
-	let mut buf: MaybeUninit<[MaybeUninit<C>; N]> = MaybeUninit::uninit();
+	let mut buf: MaybeUninit<[C; N]> = MaybeUninit::uninit();
 	let b = unsafe { &mut *buf.as_mut_ptr() };
 	for i in 0..N {
-		b[i] = MaybeUninit::new(Default::default());
+		b[i] = Default::default();
 	}
-	let buf: [MaybeUninit<V>; N] = unsafe { buf.assume_init() };
+	let buf: [C; N] = unsafe { buf.assume_init() };
 	Box::new(buf)
 }
 

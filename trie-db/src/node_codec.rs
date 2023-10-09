@@ -21,8 +21,6 @@ use crate::{
 	ChildReference, MaybeDebug, NibbleOps,
 };
 
-use crate::rstd::{borrow::Borrow, hash, vec::Vec, Error};
-
 /// Representation of a nible slice (right aligned).
 /// It contains a right aligned padded first byte (first pair element is the number of nibbles
 /// (0 to max nb nibble - 1), second pair element is the padded nibble), and a slice over

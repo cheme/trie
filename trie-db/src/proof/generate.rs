@@ -25,7 +25,7 @@ use crate::{
 	},
 	recorder::Record,
 	CError, ChildReference, DBValue, NibbleSlice, NodeCodec, Recorder, Result as TrieResult, Trie,
-	TrieChildRangeIndex, TrieDBBuilder, TrieError, TrieHash, TrieLayout,
+	TrieDBBuilder, TrieError, TrieHash, TrieLayout,
 };
 
 struct StackEntry<'a, L: TrieLayout<N>, const N: usize> {

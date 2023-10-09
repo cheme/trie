@@ -32,8 +32,8 @@ use crate::{
 		ValuePlan,
 	},
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, result, sync::Arc, vec, vec::Vec},
-	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieChildRangeIndex, TrieDB,
-	TrieDBRawIterator, TrieError, TrieHash, TrieLayout,
+	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBRawIterator,
+	TrieError, TrieHash, TrieLayout,
 };
 use hash_db::{HashDB, Prefix};
 

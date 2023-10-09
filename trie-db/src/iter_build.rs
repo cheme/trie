@@ -293,7 +293,7 @@ where
 		if single {
 			// one single element corner case
 			let (k2, v2) = previous_value;
-			let nkey = NibbleSlice::new_offset(&k2.as_ref()[..], last_depth);
+			let nkey = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], last_depth);
 			let pr =
 				NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * N - nkey.len());
 

@@ -25,9 +25,6 @@ use crate::{
 };
 use hash_db::Prefix;
 
-#[cfg(feature = "std")]
-use std::fmt;
-
 impl<'a, const N: usize> Iterator for NibbleSliceIterator<'a, N> {
 	type Item = u8;
 	fn next(&mut self) -> Option<u8> {

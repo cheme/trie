@@ -241,7 +241,10 @@ impl<const N: usize> Node<'_, N> {
 					})
 					.collect::<Result<_, _, _>>()?;
 
-				Ok(NodeOwned::Branch(childs_owned, data.as_ref().map(|d| d.to_owned_value::<L, N>())))
+				Ok(NodeOwned::Branch(
+					childs_owned,
+					data.as_ref().map(|d| d.to_owned_value::<L, N>()),
+				))
 			},
 			Self::NibbledBranch(n, childs, data) => {
 				let mut childs_owned = [(); N].map(|_| None);
