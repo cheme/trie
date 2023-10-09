@@ -70,7 +70,7 @@ fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
 	for i in 0..N {
 		b[i] = MaybeUninit::new(None);
 	}
-	let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
+	let buf: [MaybeUninit<V>; N] = unsafe { buf.assume_init() };
 	Box::new(buf)
 }
 
@@ -81,7 +81,7 @@ fn empty_children_default<C: Default, const N: usize>() -> Box<[C; N]> {
 	for i in 0..N {
 		b[i] = MaybeUninit::new(Default::default());
 	}
-	let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
+	let buf: [MaybeUninit<V>; N] = unsafe { buf.assume_init() };
 	Box::new(buf)
 }
 

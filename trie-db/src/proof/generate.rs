@@ -58,8 +58,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 		let children_len = match node.node_plan() {
 			NodePlan::Empty | NodePlan::Leaf { .. } => 0,
 			NodePlan::Extension { .. } => 1,
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } =>
-				NibbleOps::<N>::nibble_length(),
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => N,
 		};
 		Ok(StackEntry {
 			prefix,
@@ -138,17 +137,16 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 	/// - children has size nibble_length.
 	fn complete_branch_children(
 		node_data: &[u8],
-		child_handles: &BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
+		child_handles: &[Option<NodeHandlePlan>; N],
 		child_index: usize,
 		children: &mut [Option<ChildReference<TrieHash<L, N>>>],
 	) -> TrieResult<(), TrieHash<L, N>, CError<L, N>> {
-		for i in child_index..NibbleOps::<N>::nibble_length() {
-			children[i] = child_handles
-				.at(i)
+		for i in child_index..N {
+			children[i] = child_handles[i]
 				.as_ref()
 				.map(|child_plan| {
 					child_plan.build(node_data).try_into().map_err(|hash| {
-						Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash))
+						Box::new(TrieError::InvalidHash(TrieHash::<L, N>::default(), hash))
 					})
 				})
 				.transpose()?;
@@ -177,13 +175,12 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 			},
 			NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } => {
 				assert!(
-					self.child_index < NibbleOps::<N>::nibble_length(),
+					self.child_index < N,
 					"extension nodes have at most nibble_length children; \
 					set_child is called when the only child is popped from the stack; \
 					child_index is <nibble_length before child is pushed to the stack; qed"
 				);
-				children
-					.at(self.child_index)
+				children[self.child_index]
 					.as_ref()
 					.map(|child| Self::replacement_child_ref(encoded_child, child))
 			},
@@ -200,9 +197,9 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 		child: &NodeHandlePlan,
 	) -> ChildReference<TrieHash<L, N>> {
 		match child {
-			NodeHandlePlan::Hash(_) => ChildReference::Inline(TrieHash::<L>::default(), 0),
+			NodeHandlePlan::Hash(_) => ChildReference::Inline(TrieHash::<L, N>::default(), 0),
 			NodeHandlePlan::Inline(_) => {
-				let mut hash = TrieHash::<L>::default();
+				let mut hash = TrieHash::<L, N>::default();
 				assert!(
 					encoded_child.len() <= hash.as_ref().len(),
 					"the encoding of the raw inline node is checked to be at most the hash length
@@ -238,7 +235,7 @@ where
 
 	// The stack of nodes through a path in the trie. Each entry is a child node of the preceding
 	// entry.
-	let mut stack = <Vec<StackEntry<L>>>::new();
+	let mut stack = <Vec<StackEntry<L, N>>>::new();
 
 	// The mutated trie nodes comprising the final proof.
 	let mut proof_nodes = Vec::new();
@@ -250,9 +247,9 @@ where
 		unwind_stack(&mut stack, &mut proof_nodes, Some(&key))?;
 
 		// Perform the trie lookup for the next key, recording the sequence of nodes traversed.
-		let mut recorder = Recorder::<L>::new();
+		let mut recorder = Recorder::<L, N>::new();
 		let expected_value = {
-			let trie = TrieDBBuilder::<L>::new(db, root).with_recorder(&mut recorder).build();
+			let trie = TrieDBBuilder::<L, N>::new(db, root).with_recorder(&mut recorder).build();
 			trie.get(key_bytes)?
 		};
 
@@ -276,7 +273,7 @@ where
 
 		loop {
 			let step = match stack.last_mut() {
-				Some(entry) => match_key_to_node::<L>(
+				Some(entry) => match_key_to_node::<L, N>(
 					entry.node.data(),
 					entry.node.node_plan(),
 					&mut entry.omit_value,
@@ -370,7 +367,7 @@ where
 		}
 	}
 
-	unwind_stack::<L>(&mut stack, &mut proof_nodes, None)?;
+	unwind_stack::<L, N>(&mut stack, &mut proof_nodes, None)?;
 	Ok(proof_nodes)
 }
 
@@ -432,7 +429,7 @@ fn match_key_to_node<'a, L: TrieLayout<N>, const N: usize>(
 				Step::FoundValue(None)
 			}
 		},
-		NodePlan::Branch { value, children: child_handles } => match_key_to_branch_node::<L>(
+		NodePlan::Branch { value, children: child_handles } => match_key_to_branch_node::<L, N>(
 			node_data,
 			value.as_ref(),
 			&child_handles,
@@ -445,7 +442,7 @@ fn match_key_to_node<'a, L: TrieLayout<N>, const N: usize>(
 			recorded_nodes,
 		)?,
 		NodePlan::NibbledBranch { partial: partial_plan, value, children: child_handles } =>
-			match_key_to_branch_node::<L>(
+			match_key_to_branch_node::<L, N>(
 				node_data,
 				value.as_ref(),
 				&child_handles,
@@ -463,7 +460,7 @@ fn match_key_to_node<'a, L: TrieLayout<N>, const N: usize>(
 fn match_key_to_branch_node<'a, 'b, L: TrieLayout<N>, const N: usize>(
 	node_data: &'a [u8],
 	value_range: Option<&'b ValuePlan>,
-	child_handles: &'b BranchChildrenNodePlan<TrieChildRangeIndex<L>>,
+	child_handles: &'b [Option<NodeHandlePlan>; N],
 	omit_value: &mut bool,
 	child_index: &mut usize,
 	children: &mut [Option<ChildReference<TrieHash<L, N>>>],
@@ -499,18 +496,17 @@ fn match_key_to_branch_node<'a, 'b, L: TrieLayout<N>, const N: usize>(
 	) as usize;
 	assert!(*child_index <= new_index);
 	while *child_index < new_index {
-		children[*child_index] = child_handles
-			.at(*child_index)
+		children[*child_index] = child_handles[*child_index]
 			.as_ref()
 			.map(|child_plan| {
 				child_plan.build(node_data).try_into().map_err(|hash| {
-					Box::new(TrieError::InvalidHash(TrieHash::<L>::default(), hash))
+					Box::new(TrieError::InvalidHash(TrieHash::<L, N>::default(), hash))
 				})
 			})
 			.transpose()?;
 		*child_index += 1;
 	}
-	if let Some(child_plan) = &child_handles.at(*child_index) {
+	if let Some(child_plan) = &child_handles[*child_index] {
 		Ok(Step::Descend {
 			child_prefix_len: prefix_len + partial.len() + 1,
 			child: child_plan.build(node_data),

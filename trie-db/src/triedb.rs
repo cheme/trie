@@ -227,7 +227,7 @@ where
 		let mut cache = self.cache.as_ref().map(|c| c.borrow_mut());
 		let mut recorder = self.recorder.as_ref().map(|r| r.borrow_mut());
 
-		Lookup::<L, _> {
+		Lookup::<L, _, N> {
 			db: self.db,
 			query: |_: &[u8]| (),
 			hash: *self.root,

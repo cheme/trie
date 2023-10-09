@@ -155,7 +155,7 @@ impl<'a> Value<'a> {
 		match self {
 			Self::Inline(data) => ValueOwned::Inline(Bytes::from(*data), L::Hash::hash(data)),
 			Self::Node(hash) => {
-				let mut res = TrieHash::<L>::default();
+				let mut res = TrieHash::<L, N>::default();
 				res.as_mut().copy_from_slice(hash);
 
 				ValueOwned::Node(res)
@@ -226,9 +226,9 @@ impl<const N: usize> Node<'_, N> {
 	) -> Result<NodeOwned<TrieHash<L, N>, N>, TrieHash<L, N>, CError<L, N>> {
 		match self {
 			Self::Empty => Ok(NodeOwned::Empty),
-			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value::<L>())),
+			Self::Leaf(n, d) => Ok(NodeOwned::Leaf((*n).into(), d.to_owned_value::<L, N>())),
 			Self::Extension(n, h) =>
-				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle::<L>()?)),
+				Ok(NodeOwned::Extension((*n).into(), h.to_owned_handle::<L, N>()?)),
 			Self::Branch(childs, data) => {
 				let mut childs_owned = [(); N].map(|_| None);
 				childs
@@ -236,12 +236,12 @@ impl<const N: usize> Node<'_, N> {
 					.enumerate()
 					.map(|(i, c)| {
 						childs_owned[i] =
-							c.as_ref().map(|c| c.to_owned_handle::<L>()).transpose()?;
+							c.as_ref().map(|c| c.to_owned_handle::<L, N>()).transpose()?;
 						Ok(())
 					})
 					.collect::<Result<_, _, _>>()?;
 
-				Ok(NodeOwned::Branch(childs_owned, data.as_ref().map(|d| d.to_owned_value::<L>())))
+				Ok(NodeOwned::Branch(childs_owned, data.as_ref().map(|d| d.to_owned_value::<L, N>())))
 			},
 			Self::NibbledBranch(n, childs, data) => {
 				let mut childs_owned = [(); N].map(|_| None);
@@ -250,7 +250,7 @@ impl<const N: usize> Node<'_, N> {
 					.enumerate()
 					.map(|(i, c)| {
 						childs_owned[i] =
-							c.as_ref().map(|c| c.to_owned_handle::<L>()).transpose()?;
+							c.as_ref().map(|c| c.to_owned_handle::<L, N>()).transpose()?;
 						Ok(())
 					})
 					.collect::<Result<_, _, _>>()?;
@@ -258,7 +258,7 @@ impl<const N: usize> Node<'_, N> {
 				Ok(NodeOwned::NibbledBranch(
 					(*n).into(),
 					childs_owned,
-					data.as_ref().map(|d| d.to_owned_value::<L>()),
+					data.as_ref().map(|d| d.to_owned_value::<L, N>()),
 				))
 			},
 		}
@@ -266,7 +266,7 @@ impl<const N: usize> Node<'_, N> {
 }
 
 /// Owned version of [`Node`].
-/// TODO NodeOwned<L>
+/// TODO NodeOwned<L, N>
 #[derive(Eq, PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
 pub enum NodeOwned<H, const N: usize> {
@@ -476,7 +476,7 @@ pub struct NibbleSlicePlan<const N: usize> {
 impl<const N: usize> NibbleSlicePlan<N> {
 	/// Construct a nibble slice decode plan.
 	pub fn new(bytes: Range<usize>, offset: usize) -> Self {
-		NibbleSlicePlan { bytes, offset, _marker: PhantomData }
+		NibbleSlicePlan { bytes, offset }
 	}
 
 	/// Returns the nibble length of the slice.
@@ -570,11 +570,17 @@ impl<const N: usize> NodePlan<N> {
 			NodePlan::Extension { partial, child } =>
 				Node::Extension(partial.build(data), child.build(data)),
 			NodePlan::Branch { value, children } => {
-				let child_slices = BranchChildrenSlice { index: children.index.clone(), data };
+				let mut child_slices = [None; N];
+				for i in 0..N {
+					child_slices[i] = children[i].as_ref().map(|child| child.build(data));
+				}
 				Node::Branch(child_slices, value.as_ref().map(|v| v.build(data)))
 			},
 			NodePlan::NibbledBranch { partial, value, children } => {
-				let child_slices = BranchChildrenSlice { index: children.index.clone(), data };
+				let mut child_slices = [None; N];
+				for i in 0..N {
+					child_slices[i] = children[i].as_ref().map(|child| child.build(data));
+				}
 				Node::NibbledBranch(
 					partial.build(data),
 					child_slices,

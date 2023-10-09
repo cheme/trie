@@ -113,7 +113,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 		let children_len = match node {
 			Node::Empty | Node::Leaf(..) => 0,
 			Node::Extension(..) => 1,
-			Node::Branch(..) | Node::NibbledBranch(..) => NibbleOps::<N>::nibble_length(),
+			Node::Branch(..) | Node::NibbledBranch(..) => N,
 		};
 		let value = match &node {
 			Node::Empty | Node::Extension(_, _) => None,
@@ -189,14 +189,14 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 					.at(child_prefix.len() - 1)
 					.expect("it's less than prefix.len(); qed") as usize;
 				while self.child_index < child_index {
-					if let Some(child) = children.at(self.child_index) {
+					if let Some(child) = children[self.child_index] {
 						let child_ref = child.try_into().map_err(Error::InvalidChildReference)?;
 						self.children[self.child_index] = Some(child_ref);
 					}
 					self.child_index += 1;
 				}
-				let child = children.at(self.child_index).expect("guaranteed by advance_item");
-				Self::make_child_entry(proof_iter, child.clone(), child_prefix)
+				let child = children[self.child_index].expect("guaranteed by advance_item");
+				Self::make_child_entry(proof_iter, child, child_prefix)
 			},
 			_ => panic!("cannot have children"),
 		}
@@ -211,8 +211,8 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 				self.child_index += 1;
 			},
 			Node::Branch(children, _) | Node::NibbledBranch(_, children, _) => {
-				while self.child_index < NibbleOps::<N>::nibble_length() {
-					if let Some(child) = children.at(self.child_index) {
+				while self.child_index < N {
+					if let Some(child) = children[self.child_index] {
 						let child_ref = child.try_into().map_err(Error::InvalidChildReference)?;
 						self.children[self.child_index] = Some(child_ref);
 					}
@@ -241,7 +241,7 @@ impl<'a, L: TrieLayout<N>, const N: usize> StackEntry<'a, L, N> {
 					StackEntry::new(data, prefix, true)
 				},
 			NodeHandle::Hash(data) => {
-				let mut hash = TrieHash::<L>::default();
+				let mut hash = TrieHash::<L, N>::default();
 				if data.len() != hash.as_ref().len() {
 					return Err(Error::InvalidChildReference(data.to_vec()))
 				}
@@ -377,7 +377,7 @@ fn match_key_to_branch_node<'a, const N: usize>(
 	} else {
 		let index =
 			key.at(prefix_plus_partial_len).expect("it's less than prefix.len(); qed") as usize;
-		if children.at(index).is_some() {
+		if children[index].is_some() {
 			ValueMatch::IsChild(key.truncate(prefix_plus_partial_len + 1))
 		} else {
 			ValueMatch::NotFound
@@ -426,13 +426,13 @@ where
 
 	// A stack of child references to fill in omitted branch children for later trie nodes in the
 	// proof.
-	let mut stack: Vec<StackEntry<L>> = Vec::new();
+	let mut stack: Vec<StackEntry<L, N>> = Vec::new();
 
 	let root_node = match proof_iter.next() {
 		Some(node) => node,
 		None => return Err(Error::IncompleteProof),
 	};
-	let mut last_entry = StackEntry::<L>::new(root_node, LeftNibbleSlice::new(&[]), false)?;
+	let mut last_entry = StackEntry::<L, N>::new(root_node, LeftNibbleSlice::new(&[]), false)?;
 
 	loop {
 		// Insert omitted value.
