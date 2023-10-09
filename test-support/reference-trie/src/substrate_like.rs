@@ -22,24 +22,24 @@ pub struct HashedValueNoExt;
 
 /// No extension trie which stores value above a static size
 /// as external node.
-pub struct HashedValueNoExtThreshold<const C: u32>;
+pub struct HashedValueNoExtThreshold<const C: u32, const N: usize>;
 
-impl TrieLayout for HashedValueNoExt {
+impl TrieLayout<16> for HashedValueNoExt {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = None;
 
 	type Hash = RefHasher;
-	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher>;
+	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher, 16>;
 }
 
-impl<const C: u32> TrieLayout for HashedValueNoExtThreshold<C> {
+impl<const C: u32, const N: usize> TrieLayout<N> for HashedValueNoExtThreshold<C, N> {
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = Some(C);
 
 	type Hash = RefHasher;
-	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher>;
+	type Codec = ReferenceNodeCodecNoExtMeta<RefHasher, N>;
 }
 
 /// Constants specific to encoding with external value node support.
@@ -56,10 +56,10 @@ pub mod trie_constants {
 }
 
 #[derive(Default, Clone)]
-pub struct NodeCodec<H>(PhantomData<H>);
+pub struct NodeCodec<H, const N: usize>(PhantomData<H>);
 
-impl<H: Hasher> NodeCodec<H> {
-	fn decode_plan_inner_hashed(data: &[u8]) -> Result<NodePlan, Error> {
+impl<H: Hasher, const N: usize> NodeCodec<H, N> {
+	fn decode_plan_inner_hashed(data: &[u8]) -> Result<NodePlan<N>, Error> {
 		let mut input = ByteSliceInput::new(data);
 
 		let header = NodeHeader::decode(&mut input)?;
@@ -145,7 +145,7 @@ impl<H: Hasher> NodeCodec<H> {
 	}
 }
 
-impl<H> NodeCodecT for NodeCodec<H>
+impl<H, const N: usize> NodeCodecT<N> for NodeCodec<H, N>
 where
 	H: Hasher,
 {
@@ -157,7 +157,7 @@ where
 		H::hash(<Self as NodeCodecT>::empty_node())
 	}
 
-	fn decode_plan(data: &[u8]) -> Result<NodePlan, Self::Error> {
+	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
 		Self::decode_plan_inner_hashed(data)
 	}
 

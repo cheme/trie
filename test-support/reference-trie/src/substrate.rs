@@ -203,9 +203,9 @@ impl<'a> Input for ByteSliceInput<'a> {
 ///
 /// It is generic over `H` the [`Hasher`].
 #[derive(Default, Clone)]
-pub struct NodeCodec<H>(PhantomData<H>);
+pub struct NodeCodec<H, const N: usize>(PhantomData<H>);
 
-impl<H> NodeCodecT for NodeCodec<H>
+impl<H, const N: usize> NodeCodecT<N> for NodeCodec<H, N>
 where
 	H: Hasher,
 {
@@ -217,7 +217,7 @@ where
 		H::hash(<Self as NodeCodecT>::empty_node())
 	}
 
-	fn decode_plan(data: &[u8]) -> Result<NodePlan, Self::Error> {
+	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
 		let mut input = ByteSliceInput::new(data);
 
 		let header = NodeHeader::decode(&mut input)?;
@@ -458,9 +458,9 @@ impl Bitmap {
 pub struct LayoutV0<H>(PhantomData<H>);
 
 /// substrate trie layout, with external value nodes.
-pub struct LayoutV1<H>(PhantomData<H>);
+pub struct LayoutV1<H, const N: usize>(PhantomData<H>);
 
-impl<H> TrieLayout for LayoutV0<H>
+impl<H> TrieLayout<16> for LayoutV0<H>
 where
 	H: Hasher + core::fmt::Debug,
 {
@@ -469,10 +469,10 @@ where
 	const MAX_INLINE_VALUE: Option<u32> = None;
 
 	type Hash = H;
-	type Codec = NodeCodec<Self::Hash>;
+	type Codec = NodeCodec<Self::Hash, 16>;
 }
 
-impl<H> TrieConfiguration for LayoutV0<H>
+impl<H> TrieConfiguration<16> for LayoutV0<H>
 where
 	H: Hasher + core::fmt::Debug,
 {
@@ -502,7 +502,7 @@ where
 	}
 }
 
-impl<H> TrieLayout for LayoutV1<H>
+impl<H, const N: usize> TrieLayout<N> for LayoutV1<H, N>
 where
 	H: Hasher + core::fmt::Debug,
 {
@@ -511,10 +511,10 @@ where
 	const MAX_INLINE_VALUE: Option<u32> = Some(TRIE_VALUE_NODE_THRESHOLD);
 
 	type Hash = H;
-	type Codec = NodeCodec<Self::Hash>;
+	type Codec = NodeCodec<Self::Hash, N>;
 }
 
-impl<H> TrieConfiguration for LayoutV1<H>
+impl<H, const N: usize> TrieConfiguration<N> for LayoutV1<H, N>
 where
 	H: Hasher + core::fmt::Debug,
 {

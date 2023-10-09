@@ -159,16 +159,14 @@ impl<const N: usize> TrieLayout<N> for AllowEmptyLayout<N> {
 	type Codec = ReferenceNodeCodec<RefHasher, N>;
 }
 
-impl<H: Hasher, const N: usize> TrieConfiguration<N> for GenericNoExtensionLayout<H, N> {}
-
 /// Trie layout without extension nodes.
 pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher, 16>;
 
 /// Children bitmap codec for radix 16 trie.
-pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size()]);
+pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<{ N }>::bitmap_size()]);
 
 /// 1 byte header plus bitmap
-pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<N>::bitmap_size() + 1]);
+pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<{ N }>::bitmap_size() + 1]);
 
 impl<const N: usize> Default for BuffBitmap<N> {
 	fn default() -> Self {
@@ -177,7 +175,7 @@ impl<const N: usize> Default for BuffBitmap<N> {
 }
 
 impl<const N: usize> Bitmap<N> {
-	pub fn decode(data: &[u8]) -> Result<Self, Self::Error> {
+	pub fn decode(data: &[u8]) -> Result<Self, trie_db::CError<L, N>> {
 		if data.len() < NibbleOps::<N>::bitmap_size() {
 			return Err("End of data".into())
 		}
@@ -651,7 +649,7 @@ impl<'a> Input for ByteSliceInput<'a> {
 // but due to the current limitations of Rust const evaluation we can't do
 // `const HASHED_NULL_NODE: <RefHasher as Hasher>::Out = <RefHasher as Hasher>::Out( … … )`.
 // Perhaps one day soon?
-impl<H: Hasher, const N: usize> NodeCodec for ReferenceNodeCodec<H, N> {
+impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 	type Error = CodecError;
 	type HashOut = H::Out;
 
@@ -659,7 +657,7 @@ impl<H: Hasher, const N: usize> NodeCodec for ReferenceNodeCodec<H, N> {
 		H::hash(<Self as NodeCodec>::empty_node())
 	}
 
-	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan<Self::Nibble>, Self::Error> {
+	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan<N>, Self::Error> {
 		let mut input = ByteSliceInput::new(data);
 		match NodeHeader::decode(&mut input)? {
 			NodeHeader::Null => Ok(NodePlan::Empty),
@@ -972,9 +970,12 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 }
 
 /// Compare trie builder and in memory trie.
-pub fn compare_implementations<T, DB>(data: Vec<(Vec<u8>, Vec<u8>)>, mut memdb: DB, mut hashdb: DB)
-where
-	T: TrieLayout,
+pub fn compare_implementations<T, DB, const N: usize>(
+	data: Vec<(Vec<u8>, Vec<u8>)>,
+	mut memdb: DB,
+	mut hashdb: DB,
+) where
+	T: TrieLayout<N>,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
 	let root_new = calc_root_build::<T, _, _, _, _>(data.clone(), &mut hashdb);
@@ -1012,7 +1013,7 @@ where
 }
 
 /// Compare trie builder and trie root implementations.
-pub fn compare_root<T: TrieLayout, DB: hash_db::HashDB<T::Hash, DBValue>>(
+pub fn compare_root<T: TrieLayout<N>, DB: hash_db::HashDB<T::Hash, DBValue>, const N: usize>(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 	mut memdb: DB,
 ) {
@@ -1055,9 +1056,9 @@ pub fn compare_unhashed_no_extension(data: Vec<(Vec<u8>, Vec<u8>)>) {
 }
 
 /// Trie builder root calculation utility.
-pub fn calc_root<T, I, A, B>(data: I) -> <T::Hash as Hasher>::Out
+pub fn calc_root<T, I, A, B, const N: usize>(data: I) -> <T::Hash as Hasher>::Out
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
@@ -1068,9 +1069,12 @@ where
 }
 
 /// Trie builder trie building utility.
-pub fn calc_root_build<T, I, A, B, DB>(data: I, hashdb: &mut DB) -> <T::Hash as Hasher>::Out
+pub fn calc_root_build<T, I, A, B, DB, const N: usize>(
+	data: I,
+	hashdb: &mut DB,
+) -> <T::Hash as Hasher>::Out
 where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	I: IntoIterator<Item = (A, B)>,
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
@@ -1133,12 +1137,12 @@ pub fn compare_implementations_no_extension_q(
 
 /// `compare_implementations_no_extension` for unordered input (trie_root does
 /// ordering before running when trie_build expect correct ordering).
-pub fn compare_implementations_unordered<T, DB>(
+pub fn compare_implementations_unordered<T, DB, const N: usize>(
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 	mut memdb: DB,
 	mut hashdb: DB,
 ) where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
 	let mut b_map = std::collections::btree_map::BTreeMap::new();
@@ -1181,11 +1185,11 @@ pub fn compare_implementations_unordered<T, DB>(
 
 /// Testing utility that uses some periodic removal over
 /// its input test data.
-pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>>(
+pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>, const N: usize>(
 	data: Vec<(bool, Vec<u8>, Vec<u8>)>,
 	mut memdb: DB,
 ) where
-	T: TrieLayout,
+	T: TrieLayout<N>,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
 	let mut data2 = std::collections::BTreeMap::new();
@@ -1234,7 +1238,7 @@ pub struct TestTrieCache<L: TrieLayout<N>, const N: usize> {
 	node_cache: HashMap<TrieHash<L, N>, NodeOwned<TrieHash<L, N>, N>>,
 }
 
-impl<L: TrieLayout> TestTrieCache<L> {
+impl<L: TrieLayout<N>, const N: usize> TestTrieCache<L, N> {
 	/// Clear the value cache.
 	pub fn clear_value_cache(&mut self) {
 		self.value_cache.clear();
@@ -1246,30 +1250,33 @@ impl<L: TrieLayout> TestTrieCache<L> {
 	}
 }
 
-impl<L: TrieLayout> Default for TestTrieCache<L> {
+impl<L: TrieLayout<N>, const N: usize> Default for TestTrieCache<L, N> {
 	fn default() -> Self {
 		Self { value_cache: Default::default(), node_cache: Default::default() }
 	}
 }
 
-impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::Nibble> for TestTrieCache<L> {
-	fn lookup_value_for_key(&mut self, key: &[u8]) -> Option<&trie_db::CachedValue<TrieHash<L>>> {
+impl<L: TrieLayout<N>, const N: usize> trie_db::TrieCache<L::Codec, N> for TestTrieCache<L, N> {
+	fn lookup_value_for_key(
+		&mut self,
+		key: &[u8],
+	) -> Option<&trie_db::CachedValue<TrieHash<L, N>>> {
 		self.value_cache.get(key)
 	}
 
-	fn cache_value_for_key(&mut self, key: &[u8], value: trie_db::CachedValue<TrieHash<L>>) {
+	fn cache_value_for_key(&mut self, key: &[u8], value: trie_db::CachedValue<TrieHash<L, N>>) {
 		self.value_cache.insert(key.to_vec(), value);
 	}
 
 	fn get_or_insert_node(
 		&mut self,
-		hash: TrieHash<L>,
+		hash: TrieHash<L, N>,
 		fetch_node: &mut dyn FnMut() -> trie_db::Result<
-			NodeOwned<TrieHash<L>>,
-			TrieHash<L>,
-			trie_db::CError<L>,
+			NodeOwned<TrieHash<L, N>, N>,
+			TrieHash<L, N>,
+			trie_db::CError<L, N>,
 		>,
-	) -> trie_db::Result<&NodeOwned<TrieHash<L>>, TrieHash<L>, trie_db::CError<L>> {
+	) -> trie_db::Result<&NodeOwned<TrieHash<L, N>, N>, TrieHash<L, N>, trie_db::CError<L, N>> {
 		match self.node_cache.entry(hash) {
 			Entry::Occupied(e) => Ok(e.into_mut()),
 			Entry::Vacant(e) => {
@@ -1279,7 +1286,7 @@ impl<L: TrieLayout> trie_db::TrieCache<L::Codec, L::Nibble> for TestTrieCache<L>
 		}
 	}
 
-	fn get_node(&mut self, hash: &TrieHash<L>) -> Option<&NodeOwned<TrieHash<L>>> {
+	fn get_node(&mut self, hash: &TrieHash<L, N>) -> Option<&NodeOwned<TrieHash<L, N>, N>> {
 		self.node_cache.get(hash)
 	}
 }
