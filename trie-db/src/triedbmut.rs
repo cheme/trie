@@ -74,7 +74,7 @@ pub fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
 	Box::new(buf)
 }
 
-fn empty_children_default<C: Default, const N: usize>() -> Box<[C; N]> {
+pub fn empty_children_default<C: Default, const N: usize>() -> Box<[C; N]> {
 	use core::mem::{ManuallyDrop, MaybeUninit};
 	let mut buf: MaybeUninit<[C; N]> = MaybeUninit::uninit();
 	let b = unsafe { &mut *buf.as_mut_ptr() };

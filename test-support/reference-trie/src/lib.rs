@@ -18,7 +18,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Output};
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
-	empty_children_option,
+	empty_children_default, empty_children_option,
 	node::{BranchChildrenNodePlan, NibbleSlicePlan, NodeHandlePlan, NodePlan},
 	trie_visit,
 	triedbmut::ChildReference,
@@ -170,7 +170,7 @@ pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<{ N }>::bitmap_size()
 
 impl<const N: usize> Default for BuffBitmap<N> {
 	fn default() -> Self {
-		BuffBitmap([0u8; NibbleOps::<N>::bitmap_size() + 1])
+		BuffBitmap([0u8; NibbleOps::<{ N }>::bitmap_size() + 1])
 	}
 }
 
@@ -179,7 +179,7 @@ impl<const N: usize> Bitmap<N> {
 		if data.len() < NibbleOps::<N>::bitmap_size() {
 			return Err("End of data".into())
 		}
-		let mut v = [0u8; NibbleOps::<N>::bitmap_size()];
+		let mut v = [0u8; NibbleOps::<{ N }>::bitmap_size()];
 		v[..].copy_from_slice(&data[..]);
 		Ok(Bitmap(v))
 	}
@@ -208,7 +208,6 @@ pub type RefTrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, Exten
 pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, ExtensionLayout, 16>;
 pub type RefTrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, ExtensionLayout, 16>;
 pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout, 16>;
-pub type RefTrieDBMutNoExtQ<'a> = trie_db::TrieDBMut<'a, NoExtensionLayoutQuarter, 4>;
 pub type RefFatDB<'a, 'cache> = trie_db::FatDB<'a, 'cache, ExtensionLayout, 16>;
 pub type RefTrieDBMutNoExtBuilder<'a> = trie_db::TrieDBMutBuilder<'a, NoExtensionLayout, 16>;
 pub type RefTrieDBMutAllowEmpty<'a> = trie_db::TrieDBMut<'a, AllowEmptyLayout<16>, 16>;
@@ -263,8 +262,8 @@ where
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
 {
-	let mut cb = trie_db::TrieRoot::<T>::default();
-	trie_visit::<T, _, _, _, _>(data_sorted_unique(input), &mut cb);
+	let mut cb = trie_db::TrieRoot::<T, N>::default();
+	trie_visit::<T, _, _, _, _, N>(data_sorted_unique(input), &mut cb);
 	cb.root.unwrap_or_default()
 }
 
@@ -331,9 +330,12 @@ enum NodeKindNoExt {
 
 /// Encoding of branch header and children bitmap (for trie stream radix 16).
 /// For stream variant with extension.
-fn branch_node(has_value: bool, has_children: impl Iterator<Item = bool>) -> [u8; 3] {
-	let mut result = [0, 0, 0];
-	branch_node_buffered::<Bitmap16, _>(has_value, has_children, &mut result[..]);
+fn branch_node<const N: usize>(
+	has_value: bool,
+	has_children: impl Iterator<Item = bool>,
+) -> [u8; Bitmap::<{ N }>::bitmap_size() + 1] {
+	let mut result = empty_children_default::<_, { Bitmap::<{ N }>::bitmap_size() + 1 }>();
+	branch_node_buffered::<_, N>(has_value, has_children, &mut result[..]);
 	result
 }
 
@@ -654,7 +656,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 	type HashOut = H::Out;
 
 	fn hashed_null_node() -> <H as Hasher>::Out {
-		H::hash(<Self as NodeCodec>::empty_node())
+		H::hash(<Self as NodeCodec<N>>::empty_node())
 	}
 
 	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan<N>, Self::Error> {
@@ -662,7 +664,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 		match NodeHeader::decode(&mut input)? {
 			NodeHeader::Null => Ok(NodePlan::Empty),
 			NodeHeader::Branch(has_value) => {
-				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size)?;
+				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size())?;
 				let bitmap = Bitmap::<N>::decode(&data[bitmap_range])?;
 
 				let value = if has_value {
@@ -671,36 +673,20 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 				} else {
 					None
 				};
-				let mut error: ::std::result::Result<(), Self::Error> = Ok(());
-				let mut children = empty_children_option::<N>();
-
-				let children = BranchChildrenNodePlan::new((0..N).map(|i| {
+				let mut children = empty_children_option::<_, N>();
+				for i in 0..N {
 					if bitmap.value_at(i) {
-						let count = match <Compact<u32>>::decode(&mut input) {
-							Ok(c) => c.0 as usize,
-							Err(e) => {
-								error = Err(e);
-								return None
-							},
-						};
-						let range = match input.take(count) {
-							Ok(i) => i,
-							Err(e) => {
-								error = Err(e);
-								return None
-							},
-						};
-						if count == H::LENGTH {
-							Some(NodeHandlePlan::Hash(range))
+						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
+						let range = input.take(count)?;
+						children[i] = Some(if count == H::LENGTH {
+							NodeHandlePlan::Hash(range)
 						} else {
-							Some(NodeHandlePlan::Inline(range))
-						}
-					} else {
-						None
+							NodeHandlePlan::Inline(range)
+						});
 					}
-				}));
+				}
 				error?;
-				Ok(NodePlan::Branch { value, children })
+				Ok(NodePlan::Branch { value, children: *children })
 			},
 			NodeHeader::Extension(nibble_count) => {
 				let partial = input.take((nibble_count + (N - 1)) / N)?;
@@ -731,7 +717,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 	}
 
 	fn is_empty_node(data: &[u8]) -> bool {
-		data == <Self as NodeCodec>::empty_node()
+		data == <Self as NodeCodec<N>>::empty_node()
 	}
 
 	fn empty_node() -> &'static [u8] {
@@ -756,7 +742,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 		number_nibble: usize,
 		child: ChildReference<Self::HashOut>,
 	) -> Vec<u8> {
-		let mut output = partial_from_iterator_to_key::<N, _>(
+		let mut output = partial_from_iterator_to_key::<_, N>(
 			partial,
 			number_nibble,
 			EXTENSION_NODE_OFFSET,
@@ -796,7 +782,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 			},
 			None => false,
 		});
-		branch_node_buffered::<_, N>(have_value, has_children, prefix.as_mut());
+		branch_node_buffered::<_, N>(have_value, has_children, prefix.0.as_mut());
 		output[0..prefix.0.len()].copy_from_slice(prefix.0.as_ref());
 		output
 	}
@@ -816,7 +802,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	type HashOut = <H as Hasher>::Out;
 
 	fn hashed_null_node() -> <H as Hasher>::Out {
-		H::hash(<Self as NodeCodec>::empty_node())
+		H::hash(<Self as NodeCodec<N>>::empty_node())
 	}
 
 	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
@@ -861,7 +847,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				NodePlan::NibbledBranch {
 					partial: NibbleSlicePlan::new(partial, partial_padding),
 					value,
-					children,
+					children: *children,
 				}
 			},
 			NodeHeaderNoExt::Leaf(nibble_count) => {
@@ -884,7 +870,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	}
 
 	fn is_empty_node(data: &[u8]) -> bool {
-		data == <Self as NodeCodec>::empty_node()
+		data == <Self as NodeCodec<N>>::empty_node()
 	}
 
 	fn empty_node() -> &'static [u8] {
@@ -925,20 +911,20 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 		maybe_value: Option<Value>,
 	) -> Vec<u8> {
 		let mut output = if maybe_value.is_none() {
-			partial_from_iterator_encode::<N, _>(
+			partial_from_iterator_encode::<_, N>(
 				partial,
 				number_nibble,
 				NodeKindNoExt::BranchNoValue,
 			)
 		} else {
-			partial_from_iterator_encode::<N, _>(
+			partial_from_iterator_encode::<_, N>(
 				partial,
 				number_nibble,
 				NodeKindNoExt::BranchWithValue,
 			)
 		};
 		let bitmap_index = output.len();
-		let mut bitmap: BuffBitmap = Default::default();
+		let mut bitmap: BuffBitmap<N> = Default::default();
 		(0..NibbleOps::<N>::bitmap_size()).for_each(|_| output.push(0));
 		match maybe_value {
 			Some(Value::Inline(value)) => {
@@ -961,10 +947,10 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				},
 				None => false,
 			}),
-			bitmap.as_mut(),
+			bitmap.0.as_mut(),
 		);
 		output[bitmap_index..bitmap_index + NibbleOps::<N>::bitmap_size()]
-			.copy_from_slice(&bitmap.as_ref()[..NibbleOps::<N>::bitmap_size()]);
+			.copy_from_slice(&bitmap.0[..NibbleOps::<N>::bitmap_size()]);
 		output
 	}
 }
@@ -978,10 +964,10 @@ pub fn compare_implementations<T, DB, const N: usize>(
 	T: TrieLayout<N>,
 	DB: hash_db::HashDB<T::Hash, DBValue> + Eq,
 {
-	let root_new = calc_root_build::<T, _, _, _, _>(data.clone(), &mut hashdb);
+	let root_new = calc_root_build::<T, _, _, _, _, N>(data.clone(), &mut hashdb);
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T, N>::new(&mut memdb, &mut root).build();
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 		}
@@ -991,7 +977,7 @@ pub fn compare_implementations<T, DB, const N: usize>(
 	if root_new != root {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root_new).build();
+			let t = TrieDBBuilder::<T, N>::new(&db, &root_new).build();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:x?}", a);
@@ -999,7 +985,7 @@ pub fn compare_implementations<T, DB, const N: usize>(
 		}
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &memdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root).build();
+			let t = TrieDBBuilder::<T, N>::new(&db, &root).build();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:x?}", a);
@@ -1017,10 +1003,10 @@ pub fn compare_root<T: TrieLayout<N>, DB: hash_db::HashDB<T::Hash, DBValue>, con
 	data: Vec<(Vec<u8>, Vec<u8>)>,
 	mut memdb: DB,
 ) {
-	let root_new = reference_trie_root_iter_build::<T, _, _, _>(data.clone());
+	let root_new = reference_trie_root_iter_build::<T, _, _, _, N>(data.clone());
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T, N>::new(&mut memdb, &mut root).build();
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 		}
@@ -1033,8 +1019,8 @@ pub fn compare_root<T: TrieLayout<N>, DB: hash_db::HashDB<T::Hash, DBValue>, con
 /// Compare trie builder and trie root unhashed implementations.
 pub fn compare_unhashed(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	let root_new = {
-		let mut cb = trie_db::TrieRootUnhashed::<ExtensionLayout>::default();
-		trie_visit::<ExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		let mut cb = trie_db::TrieRootUnhashed::<ExtensionLayout, 16>::default();
+		trie_visit::<ExtensionLayout, _, _, _, _, 16>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
 	let root = reference_trie_root_unhashed(data);
@@ -1046,8 +1032,8 @@ pub fn compare_unhashed(data: Vec<(Vec<u8>, Vec<u8>)>) {
 /// This uses the variant without extension nodes.
 pub fn compare_unhashed_no_extension(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	let root_new = {
-		let mut cb = trie_db::TrieRootUnhashed::<NoExtensionLayout>::default();
-		trie_visit::<NoExtensionLayout, _, _, _, _>(data.clone().into_iter(), &mut cb);
+		let mut cb = trie_db::TrieRootUnhashed::<NoExtensionLayout, 16>::default();
+		trie_visit::<NoExtensionLayout, _, _, _, _, 16>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
 	let root = reference_trie_root_unhashed_no_extension(data);
@@ -1063,8 +1049,8 @@ where
 	A: AsRef<[u8]> + Ord + fmt::Debug,
 	B: AsRef<[u8]> + fmt::Debug,
 {
-	let mut cb = TrieRoot::<T>::default();
-	trie_visit::<T, _, _, _, _>(data.into_iter(), &mut cb);
+	let mut cb = TrieRoot::<T, N>::default();
+	trie_visit::<T, _, _, _, _, N>(data.into_iter(), &mut cb);
 	cb.root.unwrap_or_default()
 }
 
@@ -1080,59 +1066,9 @@ where
 	B: AsRef<[u8]> + fmt::Debug,
 	DB: hash_db::HashDB<T::Hash, DBValue>,
 {
-	let mut cb = TrieBuilder::<T, DB>::new(hashdb);
-	trie_visit::<T, _, _, _, _>(data.into_iter(), &mut cb);
+	let mut cb = TrieBuilder::<T, DB, N>::new(hashdb);
+	trie_visit::<T, _, _, _, _, N>(data.into_iter(), &mut cb);
 	cb.root.unwrap_or_default()
-}
-
-/// Compare trie builder and in memory trie.
-/// This uses the variant without extension nodes.
-/// This uses a radix 4 trie.
-pub fn compare_implementations_no_extension_q(
-	data: Vec<(Vec<u8>, Vec<u8>)>,
-	mut memdb: impl hash_db::HashDB<RefHasher, DBValue>,
-	mut hashdb: impl hash_db::HashDB<RefHasher, DBValue>,
-) {
-	let root_new = {
-		let mut cb = TrieBuilder::new(&mut hashdb);
-		trie_visit::<NoExtensionLayoutQuarter, _, _, _, _>(data.clone().into_iter(), &mut cb);
-		cb.root.unwrap_or(Default::default())
-	};
-	let root = {
-		let mut root = Default::default();
-		let mut t = RefTrieDBMutNoExtQ::new(&mut memdb, &mut root);
-		for i in 0..data.len() {
-			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
-		}
-		t.root().clone()
-	};
-	{
-		let db: &dyn hash_db::HashDB<_, _> = &memdb;
-		let t = RefTrieDBNoExtQ::new(&db, &root).unwrap();
-		println!("{:?}", t);
-	}
-
-	if root != root_new {
-		{
-			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
-			let t = RefTrieDBNoExtQ::new(&db, &root_new).unwrap();
-			println!("{:?}", t);
-			for a in t.iter().unwrap() {
-				println!("a:{:?}", a);
-			}
-		}
-
-		{
-			let db: &dyn hash_db::HashDB<_, _> = &memdb;
-			let t = RefTrieDBNoExtQ::new(&db, &root).unwrap();
-			println!("{:?}", t);
-			for a in t.iter().unwrap() {
-				println!("a:{:?}", a);
-			}
-		}
-	}
-
-	assert_eq!(root, root_new);
 }
 
 /// `compare_implementations_no_extension` for unordered input (trie_root does
@@ -1148,7 +1084,7 @@ pub fn compare_implementations_unordered<T, DB, const N: usize>(
 	let mut b_map = std::collections::btree_map::BTreeMap::new();
 	let root = {
 		let mut root = Default::default();
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T, N>::new(&mut memdb, &mut root).build();
 		for i in 0..data.len() {
 			t.insert(&data[i].0[..], &data[i].1[..]).unwrap();
 			b_map.insert(data[i].0.clone(), data[i].1.clone());
@@ -1156,15 +1092,15 @@ pub fn compare_implementations_unordered<T, DB, const N: usize>(
 		*t.root()
 	};
 	let root_new = {
-		let mut cb = TrieBuilder::<T, DB>::new(&mut hashdb);
-		trie_visit::<T, _, _, _, _>(b_map.into_iter(), &mut cb);
+		let mut cb = TrieBuilder::<T, DB, N>::new(&mut hashdb);
+		trie_visit::<T, _, _, _, _, N>(b_map.into_iter(), &mut cb);
 		cb.root.unwrap_or_default()
 	};
 
 	if root != root_new {
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &memdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root).build();
+			let t = TrieDBBuilder::<T, N>::new(&db, &root).build();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:?}", a);
@@ -1172,7 +1108,7 @@ pub fn compare_implementations_unordered<T, DB, const N: usize>(
 		}
 		{
 			let db: &dyn hash_db::HashDB<_, _> = &hashdb;
-			let t = TrieDBBuilder::<T>::new(&db, &root_new).build();
+			let t = TrieDBBuilder::<T, N>::new(&db, &root_new).build();
 			println!("{:?}", t);
 			for a in t.iter().unwrap() {
 				println!("a:{:?}", a);
@@ -1196,13 +1132,13 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>, const N: 
 	let mut root = Default::default();
 	let mut a = 0;
 	{
-		let mut t = TrieDBMutBuilder::<T>::new(&mut memdb, &mut root).build();
+		let mut t = TrieDBMutBuilder::<T, N>::new(&mut memdb, &mut root).build();
 		t.commit();
 	}
 	while a < data.len() {
 		// new triemut every 3 element
 		root = {
-			let mut t = TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build();
+			let mut t = TrieDBMutBuilder::<T, N>::from_existing(&mut memdb, &mut root).build();
 			for _ in 0..3 {
 				if data[a].0 {
 					// remove
@@ -1223,10 +1159,10 @@ pub fn compare_insert_remove<T, DB: hash_db::HashDB<T::Hash, DBValue>, const N: 
 			*t.root()
 		};
 	}
-	let mut t = TrieDBMutBuilder::<T>::from_existing(&mut memdb, &mut root).build();
+	let mut t = TrieDBMutBuilder::<T, N>::from_existing(&mut memdb, &mut root).build();
 	// we are testing the RefTrie code here so we do not sort or check uniqueness
 	// before.
-	assert_eq!(*t.root(), calc_root::<T, _, _, _>(data2));
+	assert_eq!(*t.root(), calc_root::<T, _, _, _, N>(data2));
 }
 
 /// Example trie cache implementation.
