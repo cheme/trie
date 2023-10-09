@@ -64,25 +64,25 @@ impl<H> From<StorageHandle> for NodeHandle<H> {
 }
 
 fn empty_children_option<C, const N: usize>() -> Box<[Option<C>; N]> {
-		use core::mem::{ManuallyDrop, MaybeUninit};
-		let mut buf: MaybeUninit<[MaybeUninit<Option<C>>; N]> = MaybeUninit::uninit();
-		let b = unsafe { &mut *buf.as_mut_ptr() };
-		for i in 0..N {
-			b[i] = MaybeUninit::new(None);
-		}
-		let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
-		Box::new(buf)
+	use core::mem::{ManuallyDrop, MaybeUninit};
+	let mut buf: MaybeUninit<[MaybeUninit<Option<C>>; N]> = MaybeUninit::uninit();
+	let b = unsafe { &mut *buf.as_mut_ptr() };
+	for i in 0..N {
+		b[i] = MaybeUninit::new(None);
+	}
+	let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
+	Box::new(buf)
 }
 
 fn empty_children_default<C: Default, const N: usize>() -> Box<[C; N]> {
-		use core::mem::{ManuallyDrop, MaybeUninit};
-		let mut buf: MaybeUninit<[MaybeUninit<C>; N]> = MaybeUninit::uninit();
-		let b = unsafe { &mut *buf.as_mut_ptr() };
-		for i in 0..N {
-			b[i] = MaybeUninit::new(Default::default());
-		}
-		let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
-		Box::new(buf)
+	use core::mem::{ManuallyDrop, MaybeUninit};
+	let mut buf: MaybeUninit<[MaybeUninit<C>; N]> = MaybeUninit::uninit();
+	let b = unsafe { &mut *buf.as_mut_ptr() };
+	for i in 0..N {
+		b[i] = MaybeUninit::new(Default::default());
+	}
+	let buf: [MaybeUninit<V>; R] = unsafe { buf.assume_init() };
+	Box::new(buf)
 }
 
 /// Type alias to indicate the nible covers a full key,
@@ -342,7 +342,7 @@ impl<L: TrieLayout<N>, const N: usize> Node<L, N> {
 				};
 
 				let mut children = empty_children_option::<_, N>();
-				for i in in 0..N {
+				for i in 0..N {
 					children[i] = child(i)?;
 				}
 				Node::Branch(children, val.map(Into::into))
@@ -354,7 +354,7 @@ impl<L: TrieLayout<N>, const N: usize> Node<L, N> {
 				};
 
 				let mut children = empty_children_option::<_, N>();
-				for i in in 0..N {
+				for i in 0..N {
 					children[i] = child(i)?;
 				}
 
