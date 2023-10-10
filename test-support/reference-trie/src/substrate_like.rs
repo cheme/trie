@@ -15,7 +15,8 @@
 //! Codec and layout configuration similar to upstream default substrate one.
 
 use super::{CodecError as Error, NodeCodec as NodeCodecT, *};
-use trie_db::node::Value;
+use crate::{check_bitmap, encode_bitmap, set_bitmap, value_at_bitmap};
+use trie_db::{empty_children_default, empty_children_option, node::Value, NibbleOps};
 
 /// No extension trie with no hashed value.
 pub struct HashedValueNoExt;
@@ -75,18 +76,16 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 		match header {
 			NodeHeader::Null => Ok(NodePlan::Empty),
 			NodeHeader::HashedValueBranch(nibble_count) | NodeHeader::Branch(_, nibble_count) => {
-				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
+				let nb_padding = nibble_count % N;
+				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
-				if padding && nibble_ops::pad_left(data[input.offset]) != 0 {
+				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take(
-					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) /
-						nibble_ops::NIBBLE_PER_BYTE,
-				)?;
-				let partial_padding = nibble_ops::number_padding(nibble_count);
-				let bitmap_range = input.take(BITMAP_LENGTH)?;
-				let bitmap = Bitmap::decode(&data[bitmap_range])?;
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
+				let bitmap_size = check_bitmap::<N>(&data[input.offset..])?;
+				let bitmap_range = input.take(bitmap_size)?;
 				let value = if branch_has_value {
 					Some(if contains_hash {
 						ValuePlan::Node(input.take(H::LENGTH)?)
@@ -97,12 +96,9 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				} else {
 					None
 				};
-				let mut children = [
-					None, None, None, None, None, None, None, None, None, None, None, None, None,
-					None, None, None,
-				];
-				for i in 0..nibble_ops::NIBBLE_LENGTH {
-					if bitmap.value_at(i) {
+				let mut children = empty_children_option::<_, N>();
+				for i in 0..N {
+					if value_at_bitmap::<N>(&data[bitmap_range], i) {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						let range = input.take(count)?;
 						children[i] = Some(if count == H::LENGTH {
@@ -115,20 +111,18 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				Ok(NodePlan::NibbledBranch {
 					partial: NibbleSlicePlan::new(partial, partial_padding),
 					value,
-					children,
+					children: *children,
 				})
 			},
 			NodeHeader::HashedValueLeaf(nibble_count) | NodeHeader::Leaf(nibble_count) => {
-				let padding = nibble_count % nibble_ops::NIBBLE_PER_BYTE != 0;
+				let nb_padding = nibble_count % N;
+				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
-				if padding && nibble_ops::pad_left(data[input.offset]) != 0 {
+				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take(
-					(nibble_count + (nibble_ops::NIBBLE_PER_BYTE - 1)) /
-						nibble_ops::NIBBLE_PER_BYTE,
-				)?;
-				let partial_padding = nibble_ops::number_padding(nibble_count);
+				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let value = if contains_hash {
 					ValuePlan::Node(input.take(H::LENGTH)?)
 				} else {
@@ -154,7 +148,7 @@ where
 	type HashOut = H::Out;
 
 	fn hashed_null_node() -> <H as Hasher>::Out {
-		H::hash(<Self as NodeCodecT>::empty_node())
+		H::hash(<Self as NodeCodecT<N>>::empty_node())
 	}
 
 	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
@@ -162,7 +156,7 @@ where
 	}
 
 	fn is_empty_node(data: &[u8]) -> bool {
-		data == <Self as NodeCodecT>::empty_node()
+		data == <Self as NodeCodecT<N>>::empty_node()
 	}
 
 	fn empty_node() -> &'static [u8] {
@@ -172,9 +166,9 @@ where
 	fn leaf_node(partial: impl Iterator<Item = u8>, number_nibble: usize, value: Value) -> Vec<u8> {
 		let contains_hash = matches!(&value, Value::Node(..));
 		let mut output = if contains_hash {
-			partial_from_iterator_encode(partial, number_nibble, NodeKind::HashedValueLeaf)
+			partial_from_iterator_encode::<_, N>(partial, number_nibble, NodeKind::HashedValueLeaf)
 		} else {
-			partial_from_iterator_encode(partial, number_nibble, NodeKind::Leaf)
+			partial_from_iterator_encode::<_, N>(partial, number_nibble, NodeKind::Leaf)
 		};
 		match value {
 			Value::Inline(value) => {
@@ -212,17 +206,25 @@ where
 	) -> Vec<u8> {
 		let contains_hash = matches!(&value, Some(Value::Node(..)));
 		let mut output = match (&value, contains_hash) {
-			(&None, _) =>
-				partial_from_iterator_encode(partial, number_nibble, NodeKind::BranchNoValue),
-			(_, false) =>
-				partial_from_iterator_encode(partial, number_nibble, NodeKind::BranchWithValue),
-			(_, true) =>
-				partial_from_iterator_encode(partial, number_nibble, NodeKind::HashedValueBranch),
+			(&None, _) => partial_from_iterator_encode::<_, N>(
+				partial,
+				number_nibble,
+				NodeKind::BranchNoValue,
+			),
+			(_, false) => partial_from_iterator_encode::<_, N>(
+				partial,
+				number_nibble,
+				NodeKind::BranchWithValue,
+			),
+			(_, true) => partial_from_iterator_encode::<_, N>(
+				partial,
+				number_nibble,
+				NodeKind::HashedValueBranch,
+			),
 		};
 
 		let bitmap_index = output.len();
-		let mut bitmap: [u8; BITMAP_LENGTH] = [0; BITMAP_LENGTH];
-		(0..BITMAP_LENGTH).for_each(|_| output.push(0));
+		(0..NibbleOps::<N>::bitmap_size()).for_each(|_| output.push(0));
 		match value {
 			Some(Value::Inline(value)) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -234,7 +236,7 @@ where
 			},
 			None => (),
 		}
-		Bitmap::encode(
+		encode_bitmap::<_, N>(
 			children.map(|maybe_child| match maybe_child.borrow() {
 				Some(ChildReference::Hash(h)) => {
 					h.as_ref().encode_to(&mut output);
@@ -246,10 +248,8 @@ where
 				},
 				None => false,
 			}),
-			bitmap.as_mut(),
+			&mut output[bitmap_index..],
 		);
-		output[bitmap_index..bitmap_index + BITMAP_LENGTH]
-			.copy_from_slice(&bitmap[..BITMAP_LENGTH]);
 		output
 	}
 }
@@ -258,14 +258,14 @@ where
 
 /// Encode and allocate node type header (type and size), and partial value.
 /// It uses an iterator over encoded partial bytes as input.
-fn partial_from_iterator_encode<I: Iterator<Item = u8>>(
+fn partial_from_iterator_encode<I: Iterator<Item = u8>, const N: usize>(
 	partial: I,
 	nibble_count: usize,
 	node_kind: NodeKind,
 ) -> Vec<u8> {
 	let nibble_count = std::cmp::min(trie_constants::NIBBLE_SIZE_BOUND, nibble_count);
 
-	let mut output = Vec::with_capacity(4 + (nibble_count / nibble_ops::NIBBLE_PER_BYTE));
+	let mut output = Vec::with_capacity(4 + (nibble_count / N));
 	match node_kind {
 		NodeKind::Leaf => NodeHeader::Leaf(nibble_count).encode_to(&mut output),
 		NodeKind::BranchWithValue => NodeHeader::Branch(true, nibble_count).encode_to(&mut output),

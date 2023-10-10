@@ -18,22 +18,17 @@ use hashbrown::{hash_map::Entry, HashMap};
 use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Output};
 use std::{borrow::Borrow, fmt, iter::once, marker::PhantomData, ops::Range};
 use trie_db::{
-	empty_children_default, empty_children_option,
-	node::{BranchChildrenNodePlan, NibbleSlicePlan, NodeHandlePlan, NodePlan},
-	trie_visit,
-	triedbmut::ChildReference,
-	DBValue, Partial, TrieBuilder, TrieHash, TrieRoot,
+	empty_children_default, empty_children_option, node::BranchChildrenNodePlan, Partial,
 };
 
 pub use trie_db::{
-	decode_compact, encode_compact, nibble_ops,
+	bitmap_size, decode_compact, encode_compact,
 	node::{NibbleSlicePlan, NodeHandlePlan, NodeOwned, NodePlan, Value, ValuePlan},
 	proof, trie_visit,
 	triedbmut::{ChildReference, NodeHandle},
-	ChildIndex, DBValue, NibbleOps, NibbleSlice, NibbleVec, NodeCodec, Record, Recorder, Trie,
-	TrieBuilder, TrieConfiguration, TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBMut,
-	TrieDBMutBuilder, TrieDBNodeIterator, TrieError, TrieHash, TrieIterator, TrieLayout, TrieMut,
-	TrieRoot,
+	DBValue, NibbleOps, NibbleSlice, NibbleVec, NodeCodec, Recorder, Trie, TrieBuilder,
+	TrieConfiguration, TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBMut, TrieDBMutBuilder,
+	TrieDBNodeIterator, TrieError, TrieHash, TrieIterator, TrieLayout, TrieMut, TrieRoot,
 };
 pub use trie_root::TrieStream;
 use trie_root::{Hasher, Value as TrieStreamValue};
@@ -159,47 +154,33 @@ impl<const N: usize> TrieLayout<N> for AllowEmptyLayout<N> {
 	type Codec = ReferenceNodeCodec<RefHasher, N>;
 }
 
-/// Trie layout without extension nodes.
-pub type NoExtensionLayout = GenericNoExtensionLayout<RefHasher, 16>;
+pub fn check_bitmap<const N: usize>(data: &[u8]) -> Result<usize, CodecError> {
+	let bitmap_len = NibbleOps::<N>::bitmap_size();
+	if data.len() < bitmap_len {
+		return Err("End of data".into())
+	}
+	Ok(bitmap_len)
+}
 
-/// Children bitmap codec for radix 16 trie.
-pub struct Bitmap<const N: usize>(pub [u8; NibbleOps::<{ N }>::bitmap_size()]);
+pub fn value_at_bitmap<const N: usize>(bitmap: &[u8], i: usize) -> bool {
+	let ix = i / 8;
+	let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
+	let i = i % 8;
+	bitmap[ix] & (0b1000_0000 >> i) != 0
+}
 
-/// 1 byte header plus bitmap
-pub struct BuffBitmap<const N: usize>(pub [u8; NibbleOps::<{ N }>::bitmap_size() + 1]);
-
-impl<const N: usize> Default for BuffBitmap<N> {
-	fn default() -> Self {
-		BuffBitmap([0u8; NibbleOps::<{ N }>::bitmap_size() + 1])
+pub fn encode_bitmap<I: Iterator<Item = bool>, const N: usize>(has_children: I, output: &mut [u8]) {
+	for (i, v) in has_children.enumerate() {
+		if v {
+			set_bitmap::<N>(i, output);
+		}
 	}
 }
 
-impl<const N: usize> Bitmap<N> {
-	pub fn decode(data: &[u8]) -> Result<Self, trie_db::CError<L, N>> {
-		if data.len() < NibbleOps::<N>::bitmap_size() {
-			return Err("End of data".into())
-		}
-		let mut v = [0u8; NibbleOps::<{ N }>::bitmap_size()];
-		v[..].copy_from_slice(&data[..]);
-		Ok(Bitmap(v))
-	}
-
-	pub fn value_at(&self, i: usize) -> bool {
-		let ix = i / 8;
-		let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
-		let i = i % 8;
-		self.0.as_ref()[ix] & (0b1000_0000 >> i) != 0
-	}
-
-	pub fn encode<I: Iterator<Item = bool>>(has_children: I, output: &mut [u8]) {
-		for (i, v) in has_children.enumerate() {
-			if v {
-				let ix = i / 8;
-				let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
-				output[ix] |= 0b1000_0000 >> (i % 8);
-			}
-		}
-	}
+pub fn set_bitmap<const N: usize>(i: usize, output: &mut [u8]) {
+	let ix = i / 8;
+	let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
+	output[ix] |= 0b1000_0000 >> (i % 8);
 }
 
 pub type RefTrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, ExtensionLayout, 16>;
@@ -208,7 +189,6 @@ pub type RefTrieDBBuilder<'a, 'cache> = trie_db::TrieDBBuilder<'a, 'cache, Exten
 pub type RefTrieDBMut<'a> = trie_db::TrieDBMut<'a, ExtensionLayout, 16>;
 pub type RefTrieDBMutBuilder<'a> = trie_db::TrieDBMutBuilder<'a, ExtensionLayout, 16>;
 pub type RefTrieDBMutNoExt<'a> = trie_db::TrieDBMut<'a, NoExtensionLayout, 16>;
-pub type RefFatDB<'a, 'cache> = trie_db::FatDB<'a, 'cache, ExtensionLayout, 16>;
 pub type RefTrieDBMutNoExtBuilder<'a> = trie_db::TrieDBMutBuilder<'a, NoExtensionLayout, 16>;
 pub type RefTrieDBMutAllowEmpty<'a> = trie_db::TrieDBMut<'a, AllowEmptyLayout<16>, 16>;
 pub type RefTrieDBMutAllowEmptyBuilder<'a> =
@@ -328,17 +308,6 @@ enum NodeKindNoExt {
 	BranchWithValue,
 }
 
-/// Encoding of branch header and children bitmap (for trie stream radix 16).
-/// For stream variant with extension.
-fn branch_node<const N: usize>(
-	has_value: bool,
-	has_children: impl Iterator<Item = bool>,
-) -> [u8; Bitmap::<{ N }>::bitmap_size() + 1] {
-	let mut result = empty_children_default::<_, { Bitmap::<{ N }>::bitmap_size() + 1 }>();
-	branch_node_buffered::<_, N>(has_value, has_children, &mut result[..]);
-	result
-}
-
 /// Encoding of branch header and children bitmap for any radix.
 /// For codec/stream variant with extension.
 fn branch_node_buffered<I: Iterator<Item = bool>, const N: usize>(
@@ -348,7 +317,12 @@ fn branch_node_buffered<I: Iterator<Item = bool>, const N: usize>(
 ) {
 	let first = if has_value { BRANCH_NODE_WITH_VALUE } else { BRANCH_NODE_NO_VALUE };
 	output[0] = first;
-	Bitmap::<N>::encode(has_children, &mut output[1..]);
+
+	encode_bitmap::<_, N>(has_children, &mut output[1..]);
+}
+fn branch_node_header<const N: usize>(has_value: bool, output: &mut [u8]) {
+	let first = if has_value { BRANCH_NODE_WITH_VALUE } else { BRANCH_NODE_NO_VALUE };
+	output[0] = first;
 }
 
 /// Encoding of children bitmap (for trie stream radix 16).
@@ -395,7 +369,17 @@ impl TrieStream for ReferenceTrieStream {
 		maybe_value: Option<TrieStreamValue>,
 		has_children: impl Iterator<Item = bool>,
 	) {
-		self.buffer.extend(&branch_node(!matches!(maybe_value, None), has_children));
+		const N: usize = 16; // trie_root only support hexary trie.
+		let buff_branch_size = NibbleOps::<N>::bitmap_size() + 1;
+		let start = self.buffer.len();
+		self.buffer.resize(start + buff_branch_size, 0);
+
+		branch_node_buffered::<_, N>(
+			!matches!(maybe_value, None),
+			has_children,
+			&mut self.buffer[start..],
+		);
+
 		if let Some(partial) = maybe_key {
 			// should not happen
 			self.buffer.extend(fuse_nibbles_node(partial, false));
@@ -664,8 +648,8 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 		match NodeHeader::decode(&mut input)? {
 			NodeHeader::Null => Ok(NodePlan::Empty),
 			NodeHeader::Branch(has_value) => {
-				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size())?;
-				let bitmap = Bitmap::<N>::decode(&data[bitmap_range])?;
+				let bitmap_size = check_bitmap::<N>(&data[input.offset..])?;
+				let bitmap_range = input.take(bitmap_size)?;
 
 				let value = if has_value {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
@@ -675,7 +659,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 				};
 				let mut children = empty_children_option::<_, N>();
 				for i in 0..N {
-					if bitmap.value_at(i) {
+					if value_at_bitmap::<N>(&data[bitmap_range.clone()], i) {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						let range = input.take(count)?;
 						children[i] = Some(if count == H::LENGTH {
@@ -685,7 +669,6 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 						});
 					}
 				}
-				error?;
 				Ok(NodePlan::Branch { value, children: *children })
 			},
 			NodeHeader::Extension(nibble_count) => {
@@ -725,8 +708,12 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 	}
 
 	fn leaf_node(partial: impl Iterator<Item = u8>, number_nibble: usize, value: Value) -> Vec<u8> {
-		let mut output =
-			partial_from_iterator_to_key(partial, number_nibble, LEAF_NODE_OFFSET, LEAF_NODE_OVER);
+		let mut output = partial_from_iterator_to_key::<_, N>(
+			partial,
+			number_nibble,
+			LEAF_NODE_OFFSET,
+			LEAF_NODE_OVER,
+		);
 		match value {
 			Value::Inline(value) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -761,7 +748,6 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 		maybe_value: Option<Value>,
 	) -> Vec<u8> {
 		let mut output = vec![0; NibbleOps::<N>::bitmap_size() + 1];
-		let mut prefix: BuffBitmap<N> = Default::default();
 		let have_value = match maybe_value {
 			Some(Value::Inline(value)) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -771,19 +757,22 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 			None => false,
 			_ => unimplemented!("unsupported"),
 		};
-		let has_children = children.map(|maybe_child| match maybe_child.borrow() {
-			Some(ChildReference::Hash(h)) => {
-				h.as_ref().encode_to(&mut output);
-				true
-			},
-			&Some(ChildReference::Inline(inline_data, len)) => {
-				inline_data.as_ref()[..len].encode_to(&mut output);
-				true
-			},
-			None => false,
-		});
-		branch_node_buffered::<_, N>(have_value, has_children, prefix.0.as_mut());
-		output[0..prefix.0.len()].copy_from_slice(prefix.0.as_ref());
+		branch_node_header::<N>(have_value, &mut output[..]);
+		for (i, maybe_child) in children.enumerate() {
+			if match maybe_child.borrow() {
+				Some(ChildReference::Hash(h)) => {
+					h.as_ref().encode_to(&mut output);
+					true
+				},
+				&Some(ChildReference::Inline(inline_data, len)) => {
+					inline_data.as_ref()[..len].encode_to(&mut output);
+					true
+				},
+				None => false,
+			} {
+				set_bitmap::<N>(i, &mut output[1..])
+			}
+		}
 		output
 	}
 
@@ -824,8 +813,9 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				}
 				let partial = input.take((nibble_count + (N - 1)) / N)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
-				let bitmap_range = input.take(NibbleOps::<N>::bitmap_size())?;
-				let bitmap = Bitmap::<N>::decode(&data[bitmap_range])?;
+				let bitmap_size = check_bitmap::<N>(&data[input.offset..])?;
+
+				let bitmap_range = input.take(bitmap_size)?;
 				let value = if has_value {
 					let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 					Some(ValuePlan::Inline(input.take(count)?))
@@ -834,7 +824,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				};
 				let mut children = empty_children_option::<_, N>();
 				for i in 0..N {
-					if bitmap.value_at(i) {
+					if value_at_bitmap::<N>(&data[bitmap_range.clone()], i) {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						let range = input.take(count)?;
 						children[i] = Some(if count == H::LENGTH {
@@ -878,7 +868,8 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	}
 
 	fn leaf_node(partial: impl Iterator<Item = u8>, number_nibble: usize, value: Value) -> Vec<u8> {
-		let mut output = partial_from_iterator_encode(partial, number_nibble, NodeKindNoExt::Leaf);
+		let mut output =
+			partial_from_iterator_encode::<_, N>(partial, number_nibble, NodeKindNoExt::Leaf);
 		match value {
 			Value::Inline(value) => {
 				Compact(value.len() as u32).encode_to(&mut output);
@@ -924,7 +915,6 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 			)
 		};
 		let bitmap_index = output.len();
-		let mut bitmap: BuffBitmap<N> = Default::default();
 		(0..NibbleOps::<N>::bitmap_size()).for_each(|_| output.push(0));
 		match maybe_value {
 			Some(Value::Inline(value)) => {
@@ -935,8 +925,8 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 			None => (),
 		}
 
-		Bitmap::<N>::encode(
-			children.map(|maybe_child| match maybe_child.borrow() {
+		for (i, maybe_child) in children.enumerate() {
+			if match maybe_child.borrow() {
 				Some(ChildReference::Hash(h)) => {
 					h.as_ref().encode_to(&mut output);
 					true
@@ -946,11 +936,10 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 					true
 				},
 				None => false,
-			}),
-			bitmap.0.as_mut(),
-		);
-		output[bitmap_index..bitmap_index + NibbleOps::<N>::bitmap_size()]
-			.copy_from_slice(&bitmap.0[..NibbleOps::<N>::bitmap_size()]);
+			} {
+				set_bitmap::<N>(i, &mut output[bitmap_index..]);
+			}
+		}
 		output
 	}
 }

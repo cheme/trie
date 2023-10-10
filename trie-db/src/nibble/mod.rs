@@ -29,6 +29,14 @@ mod nibblevec;
 // Work-around absence of constant function for math pow.
 const TWO_EXP: [usize; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
 
+pub const fn bitmap_size<const N: usize>() -> usize {
+	if N % 8 == 0 {
+		N / 8
+	} else {
+		N / 8 + 1
+	}
+}
+
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
 /// Struct for methods depending on radix

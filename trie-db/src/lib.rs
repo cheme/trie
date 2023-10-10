@@ -69,7 +69,7 @@ pub use self::{
 	fatdb::{FatDB, FatDBIterator},
 	fatdbmut::FatDBMut,
 	lookup::Lookup,
-	nibble::{NibbleOps, NibbleSlice, NibbleVec},
+	nibble::{bitmap_size, NibbleOps, NibbleSlice, NibbleVec},
 	recorder::Recorder,
 	sectriedb::SecTrieDB,
 	sectriedbmut::SecTrieDBMut,
