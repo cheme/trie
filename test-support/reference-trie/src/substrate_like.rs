@@ -98,7 +98,7 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				};
 				let mut children = empty_children_option::<_, N>();
 				for i in 0..N {
-					if value_at_bitmap::<N>(&data[bitmap_range], i) {
+					if value_at_bitmap::<N>(&data[bitmap_range.clone()], i) {
 						let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 						let range = input.take(count)?;
 						children[i] = Some(if count == H::LENGTH {
@@ -236,8 +236,8 @@ where
 			},
 			None => (),
 		}
-		encode_bitmap::<_, N>(
-			children.map(|maybe_child| match maybe_child.borrow() {
+		for (i, maybe_child) in children.enumerate() {
+			if match maybe_child.borrow() {
 				Some(ChildReference::Hash(h)) => {
 					h.as_ref().encode_to(&mut output);
 					true
@@ -247,9 +247,10 @@ where
 					true
 				},
 				None => false,
-			}),
-			&mut output[bitmap_index..],
-		);
+			} {
+				set_bitmap::<N>(i, &mut output[bitmap_index..])
+			}
+		}
 		output
 	}
 }
