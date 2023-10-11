@@ -88,16 +88,16 @@ impl<const N: usize> NibbleVec<N> {
 	}
 
 	/// Remove then n last nibbles in a faster way than popping n times.
-	pub fn drop_lasts(&mut self, n: usize) {
+	pub fn drop_lasts(&mut self, nb: usize) {
 		let n = NibbleOps::<N>::nibble_per_byte();
-		if n == 0 {
+		if nb == 0 {
 			return
 		}
-		if n >= self.len {
+		if nb >= self.len {
 			self.clear();
 			return
 		}
-		let end = self.len - n;
+		let end = self.len - nb;
 		let end_index = end / n + if end % n == 0 { 0 } else { 1 };
 		(end_index..self.inner.len()).for_each(|_| {
 			self.inner.pop();
@@ -282,7 +282,7 @@ impl<const N: usize> NibbleVec<N> {
 			if require_padding && ix < inner.len() {
 				if ix == 0 {
 					ix += 1;
-					Some(inner[ix - 1] >> NibbleOps::<N>::bit_per_nibble())
+					Some(inner[ix - 1] >> right_s)
 				} else {
 					ix += 1;
 

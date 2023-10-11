@@ -1517,6 +1517,7 @@ where
 		key: NibbleSlice<N>,
 		recurse_extension: bool,
 	) -> Result<Node<L, N>, TrieHash<L, N>, CError<L, N>> {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		match node {
 			Node::Branch(mut children, value) => {
 				// if only a single value, transmute to leaf/extension and feed through fixed.
@@ -1596,7 +1597,7 @@ where
 							.take()
 							.expect("used_index only set if occupied; qed");
 						let mut key2 = key.clone();
-						key2.advance((enc_nibble.1.len() * N) - enc_nibble.0);
+						key2.advance((enc_nibble.1.len() * n) - enc_nibble.0);
 						let (start, alloc_start, align, last) = match key2.left() {
 							Prefix { slice: start, align: 0, last: _ } =>
 								(start, None, 1, NibbleOps::<N>::push_at_left(0, a, 0)),
@@ -1638,7 +1639,7 @@ where
 						match child_node {
 							Node::Leaf(sub_partial, value) => {
 								let mut enc_nibble = enc_nibble;
-								combine_key::<N>(&mut enc_nibble, (N - 1, &[a][..]));
+								combine_key::<N>(&mut enc_nibble, (n - 1, &[a][..]));
 								combine_key::<N>(
 									&mut enc_nibble,
 									(sub_partial.0, &sub_partial.1[..]),
@@ -1647,7 +1648,7 @@ where
 							},
 							Node::NibbledBranch(sub_partial, ch_children, ch_value) => {
 								let mut enc_nibble = enc_nibble;
-								combine_key::<N>(&mut enc_nibble, (N - 1, &[a][..]));
+								combine_key::<N>(&mut enc_nibble, (n - 1, &[a][..]));
 								combine_key::<N>(
 									&mut enc_nibble,
 									(sub_partial.0, &sub_partial.1[..]),
@@ -1999,13 +2000,14 @@ where
 
 /// combine two NodeKeys
 fn combine_key<const N: usize>(start: &mut NodeKey, end: (usize, &[u8])) {
-	debug_assert!(start.0 < N);
-	debug_assert!(end.0 < N);
-	let final_offset = (start.0 + end.0) % N;
+	let n = NibbleOps::<N>::nibble_per_byte();
+	debug_assert!(start.0 < n);
+	debug_assert!(end.0 < n);
+	let final_offset = (start.0 + end.0) % n;
 	let _shifted = NibbleOps::<N>::shift_key(start, final_offset);
 	let st = if end.0 > 0 {
 		let sl = start.1.len();
-		start.1[sl - 1] |= NibbleOps::<N>::pad_right((N - end.0) as u8, end.1[0]);
+		start.1[sl - 1] |= NibbleOps::<N>::pad_right((n - end.0) as u8, end.1[0]);
 		1
 	} else {
 		0

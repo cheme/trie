@@ -182,7 +182,6 @@ impl<const N: usize> NibbleOps<N> {
 	/// Calculate the number of common nibble between two left aligned bytes.
 	#[inline(always)]
 	pub fn split_shifts(pad: usize) -> (usize, usize) {
-		debug_assert!(pad > 0);
 		let s2 = Self::bit_per_nibble() * pad;
 		let s1 = 8 - s2;
 		(s1, s2)
