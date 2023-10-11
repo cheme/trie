@@ -374,7 +374,7 @@ mod tests {
 		iterator_inner::<16>();
 	}
 
-	fn iterator_inner<N: NibbleOps>() {
+	fn iterator_inner<const N: usize>() {
 		let n = NibbleSlice::<N>::new(D);
 		let mut nibbles: Vec<u8> = vec![];
 		nibbles.extend(n.iter());
@@ -386,7 +386,7 @@ mod tests {
 		mid_inner::<16>();
 	}
 
-	fn mid_inner<N: NibbleOps>() {
+	fn mid_inner<const N: usize>() {
 		let n = NibbleSlice::<N>::new(D);
 		let m = n.mid(2);
 		for i in 0..4 {
@@ -461,7 +461,12 @@ mod tests {
 		}
 	}
 
-	fn range_iter_test<N: NibbleOps>(n: NibbleSlice<N>, nb: usize, mid: Option<usize>, res: &[u8]) {
+	fn range_iter_test<const N: usize>(
+		n: NibbleSlice<N>,
+		nb: usize,
+		mid: Option<usize>,
+		res: &[u8],
+	) {
 		let n = if let Some(i) = mid { n.mid(i) } else { n };
 		assert_eq!(&n.right_range_iter(nb).collect::<Vec<_>>()[..], res);
 	}
@@ -470,7 +475,7 @@ mod tests {
 	fn shared() {
 		shared_inner::<16>();
 	}
-	fn shared_inner<N: NibbleOps>() {
+	fn shared_inner<const N: usize>() {
 		let n = NibbleSlice::<N>::new(D);
 
 		let other = &[0x01u8, 0x23, 0x01, 0x23, 0x45, 0x67];
@@ -489,7 +494,7 @@ mod tests {
 	fn compare() {
 		compare_inner::<16>();
 	}
-	fn compare_inner<N: NibbleOps>() {
+	fn compare_inner<const N: usize>() {
 		let other = &[0x01u8, 0x23, 0x01, 0x23, 0x45];
 		let n = NibbleSlice::<N>::new(D);
 		let m = NibbleSlice::new(other);

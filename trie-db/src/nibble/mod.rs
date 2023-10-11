@@ -419,6 +419,6 @@ mod tests {
 
 	#[test]
 	fn nibble_vec_size() {
-		assert_eq!(std::mem::size_of::<NibbleVec>(), 56);
+		assert_eq!(std::mem::size_of::<NibbleVec<16>>(), 56);
 	}
 }

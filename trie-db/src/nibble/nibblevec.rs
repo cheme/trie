@@ -309,14 +309,14 @@ impl<const N: usize> From<&NibbleVec<N>> for NodeKey {
 mod tests {
 	use super::*;
 	use crate::{
-		nibble::{NibbleOps, NibbleVec, Radix16, Radix4},
+		nibble::{NibbleOps, NibbleVec},
 		NibbleSlice,
 	};
 
 	#[test]
 	fn push_pop() {
-		push_pop_inner::<Radix16>();
-		push_pop_inner::<Radix4>();
+		push_pop_inner::<16>();
+		push_pop_inner::<4>();
 	}
 
 	fn push_pop_inner<const N: usize>() {
@@ -339,42 +339,38 @@ mod tests {
 
 	#[test]
 	fn append_partial() {
-		append_partial_inner::<Radix16>(&[1, 2, 3], &[], ((1, 1), &[0x23]));
-		append_partial_inner::<Radix16>(&[1, 2, 3], &[1], ((0, 0), &[0x23]));
-		append_partial_inner::<Radix16>(&[0, 1, 2, 3], &[0], ((1, 1), &[0x23]));
-		append_partial_inner::<Radix4>(&[1, 0, 2, 0, 3], &[], ((1, 1), &[0x23]));
-		append_partial_inner::<Radix4>(&[1, 0, 2, 0, 3, 0, 1, 0, 2], &[], ((1, 1), &[0x23, 0x12]));
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<16>(&[1, 2, 3], &[], ((1, 1), &[0x23]));
+		append_partial_inner::<16>(&[1, 2, 3], &[1], ((0, 0), &[0x23]));
+		append_partial_inner::<16>(&[0, 1, 2, 3], &[0], ((1, 1), &[0x23]));
+		append_partial_inner::<4>(&[1, 0, 2, 0, 3], &[], ((1, 1), &[0x23]));
+		append_partial_inner::<4>(&[1, 0, 2, 0, 3, 0, 1, 0, 2], &[], ((1, 1), &[0x23, 0x12]));
+		append_partial_inner::<4>(
 			&[2, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[],
 			((2, 0b1001), &[0x23, 0x12]),
 		);
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<4>(
 			&[3, 2, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[],
 			((3, 0b111001), &[0x23, 0x12]),
 		);
-		append_partial_inner::<Radix4>(
-			&[3, 1, 0, 2, 0, 3, 0, 1, 0, 2],
-			&[3],
-			((1, 1), &[0x23, 0x12]),
-		);
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<4>(&[3, 1, 0, 2, 0, 3, 0, 1, 0, 2], &[3], ((1, 1), &[0x23, 0x12]));
+		append_partial_inner::<4>(
 			&[3, 2, 3, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[3, 2, 3],
 			((1, 1), &[0x23, 0x12]),
 		);
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<4>(
 			&[3, 2, 3, 2, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[3, 2, 3],
 			((2, 0b1001), &[0x23, 0x12]),
 		);
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<4>(
 			&[3, 2, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[3, 2],
 			((1, 1), &[0x23, 0x12]),
 		);
-		append_partial_inner::<Radix4>(
+		append_partial_inner::<4>(
 			&[3, 2, 3, 2, 1, 0, 2, 0, 3, 0, 1, 0, 2],
 			&[3, 2],
 			((3, 0b111001), &[0x23, 0x12]),
@@ -393,7 +389,7 @@ mod tests {
 	#[test]
 	fn drop_lasts_test() {
 		let test_trun = |a: &[u8], b: usize, c: (&[u8], usize)| {
-			let mut k = NibbleVec::<Radix16>::new();
+			let mut k = NibbleVec::<16>::new();
 			for v in a {
 				k.push(*v);
 			}
@@ -415,10 +411,11 @@ mod tests {
 
 	#[test]
 	fn right_iter_works() {
+		const N: usize = 16;
 		let data = vec![1, 2, 3, 4, 5, 234, 78, 99];
 
-		let nibble = NibbleSlice::new(&data);
-		let vec = NibbleVec::from(nibble);
+		let nibble = NibbleSlice::<N>::new(&data);
+		let vec = NibbleVec::<N>::from(nibble);
 
 		nibble
 			.right_iter()
@@ -427,8 +424,8 @@ mod tests {
 			.for_each(|(i, (l, r))| assert_eq!(l, r, "Don't match at {}", i));
 
 		// Also try with using an offset.
-		let nibble = NibbleSlice::new_offset(&data, 3);
-		let vec = NibbleVec::from(nibble);
+		let nibble = NibbleSlice::<N>::new_offset(&data, 3);
+		let vec = NibbleVec::<N>::from(nibble);
 
 		nibble
 			.right_iter()

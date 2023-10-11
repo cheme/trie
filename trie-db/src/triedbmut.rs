@@ -2014,7 +2014,7 @@ mod tests {
 		let b: &[u8] = [0x56, 0x78][..].into();
 		let test_comb = |a: (_, &BackingByteVec), b, c| {
 			let mut a = (a.0, a.1.clone());
-			super::combine_key::<crate::nibble::Radix16>(&mut a, b);
+			super::combine_key::<16>(&mut a, b);
 			assert_eq!((a.0, &a.1[..]), c);
 		};
 		test_comb((0, &a), (0, &b), (0, &[0x12, 0x34, 0x56, 0x78][..]));
