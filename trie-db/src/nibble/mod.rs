@@ -118,8 +118,9 @@ impl<const N: usize> NibbleOps<N> {
 	/// Get u8 nibble value at a given index in a left aligned array.
 	#[inline(always)]
 	pub fn left_nibble_at(v1: &[u8], mut ix: usize) -> u8 {
-		let pad = ix % Self::nibble_per_byte();
-		ix = ix / Self::nibble_per_byte();
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let pad = ix % n;
+		ix = ix / n;
 		Self::at_left(pad as u8, v1[ix])
 	}
 
@@ -142,18 +143,20 @@ impl<const N: usize> NibbleOps<N> {
 	#[inline]
 	/// Calculate the number of needed padding for an array of nibble length `i`.
 	pub fn number_padding(i: usize) -> usize {
-		(N - (i % N)) % N
+		let n = NibbleOps::<N>::nibble_per_byte();
+		(n - (i % n)) % n
 	}
 
 	/// Count the biggest common depth between two left aligned packed nibble slice.
 	pub fn biggest_depth(v1: &[u8], v2: &[u8]) -> usize {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		let upper_bound = cmp::min(v1.len(), v2.len());
 		for a in 0..upper_bound {
 			if v1[a] != v2[a] {
-				return a * N + Self::left_common(v1[a], v2[a])
+				return a * n + Self::left_common(v1[a], v2[a])
 			}
 		}
-		upper_bound * N
+		upper_bound * n
 	}
 
 	/// Calculate the number of common nibble between two left aligned bytes.
