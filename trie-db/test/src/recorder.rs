@@ -20,6 +20,7 @@ use trie_db::{Recorder, Trie, TrieMut};
 
 #[test]
 fn trie_record() {
+	const N: usize = 16;
 	let mut db = MemoryDB::<RefHasher, HashKey<_>, _>::default();
 	let mut root = Default::default();
 	{
@@ -36,7 +37,7 @@ fn trie_record() {
 	}
 
 	{
-		let mut recorder = Recorder::<NoExtensionLayout>::new();
+		let mut recorder = Recorder::<NoExtensionLayout, N>::new();
 		let trie = RefTrieDBBuilder::new(&db, &root).with_recorder(&mut recorder).build();
 
 		trie.get(b"pirate").unwrap().unwrap();
@@ -61,7 +62,7 @@ fn trie_record() {
 	}
 
 	{
-		let mut recorder = Recorder::<NoExtensionLayout>::new();
+		let mut recorder = Recorder::<NoExtensionLayout, N>::new();
 		let trie = RefTrieDBBuilder::new(&db, &root).with_recorder(&mut recorder).build();
 		trie.get(b"letter").unwrap().unwrap();
 

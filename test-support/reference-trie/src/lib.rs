@@ -57,13 +57,13 @@ macro_rules! test_layouts {
 		#[test]
 		fn $test() {
 			eprintln!("Running with layout `HashedValueNoExtThreshold`");
-			$test_internal::<$crate::HashedValueNoExtThreshold<1>>();
+			$test_internal::<$crate::HashedValueNoExtThreshold<1, 16>, 16>();
 			eprintln!("Running with layout `HashedValueNoExt`");
-			$test_internal::<$crate::HashedValueNoExt>();
+			$test_internal::<$crate::HashedValueNoExt, 16>();
 			eprintln!("Running with layout `NoExtensionLayout`");
-			$test_internal::<$crate::NoExtensionLayout>();
+			$test_internal::<$crate::NoExtensionLayout, 16>();
 			eprintln!("Running with layout `ExtensionLayout`");
-			$test_internal::<$crate::ExtensionLayout>();
+			$test_internal::<$crate::ExtensionLayout, 16>();
 		}
 	};
 }
@@ -74,11 +74,11 @@ macro_rules! test_layouts_substrate {
 		$crate::paste! {
 			#[test]
 			fn [<$test _substrate_v0>]() {
-				$test::<$crate::SubstrateV0<$crate::RefHasher>>();
+				$test::<$crate::SubstrateV0<$crate::RefHasher>, 16>();
 			}
 			#[test]
 			fn [<$test _substrate_v1>]() {
-				$test::<$crate::SubstrateV1<$crate::RefHasher>>();
+				$test::<$crate::SubstrateV1<$crate::RefHasher, 16>, 16>();
 			}
 		}
 	};
@@ -90,8 +90,8 @@ macro_rules! test_layouts_no_meta {
 	($test:ident, $test_internal:ident) => {
 		#[test]
 		fn $test() {
-			$test_internal::<$crate::NoExtensionLayout>();
-			$test_internal::<$crate::ExtensionLayout>();
+			$test_internal::<$crate::NoExtensionLayout, 16>();
+			$test_internal::<$crate::ExtensionLayout, 16>();
 		}
 	};
 }
