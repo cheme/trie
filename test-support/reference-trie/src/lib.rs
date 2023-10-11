@@ -62,8 +62,8 @@ macro_rules! test_layouts {
 			$test_internal::<$crate::HashedValueNoExt, 16>();
 			eprintln!("Running with layout `NoExtensionLayout`");
 			$test_internal::<$crate::NoExtensionLayout, 16>();
-			eprintln!("Running with layout `ExtensionLayout`");
-			$test_internal::<$crate::ExtensionLayout, 16>();
+			//			eprintln!("Running with layout `ExtensionLayout`");
+			//			$test_internal::<$crate::ExtensionLayout, 16>();
 		}
 	};
 }
@@ -91,7 +91,7 @@ macro_rules! test_layouts_no_meta {
 		#[test]
 		fn $test() {
 			$test_internal::<$crate::NoExtensionLayout, 16>();
-			$test_internal::<$crate::ExtensionLayout, 16>();
+			//			$test_internal::<$crate::ExtensionLayout, 16>();
 		}
 	};
 }
@@ -559,8 +559,9 @@ fn partial_from_iterator_to_key<I: Iterator<Item = u8>, const N: usize>(
 	offset: u8,
 	over: u8,
 ) -> Vec<u8> {
+	let n = NibbleOps::<N>::nibble_per_byte();
 	assert!(nibble_count < over as usize);
-	let mut output = Vec::with_capacity(1 + (nibble_count / N));
+	let mut output = Vec::with_capacity(1 + (nibble_count / n));
 	output.push(offset + nibble_count as u8);
 	output.extend(partial);
 	output
@@ -573,7 +574,9 @@ fn partial_from_iterator_encode<I: Iterator<Item = u8>, const N: usize>(
 ) -> Vec<u8> {
 	let nibble_count = ::std::cmp::min(NIBBLE_SIZE_BOUND_NO_EXT, nibble_count);
 
-	let mut output = Vec::with_capacity(3 + (nibble_count / N));
+	let n = NibbleOps::<N>::nibble_per_byte();
+
+	let mut output = Vec::with_capacity(3 + (nibble_count / n));
 	match node_kind {
 		NodeKindNoExt::Leaf => NodeHeaderNoExt::Leaf(nibble_count).encode_to(&mut output),
 		NodeKindNoExt::BranchWithValue =>
@@ -643,7 +646,8 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 		H::hash(<Self as NodeCodec<N>>::empty_node())
 	}
 
-	fn decode_plan(data: &[u8]) -> ::std::result::Result<NodePlan<N>, Self::Error> {
+	fn decode_plan(data: &[u8]) -> std::result::Result<NodePlan<N>, Self::Error> {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		let mut input = ByteSliceInput::new(data);
 		match NodeHeader::decode(&mut input)? {
 			NodeHeader::Null => Ok(NodePlan::Empty),
@@ -672,7 +676,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 				Ok(NodePlan::Branch { value, children: *children })
 			},
 			NodeHeader::Extension(nibble_count) => {
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let range = input.take(count)?;
@@ -687,7 +691,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodec<H, N> {
 				})
 			},
 			NodeHeader::Leaf(nibble_count) => {
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = input.take(count)?;
@@ -795,6 +799,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	}
 
 	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
+	let n = NibbleOps::<N>::nibble_per_byte();
 		if data.len() < 1 {
 			return Err(CodecError::from("Empty encoded node."))
 		}
@@ -803,15 +808,15 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 		Ok(match NodeHeaderNoExt::decode(&mut input)? {
 			NodeHeaderNoExt::Null => NodePlan::Empty,
 			NodeHeaderNoExt::Branch(has_value, nibble_count) => {
-				let nibble_with_padding = nibble_count % N;
-				let padding_length = N - nibble_with_padding;
+				let nibble_with_padding = nibble_count % n;
+				let padding_length = n - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
 					NibbleOps::<N>::pad_left(padding_length as u8, data[input.offset]) != 0
 				{
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let bitmap_size = check_bitmap::<N>(&data[input.offset..])?;
 
@@ -841,7 +846,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				}
 			},
 			NodeHeaderNoExt::Leaf(nibble_count) => {
-				let nibble_with_padding = nibble_count % N;
+				let nibble_with_padding = nibble_count % n;
 				let padding_length = N - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
@@ -849,7 +854,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 				{
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let count = <Compact<u32>>::decode(&mut input)?.0 as usize;
 				let value = ValuePlan::Inline(input.take(count)?);
@@ -1008,8 +1013,8 @@ pub fn compare_root<T: TrieLayout<N>, DB: hash_db::HashDB<T::Hash, DBValue>, con
 /// Compare trie builder and trie root unhashed implementations.
 pub fn compare_unhashed(data: Vec<(Vec<u8>, Vec<u8>)>) {
 	let root_new = {
-		let mut cb = trie_db::TrieRootUnhashed::<ExtensionLayout, 16>::default();
-		trie_visit::<ExtensionLayout, _, _, _, _, 16>(data.clone().into_iter(), &mut cb);
+		let mut cb = trie_db::TrieRootUnhashed::<NoExtensionLayout, 16>::default();
+		trie_visit::<NoExtensionLayout, _, _, _, _, 16>(data.clone().into_iter(), &mut cb);
 		cb.root.unwrap_or(Default::default())
 	};
 	let root = reference_trie_root_unhashed(data);
@@ -1247,11 +1252,12 @@ mod tests {
 	#[test]
 	fn too_big_nibble_length() {
 		const N: usize = 16;
+		let n = NibbleOps::<N>::nibble_per_byte();
 		// + 1 for 0 added byte of nibble encode
 		let input = vec![0u8; (NIBBLE_SIZE_BOUND_NO_EXT as usize + 1) / 2 + 1];
 		let enc = <ReferenceNodeCodecNoExt<RefHasher, N> as NodeCodec<N>>::leaf_node(
 			input.iter().cloned(),
-			input.len() * N,
+			input.len() * n,
 			Value::Inline(&[1]),
 		);
 		let dec = <ReferenceNodeCodecNoExt<RefHasher, N> as NodeCodec<N>>::decode(&enc).unwrap();

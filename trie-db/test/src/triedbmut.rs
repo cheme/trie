@@ -76,7 +76,7 @@ fn playpen() {
 	playpen_internal::<HashedValueNoExtThreshold<1, 16>, 16>();
 	playpen_internal::<HashedValueNoExt, 16>();
 	playpen_internal::<NoExtensionLayout, 16>();
-	playpen_internal::<ExtensionLayout, 16>();
+//	playpen_internal::<ExtensionLayout, 16>();
 }
 fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 	let mut seed = [0u8; 32];

@@ -61,6 +61,7 @@ pub struct NodeCodec<H, const N: usize>(PhantomData<H>);
 
 impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 	fn decode_plan_inner_hashed(data: &[u8]) -> Result<NodePlan<N>, Error> {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		let mut input = ByteSliceInput::new(data);
 
 		let header = NodeHeader::decode(&mut input)?;
@@ -76,13 +77,13 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 		match header {
 			NodeHeader::Null => Ok(NodePlan::Empty),
 			NodeHeader::HashedValueBranch(nibble_count) | NodeHeader::Branch(_, nibble_count) => {
-				let nb_padding = nibble_count % N;
+				let nb_padding = nibble_count % n;
 				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
 				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let bitmap_size = check_bitmap::<N>(&data[input.offset..])?;
 				let bitmap_range = input.take(bitmap_size)?;
@@ -115,13 +116,13 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				})
 			},
 			NodeHeader::HashedValueLeaf(nibble_count) | NodeHeader::Leaf(nibble_count) => {
-				let nb_padding = nibble_count % N;
+				let nb_padding = nibble_count % n;
 				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
 				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
 					return Err(CodecError::from("Bad format"))
 				}
-				let partial = input.take((nibble_count + (N - 1)) / N)?;
+				let partial = input.take((nibble_count + (n - 1)) / n)?;
 				let partial_padding = NibbleOps::<N>::number_padding(nibble_count);
 				let value = if contains_hash {
 					ValuePlan::Node(input.take(H::LENGTH)?)
@@ -264,9 +265,10 @@ fn partial_from_iterator_encode<I: Iterator<Item = u8>, const N: usize>(
 	nibble_count: usize,
 	node_kind: NodeKind,
 ) -> Vec<u8> {
+	let n = NibbleOps::<N>::nibble_per_byte();
 	let nibble_count = std::cmp::min(trie_constants::NIBBLE_SIZE_BOUND, nibble_count);
 
-	let mut output = Vec::with_capacity(4 + (nibble_count / N));
+	let mut output = Vec::with_capacity(4 + (nibble_count / n));
 	match node_kind {
 		NodeKind::Leaf => NodeHeader::Leaf(nibble_count).encode_to(&mut output),
 		NodeKind::BranchWithValue => NodeHeader::Branch(true, nibble_count).encode_to(&mut output),
