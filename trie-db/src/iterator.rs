@@ -487,14 +487,17 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 				_ => continue,
 			};
 
-			let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
-			let key = key_slice.to_vec();
-			if maybe_extra_nibble.0 > 0 {
-				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, maybe_extra_nibble))))
+			let prefix = prefix.as_prefix();
+			let key = prefix.slice.to_vec();
+			if prefix.align > 0 {
+				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(
+					key,
+					(prefix.last, prefix.align),
+				))))
 			}
 
 			let value = match value {
-				Value::Node(hash) => match Self::fetch_value(db, &hash, (key_slice, (0, 0))) {
+				Value::Node(hash) => match Self::fetch_value(db, &hash, prefix) {
 					Ok(value) => value,
 					Err(err) => return Some(Err(err)),
 				},
@@ -537,10 +540,13 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 				_ => continue,
 			};
 
-			let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
-			let key = key_slice.to_vec();
-			if maybe_extra_nibble.0 > 0 {
-				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(key, maybe_extra_nibble))))
+			let prefix = prefix.as_prefix();
+			let key = prefix.slice.to_vec();
+			if prefix.align > 0 {
+				return Some(Err(Box::new(TrieError::ValueAtIncompleteKey(
+					key,
+					(prefix.last, prefix.align),
+				))))
 			}
 
 			return Some(Ok(key))

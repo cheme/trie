@@ -119,7 +119,10 @@ where
 		let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
 			value
 		} else {
-			hashed = callback.process_inner_hashed_value((k2.as_ref(), (0, 0)), v2.as_ref());
+			hashed = callback.process_inner_hashed_value(
+				Prefix { slice: k2.as_ref(), last: 0, align: 0 },
+				v2.as_ref(),
+			);
 			Value::Node(hashed.as_ref())
 		};
 		let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
@@ -301,7 +304,10 @@ where
 			let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
 				value
 			} else {
-				hashed = callback.process_inner_hashed_value((k2.as_ref(), (0, 0)), v2.as_ref());
+				hashed = callback.process_inner_hashed_value(
+					Prefix { slice: k2.as_ref(), last: 0, align: 0 },
+					v2.as_ref(),
+				);
 				Value::Node(hashed.as_ref())
 			};
 

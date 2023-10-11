@@ -244,9 +244,13 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 		let split = self.offset / N;
 		let ix = (self.offset % N) as u8;
 		if ix == 0 {
-			(&self.data[..split], (0, 0))
+			Prefix { slice: &self.data[..split], last: 0, align: 0 }
 		} else {
-			(&self.data[..split], (ix, NibbleOps::<N>::pad_left(ix, self.data[split])))
+			Prefix {
+				slice: &self.data[..split],
+				last: NibbleOps::<N>::pad_left(ix, self.data[split]),
+				align: ix,
+			}
 		}
 	}
 
@@ -254,13 +258,13 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	///
 	/// This means the entire inner data will be returned as [`Prefix`], ignoring any `offset`.
 	pub fn original_data_as_prefix(&self) -> Prefix {
-		(&self.data, (0, 0))
+		Prefix { slice: &self.data, last: 0, align: 0 }
 	}
 
 	/// Owned version of a `Prefix` from a `left` method call.
-	pub fn left_owned(&'a self) -> (BackingByteVec, (u8, u8)) {
-		let (a, b) = self.left();
-		(a.into(), b)
+	pub fn left_owned(&'a self) -> (BackingByteVec, u8, u8) {
+		let prefix = self.left();
+		(prefix.slice.into(), prefix.last, prefix.align)
 	}
 
 	/// Same as [`Self::starts_with`] but using [`NibbleVec`].

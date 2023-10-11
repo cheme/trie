@@ -16,7 +16,7 @@ use super::{
 	CError, DBValue, Query, Result, Trie, TrieDB, TrieDBIterator, TrieDBKeyIterator, TrieHash,
 	TrieItem, TrieIterator, TrieKeyItem, TrieLayout,
 };
-use hash_db::{HashDBRef, Hasher};
+use hash_db::{HashDBRef, Hasher, EMPTY_PREFIX};
 
 use crate::{rstd::boxed::Box, MerkleValue, TrieDBBuilder};
 
@@ -139,10 +139,7 @@ where
 		self.trie_iterator.next().map(|res| {
 			res.map(|(hash, value)| {
 				let aux_hash = L::Hash::hash(&hash);
-				(
-					self.trie.db().get(&aux_hash, Default::default()).expect("Missing fatdb hash"),
-					value,
-				)
+				(self.trie.db().get(&aux_hash, EMPTY_PREFIX).expect("Missing fatdb hash"), value)
 			})
 		})
 	}
@@ -187,7 +184,7 @@ where
 		self.trie_iterator.next().map(|res| {
 			res.map(|hash| {
 				let aux_hash = L::Hash::hash(&hash);
-				self.trie.db().get(&aux_hash, Default::default()).expect("Missing fatdb hash")
+				self.trie.db().get(&aux_hash, EMPTY_PREFIX).expect("Missing fatdb hash")
 			})
 		})
 	}

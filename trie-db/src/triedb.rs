@@ -202,12 +202,12 @@ where
 			.ok_or_else(|| Box::new(TrieError::IncompleteDatabase(hash)))?;
 
 		if let Some(recorder) = self.recorder.as_ref() {
-			debug_assert!(prefix.1 .0 == 0, "A value has never a partial key; qed");
+			debug_assert!(prefix.align == 0, "A value has never a partial key; qed");
 
 			recorder.borrow_mut().record(TrieAccess::Value {
 				hash,
 				value: value.as_slice().into(),
-				full_key: prefix.0,
+				full_key: prefix.slice,
 			});
 		}
 

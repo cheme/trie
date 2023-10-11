@@ -192,10 +192,10 @@ impl<H: KeyHasher> KeyFunction<H> for PrefixedKey<H> {
 
 /// Derive a database key from hash value of the node (key) and  the node prefix.
 pub fn prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
-	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.0.len() + 1);
-	prefixed_key.extend_from_slice(prefix.0);
-	if (prefix.1).0 > 0 {
-		prefixed_key.push((prefix.1).1);
+	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.slice.len() + 1);
+	prefixed_key.extend_from_slice(prefix.slice);
+	if prefix.align > 0 {
+		prefixed_key.push(prefix.last);
 	}
 	prefixed_key.extend_from_slice(key.as_ref());
 	prefixed_key
@@ -222,17 +222,17 @@ impl<H: KeyHasher> KeyFunction<H> for LegacyPrefixedKey<H> {
 /// Only for trie radix 16 trie.
 #[deprecated(since = "0.22.0")]
 pub fn legacy_prefixed_key<H: KeyHasher>(key: &H::Out, prefix: Prefix) -> Vec<u8> {
-	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.0.len() + 1);
-	if (prefix.1).0 == 0 {
+	let mut prefixed_key = Vec::with_capacity(key.as_ref().len() + prefix.slice.len() + 1);
+	if prefix.align == 0 {
 		prefixed_key.push(0);
-		prefixed_key.extend_from_slice(prefix.0);
+		prefixed_key.extend_from_slice(prefix.slice);
 	} else {
 		let mut prev = 0x01u8;
-		for i in prefix.0.iter() {
+		for i in prefix.slice.iter() {
 			prefixed_key.push((prev << 4) + (*i >> 4));
 			prev = *i;
 		}
-		prefixed_key.push((prev << 4) + ((prefix.1).1 >> 4));
+		prefixed_key.push((prev << 4) + (prefix.last >> 4));
 	}
 	prefixed_key.extend_from_slice(key.as_ref());
 	prefixed_key

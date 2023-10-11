@@ -111,9 +111,13 @@ impl<const N: usize> NibbleVec<N> {
 		let split = self.len / N;
 		let pos = (self.len % N) as u8;
 		if pos == 0 {
-			(&self.inner[..split], (0, 0))
+			Prefix { slice: &self.inner[..split], last: 0, align: 0 }
 		} else {
-			(&self.inner[..split], (pos, NibbleOps::<N>::pad_left(pos, self.inner[split])))
+			Prefix {
+				slice: &self.inner[..split],
+				last: NibbleOps::<N>::pad_left(pos, self.inner[split]),
+				align: pos,
+			}
 		}
 	}
 

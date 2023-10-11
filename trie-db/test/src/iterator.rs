@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use hash_db::{HashDB, Hasher};
+use hash_db::{HashDB, Hasher, Prefix};
 use hex_literal::hex;
 use reference_trie::test_layouts;
 use trie_db::{
@@ -292,7 +292,7 @@ fn iterate_over_incomplete_db_internal<T: TrieLayout<N>, const N: usize>() {
 	};
 
 	// Remove the leaf node from the DB.
-	let prefix = (&hex!("02")[..], (0, 0));
+	let prefix = Prefix { slice: &hex!("02")[..], last: 0, align: 0 };
 	memdb.remove(&leaf_hash, prefix);
 
 	// Seek to missing node returns error.

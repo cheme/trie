@@ -710,7 +710,7 @@ where
 	db: &'a mut dyn HashDB<L::Hash, DBValue>,
 	root: &'a mut TrieHash<L, N>,
 	root_handle: NodeHandle<TrieHash<L, N>>,
-	death_row: Set<(TrieHash<L, N>, (BackingByteVec, (u8, u8)))>,
+	death_row: Set<(TrieHash<L, N>, (BackingByteVec, u8, u8))>,
 	/// The number of hash operations this trie has performed.
 	/// Note that none are performed until changes are committed.
 	hash_count: usize,
@@ -817,7 +817,7 @@ where
 	) -> Result<Option<DBValue>, TrieHash<L, N>, CError<L, N>> {
 		let mut handle = handle;
 		// prefix only use for value node access, so this is always correct.
-		let prefix = (full_key, (0, 0));
+		let prefix = Prefix { slice: full_key, last: 0, align: 0 };
 		loop {
 			let (mid, child) = match handle {
 				NodeHandle::Hash(hash) => {
@@ -939,7 +939,7 @@ where
 			| Some(Value::Node(hash)) => {
 				self.death_row.insert((
 					hash.clone(),
-					(prefix.0.into(), prefix.1),
+					(prefix.slice.into(), prefix.last, prefix.align),
 				));
 			},
 			_ => (),
@@ -1597,21 +1597,23 @@ where
 							.expect("used_index only set if occupied; qed");
 						let mut key2 = key.clone();
 						key2.advance((enc_nibble.1.len() * N) - enc_nibble.0);
-						let (start, alloc_start, prefix_end) = match key2.left() {
-							(start, (0, _v)) =>
-								(start, None, (1, NibbleOps::<N>::push_at_left(0, a, 0))),
-							(start, (nb, v)) if nb == (N as u8 - 1) => {
+						let (start, alloc_start, align, last) = match key2.left() {
+							Prefix { slice: start, align: 0, last: _ } =>
+								(start, None, 1, NibbleOps::<N>::push_at_left(0, a, 0)),
+							Prefix { slice: start, last: v, align: nb } if nb == (N as u8 - 1) => {
 								let mut so: BackingByteVec = start.into();
 								so.push(NibbleOps::<N>::pad_left(N as u8 - 1, v) | a);
-								(start, Some(so), (0, 0))
+								(start, Some(so), 0, 0)
 							},
-							(start, (nb, v)) =>
-								(start, None, (nb + 1, NibbleOps::<N>::push_at_left(nb, a, v))),
+							Prefix { slice: start, last: v, align: nb } =>
+								(start, None, nb + 1, NibbleOps::<N>::push_at_left(nb, a, v)),
 						};
-						let child_prefix = (
-							alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start),
-							prefix_end,
-						);
+						let child_prefix = Prefix {
+							slice: alloc_start.as_ref().map(|start| &start[..]).unwrap_or(start),
+
+							align,
+							last,
+						};
 						let stored = match child {
 							NodeHandle::InMemory(h) => self.storage.destroy(h),
 							NodeHandle::Hash(h) => {
@@ -1622,8 +1624,14 @@ where
 						let child_node = match stored {
 							Stored::New(node) => node,
 							Stored::Cached(node, hash) => {
-								self.death_row
-									.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
+								self.death_row.insert((
+									hash,
+									(
+										child_prefix.slice[..].into(),
+										child_prefix.last,
+										child_prefix.align,
+									),
+								));
 								node
 							},
 						};
@@ -1682,12 +1690,14 @@ where
 
 		#[cfg(feature = "std")]
 		for (hash, prefix) in self.death_row.drain() {
-			self.db.remove(&hash, (&prefix.0[..], prefix.1));
+			self.db
+				.remove(&hash, Prefix { slice: &prefix.0[..], last: prefix.1, align: prefix.2 });
 		}
 
 		#[cfg(not(feature = "std"))]
 		for (hash, prefix) in core::mem::take(&mut self.death_row).into_iter() {
-			self.db.remove(&hash, (&prefix.0[..], prefix.1));
+			self.db
+				.remove(&hash, Prefix { slice: &prefix.0[..], last: prefix.1, align: prefix.2 });
 		}
 
 		let handle = match self.root_handle() {
