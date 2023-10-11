@@ -63,8 +63,9 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 
 	/// Helper function to create a owned `NodeKey` from this `NibbleSlice`.
 	pub fn to_stored(&self) -> NodeKey {
-		let split = self.offset / N;
-		let offset = self.offset % N;
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let split = self.offset / n;
+		let offset = self.offset % n;
 		(offset, self.data[split..].into())
 	}
 
@@ -73,20 +74,21 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	/// Warning this method can be slow (number of nibble does not align the
 	/// original padding).
 	pub fn to_stored_range(&self, nb: usize) -> NodeKey {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		if nb >= self.len() {
 			return self.to_stored()
 		}
-		if (self.offset + nb) % N == 0 {
+		if (self.offset + nb) % n == 0 {
 			// aligned
-			let start = self.offset / N;
-			let end = (self.offset + nb) / N;
-			(self.offset % N, BackingByteVec::from_slice(&self.data[start..end]))
+			let start = self.offset / n;
+			let end = (self.offset + nb) / n;
+			(self.offset % n, BackingByteVec::from_slice(&self.data[start..end]))
 		} else {
 			// unaligned
-			let start = self.offset / N;
-			let end = (self.offset + nb) / N;
+			let start = self.offset / n;
+			let end = (self.offset + nb) / n;
 			let ea = BackingByteVec::from_slice(&self.data[start..=end]);
-			let ea_offset = self.offset % N;
+			let ea_offset = self.offset % n;
 			let n_offset = NibbleOps::<N>::number_padding(nb);
 			let mut result = (ea_offset, ea);
 			NibbleOps::<N>::shift_key(&mut result, n_offset);
@@ -103,7 +105,7 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	/// Get the length (in nibbles, naturally) of this slice.
 	#[inline]
 	pub fn len(&self) -> usize {
-		self.data.len() * N - self.offset
+		(self.data.len() * NibbleOps::<N>::nibble_per_byte()) - self.offset
 	}
 
 	/// Get the nibble at position `i`.
@@ -135,11 +137,12 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 
 	/// How many of the same nibbles at the beginning do we match with `them`?
 	pub fn common_prefix(&self, them: &Self) -> usize {
-		let self_align = self.offset % N;
-		let them_align = them.offset % N;
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let self_align = self.offset % n;
+		let them_align = them.offset % n;
 		if self_align == them_align {
-			let mut self_start = self.offset / N;
-			let mut them_start = them.offset / N;
+			let mut self_start = self.offset / n;
+			let mut them_start = them.offset / n;
 			let mut first = 0;
 			if self_align != 0 {
 				if NibbleOps::<N>::pad_right(self_align as u8, self.data[self_start]) !=
@@ -170,8 +173,9 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	/// Return `Partial` representation of this slice:
 	/// first encoded byte and following slice.
 	pub fn right(&'a self) -> Partial {
-		let split = self.offset / N;
-		let nb = (self.len() % N) as u8;
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let split = self.offset / n;
+		let nb = (self.len() % n) as u8;
 		if nb > 0 {
 			((nb, NibbleOps::<N>::pad_right(nb, self.data[split])), &self.data[split + 1..])
 		} else {
@@ -199,11 +203,12 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	/// Return `Partial` bytes iterator over a range of byte..
 	/// Warning can be slow when unaligned (similar to `to_stored_range`).
 	pub fn right_range_iter(&'a self, to: usize) -> impl Iterator<Item = u8> + 'a {
-		let mut nib_res = to % N;
-		let aligned_i = (self.offset + to) % N;
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let mut nib_res = to % n;
+		let aligned_i = (self.offset + to) % n;
 		let aligned = aligned_i == 0;
-		let mut ix = self.offset / N;
-		let ix_lim = (self.offset + to) / N;
+		let mut ix = self.offset / n;
+		let ix_lim = (self.offset + to) / n;
 		crate::rstd::iter::from_fn(move || {
 			if aligned {
 				if nib_res > 0 {
@@ -241,8 +246,9 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 	/// originates from a full key it will be the `Prefix of
 	/// the node`.
 	pub fn left(&'a self) -> Prefix {
-		let split = self.offset / N;
-		let ix = (self.offset % N) as u8;
+		let n = NibbleOps::<N>::nibble_per_byte();
+		let split = self.offset / n;
+		let ix = (self.offset % n) as u8;
 		if ix == 0 {
 			Prefix { slice: &self.data[..split], last: 0, align: 0 }
 		} else {

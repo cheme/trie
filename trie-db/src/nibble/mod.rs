@@ -47,6 +47,10 @@ impl<const N: usize> NibbleOps<N> {
 		N.trailing_zeros() as usize
 	}
 
+	pub const fn nibble_per_byte() -> usize {
+		8 / Self::bit_per_nibble()
+	}
+
 	pub const fn bitmap_size() -> usize {
 		if N % 8 == 0 {
 			N / 8
@@ -71,9 +75,9 @@ impl<const N: usize> NibbleOps<N> {
 	/// ```
 	//	const PADDING_BITMASK: &'static [(u8, usize)]; // TODO EMCH rewrite to remove this const
 	// (does not help readability).
-	pub const fn padding_bitmask(ix: usize) -> (u8, usize) {
+	pub const fn padding_bitmask(ix: usize) -> u8 {
 		let offset = Self::bit_per_nibble() * ix;
-		(255u8 >> offset, 8 - offset)
+		255u8 >> offset
 	}
 
 	/// Pad left aligned representation for a given number of element.
@@ -81,8 +85,8 @@ impl<const N: usize> NibbleOps<N> {
 	/// Result is a byte containing `ix` nibble of left aligned content and padded with 0.
 	#[inline(always)]
 	pub fn pad_left(ix: u8, b: u8) -> u8 {
-		debug_assert!(ix > 0); // 0 does not pad anything TODO EMCH allow 0
-		b & !Self::padding_bitmask(ix as usize).0
+		debug_assert!(ix > 0); // 0 just padd all TODO EMCH allow it?
+		b & !Self::padding_bitmask(ix as usize)
 		//b & !(255u8 >> (Self::bit_per_nibble * ix)) // TODO EMCH compare perf with that
 	}
 
@@ -95,7 +99,8 @@ impl<const N: usize> NibbleOps<N> {
 		// it means there is calls to pad_right where we do not use the number
 		// of elements!
 		if ix > 0 {
-			b & !(255u8 << (Self::bit_per_nibble() * (N - ix as usize)))
+			b & Self::padding_bitmask(ix as usize)
+		//b & !(255u8 << (Self::bit_per_nibble() * (N - ix as usize)))
 		//b & Self::PADDING_BITMASK[N - ix as usize].0
 		} else {
 			b
@@ -105,15 +110,16 @@ impl<const N: usize> NibbleOps<N> {
 	/// Get u8 nibble value at a given index of a byte.
 	#[inline(always)]
 	pub fn at_left(ix: u8, b: u8) -> u8 {
+		let offset = 8 - (Self::bit_per_nibble() as u8 * (ix + 1));
 		// TODO EMCH compare perf without padding bitmask
-		(b & Self::padding_bitmask(ix as usize).0) >> Self::padding_bitmask(ix as usize).1
+		(b & Self::padding_bitmask(ix as usize)) >> offset
 	}
 
 	/// Get u8 nibble value at a given index in a left aligned array.
 	#[inline(always)]
 	pub fn left_nibble_at(v1: &[u8], mut ix: usize) -> u8 {
-		let pad = ix % N;
-		ix = ix / N;
+		let pad = ix % Self::nibble_per_byte();
+		ix = ix / Self::nibble_per_byte();
 		Self::at_left(pad as u8, v1[ix])
 	}
 
@@ -128,8 +134,9 @@ impl<const N: usize> NibbleOps<N> {
 	/// Note that existing value must be null (padded with 0).
 	#[inline(always)]
 	pub fn push_at_left(ix: u8, v: u8, into: u8) -> u8 {
+		let offset = 8 - (Self::bit_per_nibble() as u8 * (ix + 1));
 		//into | (v << (8 - (bit_per_nibble * ix)))
-		into | (v << Self::padding_bitmask(ix as usize).1)
+		into | (v << offset)
 	}
 
 	#[inline]
@@ -173,8 +180,8 @@ impl<const N: usize> NibbleOps<N> {
 	#[inline(always)]
 	pub fn split_shifts(pad: usize) -> (usize, usize) {
 		debug_assert!(pad > 0);
-		let s1 = Self::padding_bitmask(pad - 1).1;
-		let s2 = 8 - s1;
+		let s2 = Self::bit_per_nibble() * pad;
+		let s1 = 8 - s2;
 		(s1, s2)
 	}
 
