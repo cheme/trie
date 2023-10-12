@@ -19,7 +19,7 @@ use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 use log::debug;
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	reference_trie_root, test_layouts, ExtensionLayout, HashedValueNoExt,
+	reference_trie_root, reference_trie_root_iter_build, test_layouts, ExtensionLayout, HashedValueNoExt,
 	HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
 	ReferenceNodeCodecNoExt, TestTrieCache,
 };
@@ -94,7 +94,7 @@ fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 		}
 		.make_with(&mut seed);
 
-		let real = reference_trie_root::<T, _, _, _, N>(x.clone());
+		let real = reference_trie_root_iter_build::<T, _, _, _, N>(x.clone());
 		let mut memdb = PrefixedMemoryDB::<T, N>::default();
 		let mut root = Default::default();
 		let mut memtrie = populate_trie::<T, N>(&mut memdb, &mut root, &x);
@@ -148,7 +148,7 @@ fn insert_on_empty_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01u8, 0x23], &[0x01u8, 0x23]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x01u8, 0x23])]),
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x01u8, 0x23])]),
 	);
 }
 
@@ -229,7 +229,7 @@ fn insert_replace_root_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01u8, 0x23], &[0x23u8, 0x45]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x23u8, 0x45])]),
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x23u8, 0x45])]),
 	);
 }
 
@@ -242,7 +242,7 @@ fn insert_make_branch_root_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x11u8, 0x23], &[0x11u8, 0x23]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01u8, 0x23], vec![0x01u8, 0x23]),
 			(vec![0x11u8, 0x23], vec![0x11u8, 0x23])
 		])
@@ -259,7 +259,7 @@ fn insert_into_branch_root_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x81u8, 0x23], &[0x81u8, 0x23]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01u8, 0x23], vec![0x01u8, 0x23]),
 			(vec![0x81u8, 0x23], vec![0x81u8, 0x23]),
 			(vec![0xf1u8, 0x23], vec![0xf1u8, 0x23]),
@@ -276,7 +276,7 @@ fn insert_value_into_branch_root_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[], &[0x0]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![], vec![0x0]),
 			(vec![0x01u8, 0x23], vec![0x01u8, 0x23]),
 		])
@@ -292,7 +292,7 @@ fn insert_split_leaf_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01u8, 0x34], &[0x01u8, 0x34]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01u8, 0x23], vec![0x01u8, 0x23]),
 			(vec![0x01u8, 0x34], vec![0x01u8, 0x34]),
 		])
@@ -309,7 +309,7 @@ fn insert_split_extenstion_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01, 0xf3, 0xf5], &[0x03]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01, 0x23, 0x45], vec![0x01]),
 			(vec![0x01, 0xf3, 0x45], vec![0x02]),
 			(vec![0x01, 0xf3, 0xf5], vec![0x03]),
@@ -329,7 +329,7 @@ fn insert_big_value_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x11u8, 0x23], big_value1).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01u8, 0x23], big_value0.to_vec()),
 			(vec![0x11u8, 0x23], big_value1.to_vec())
 		])
@@ -347,7 +347,7 @@ fn insert_duplicate_value_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x11u8, 0x23], big_value).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root::<T, _, _, _, N>(vec![
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![
 			(vec![0x01u8, 0x23], big_value.to_vec()),
 			(vec![0x11u8, 0x23], big_value.to_vec())
 		])
@@ -423,7 +423,7 @@ fn stress_internal<T: TrieLayout<N>, const N: usize>() {
 		}
 		.make_with(&mut seed);
 
-		let real = reference_trie_root::<T, _, _, _, N>(x.clone());
+		let real = reference_trie_root_iter_build::<T, _, _, _, N>(x.clone());
 		let mut memdb = PrefixedMemoryDB::<T, N>::default();
 		let mut root = Default::default();
 		let mut memtrie = populate_trie::<T, N>(&mut memdb, &mut root, &x);
@@ -482,7 +482,7 @@ fn insert_empty_internal<T: TrieLayout<N>, const N: usize>() {
 		t.insert(key, value).unwrap();
 	}
 
-	assert_eq!(*t.root(), reference_trie_root::<T, _, _, _, N>(x.clone()));
+	assert_eq!(*t.root(), reference_trie_root_iter_build::<T, _, _, _, N>(x.clone()));
 
 	for &(ref key, _) in &x {
 		t.insert(key, &[]).unwrap();

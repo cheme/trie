@@ -110,10 +110,11 @@ where
 		target_depth: usize,
 		(k2, v2): &(impl AsRef<[u8]>, impl AsRef<[u8]>),
 	) {
+		let n = NibbleOps::<N>::nibble_per_byte();
 		let nibble_value = NibbleOps::<N>::left_nibble_at(&k2.as_ref()[..], target_depth);
 		// is it a branch value (two candidate same ix)
 		let nkey = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], target_depth + 1);
-		let pr = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * N - nkey.len());
+		let pr = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * n - nkey.len());
 
 		let hashed;
 		let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {
@@ -261,6 +262,7 @@ where
 	B: AsRef<[u8]>,
 	F: ProcessEncodedNode<TrieHash<T, N>>,
 {
+		let n = NibbleOps::<N>::nibble_per_byte();
 	let mut depth_queue = CacheAccum::<T, B, N>::new();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();
@@ -275,7 +277,7 @@ where
 				NibbleOps::<N>::biggest_depth(&previous_value.0.as_ref()[..], &k.as_ref()[..]);
 			// 0 is a reserved value : could use option
 			let depth_item = common_depth;
-			if common_depth == previous_value.0.as_ref().len() * N {
+			if common_depth == previous_value.0.as_ref().len() * n {
 				// the new key include the previous one : branch value case
 				// just stored value at branch depth
 				depth_queue.set_cache_value(common_depth, Some(previous_value.1));
@@ -298,7 +300,7 @@ where
 			let (k2, v2) = previous_value;
 			let nkey = NibbleSlice::<N>::new_offset(&k2.as_ref()[..], last_depth);
 			let pr =
-				NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * N - nkey.len());
+				NibbleSlice::<N>::new_offset(&k2.as_ref()[..], k2.as_ref().len() * n - nkey.len());
 
 			let hashed;
 			let value = if let Some(value) = Value::new_inline(v2.as_ref(), T::MAX_INLINE_VALUE) {

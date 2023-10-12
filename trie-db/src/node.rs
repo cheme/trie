@@ -484,7 +484,7 @@ impl<const N: usize> NibbleSlicePlan<N> {
 
 	/// Returns the nibble length of the slice.
 	pub fn len(&self) -> usize {
-		(self.bytes.end - self.bytes.start) * N - self.offset
+		(self.bytes.end - self.bytes.start) * NibbleOps::<N>::nibble_per_byte() - self.offset
 	}
 
 	/// Build a nibble slice by decoding a byte slice according to the plan. It is the

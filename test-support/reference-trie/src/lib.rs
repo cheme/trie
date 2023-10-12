@@ -847,7 +847,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 			},
 			NodeHeaderNoExt::Leaf(nibble_count) => {
 				let nibble_with_padding = nibble_count % n;
-				let padding_length = N - nibble_with_padding;
+				let padding_length = n - nibble_with_padding;
 				// check that the padding is valid (if any)
 				if nibble_with_padding > 0 &&
 					NibbleOps::<N>::pad_left(padding_length as u8, data[input.offset]) != 0

@@ -323,7 +323,7 @@ impl<L: TrieLayout<N>, const N: usize> TrieDBRawIterator<L, N> {
 		// Now seek forward again.
 		self.seek(db, seek)?;
 
-		let prefix_len = prefix.len() * N;
+		let prefix_len = prefix.len() * NibbleOps::<N>::nibble_per_byte();
 		let mut len = 0;
 		// look first prefix in trail
 		for i in 0..self.trail.len() {

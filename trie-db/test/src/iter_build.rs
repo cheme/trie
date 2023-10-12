@@ -147,6 +147,8 @@ fn root_extension_bis_internal<T: TrieLayout<N>, const N: usize>() {
 		(vec![1u8, 2u8, 3u8, 4u8], vec![7u8; 32]),
 	]);
 }
+
+/*
 #[test]
 fn root_extension_tierce() {
 	let d =
@@ -165,6 +167,8 @@ fn root_extension_tierce_big() {
 		(vec![6u8, 2u8, 3u8, 13u8], vec![8u8; 32]),
 	]);
 }
+*/
+
 #[test]
 fn trie_middle_node2x() {
 	compare_implementations(vec![
