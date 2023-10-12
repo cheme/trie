@@ -164,9 +164,10 @@ pub fn check_bitmap<const N: usize>(data: &[u8]) -> Result<usize, CodecError> {
 
 pub fn value_at_bitmap<const N: usize>(bitmap: &[u8], i: usize) -> bool {
 	let ix = i / 8;
-	let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
+	// let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
 	let i = i % 8;
-	bitmap[ix] & (0b1000_0000 >> i) != 0
+	// bitmap[ix] & (0b1000_0000 >> i) != 0
+	bitmap[ix] & (0b0000_0001 << i) != 0
 }
 
 pub fn encode_bitmap<I: Iterator<Item = bool>, const N: usize>(has_children: I, output: &mut [u8]) {
@@ -179,8 +180,9 @@ pub fn encode_bitmap<I: Iterator<Item = bool>, const N: usize>(has_children: I, 
 
 pub fn set_bitmap<const N: usize>(i: usize, output: &mut [u8]) {
 	let ix = i / 8;
-	let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
-	output[ix] |= 0b1000_0000 >> (i % 8);
+	// let ix = NibbleOps::<N>::bitmap_size() - 1 - ix;
+	// output[ix] |= 0b1000_0000 >> (i % 8);
+	output[ix] |= 0b0000_0001 << (i % 8);
 }
 
 pub type RefTrieDB<'a, 'cache> = trie_db::TrieDB<'a, 'cache, ExtensionLayout, 16>;
@@ -799,7 +801,7 @@ impl<H: Hasher, const N: usize> NodeCodec<N> for ReferenceNodeCodecNoExt<H, N> {
 	}
 
 	fn decode_plan(data: &[u8]) -> Result<NodePlan<N>, Self::Error> {
-	let n = NibbleOps::<N>::nibble_per_byte();
+		let n = NibbleOps::<N>::nibble_per_byte();
 		if data.len() < 1 {
 			return Err(CodecError::from("Empty encoded node."))
 		}

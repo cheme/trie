@@ -262,7 +262,7 @@ where
 	B: AsRef<[u8]>,
 	F: ProcessEncodedNode<TrieHash<T, N>>,
 {
-		let n = NibbleOps::<N>::nibble_per_byte();
+	let n = NibbleOps::<N>::nibble_per_byte();
 	let mut depth_queue = CacheAccum::<T, B, N>::new();
 	// compare iter ordering
 	let mut iter_input = input.into_iter();

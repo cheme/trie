@@ -19,8 +19,8 @@ use hash_db::{HashDB, Hasher, EMPTY_PREFIX};
 use log::debug;
 use memory_db::{HashKey, MemoryDB, PrefixedKey};
 use reference_trie::{
-	reference_trie_root, reference_trie_root_iter_build, test_layouts, ExtensionLayout, HashedValueNoExt,
-	HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
+	reference_trie_root, reference_trie_root_iter_build, test_layouts, ExtensionLayout,
+	HashedValueNoExt, HashedValueNoExtThreshold, NoExtensionLayout, RefHasher, ReferenceNodeCodec,
 	ReferenceNodeCodecNoExt, TestTrieCache,
 };
 use trie_db::{
@@ -76,7 +76,7 @@ fn playpen() {
 	playpen_internal::<HashedValueNoExtThreshold<1, 16>, 16>();
 	playpen_internal::<HashedValueNoExt, 16>();
 	playpen_internal::<NoExtensionLayout, 16>();
-//	playpen_internal::<ExtensionLayout, 16>();
+	//	playpen_internal::<ExtensionLayout, 16>();
 }
 fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 	let mut seed = [0u8; 32];
@@ -148,7 +148,10 @@ fn insert_on_empty_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01u8, 0x23], &[0x01u8, 0x23]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x01u8, 0x23])]),
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(
+			vec![0x01u8, 0x23],
+			vec![0x01u8, 0x23]
+		)]),
 	);
 }
 
@@ -229,7 +232,10 @@ fn insert_replace_root_internal<T: TrieLayout<N>, const N: usize>() {
 	t.insert(&[0x01u8, 0x23], &[0x23u8, 0x45]).unwrap();
 	assert_eq!(
 		*t.root(),
-		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(vec![0x01u8, 0x23], vec![0x23u8, 0x45])]),
+		reference_trie_root_iter_build::<T, _, _, _, N>(vec![(
+			vec![0x01u8, 0x23],
+			vec![0x23u8, 0x45]
+		)]),
 	);
 }
 
