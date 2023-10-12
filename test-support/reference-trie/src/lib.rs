@@ -56,7 +56,9 @@ macro_rules! test_layouts {
 	($test:ident, $test_internal:ident) => {
 		#[test]
 		fn $test() {
-			eprintln!("Running with layout `HashedValueNoExtThreshold`");
+			eprintln!("Running with layout `HashedValueNoExtThreshold, radix 2`");
+			$test_internal::<$crate::HashedValueNoExtThreshold<33, 2>, 2>();
+			eprintln!("Running with layout `HashedValueNoExtThreshold, radix 16`");
 			$test_internal::<$crate::HashedValueNoExtThreshold<1, 16>, 16>();
 			eprintln!("Running with layout `HashedValueNoExt`");
 			$test_internal::<$crate::HashedValueNoExt, 16>();
