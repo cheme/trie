@@ -16,7 +16,7 @@
 
 use crate::{
 	node::{NodeHandle, NodeHandlePlan, NodeKey},
-	rstd::{cmp, marker::PhantomData, vec, vec::Vec},
+	rstd::{cmp, vec, vec::Vec},
 };
 use hash_db::MaybeDebug;
 
@@ -60,21 +60,6 @@ impl<const N: usize> NibbleOps<N> {
 	}
 
 	/// Padding bitmasks, internally use for working on padding byte.
-	/// Length of this array is `Self::bit_per_nibble`.
-	/// The first element of each pair is a bit mask to apply,
-	/// the second element is a right shift to apply in some case.
-	///	const PADDING_BITMASK: &'static [(u8, usize)] = &[
-	/// Similar to following const function.
-	/// ```rust
-	/// const bit_per_nibble: usize = 4;
-	/// const fn padding_bitmask(ix: usize) -> (u8, usize) {
-	///   //assert!(ix < 8 / bit_per_nibble);
-	///   let offset = bit_per_nibble * ix;
-	///   (255u8 >> offset, 8 - offset)
-	/// }
-	/// ```
-	//	const PADDING_BITMASK: &'static [(u8, usize)]; // TODO EMCH rewrite to remove this const
-	// (does not help readability).
 	pub const fn padding_bitmask(ix: usize) -> u8 {
 		let offset = Self::bit_per_nibble() * ix;
 		255u8 >> offset
@@ -110,8 +95,20 @@ impl<const N: usize> NibbleOps<N> {
 	/// Get u8 nibble value at a given index of a byte.
 	#[inline(always)]
 	pub fn at_left(ix: u8, b: u8) -> u8 {
-		let offset = 8 - (Self::bit_per_nibble() as u8 * (ix + 1));
-		// TODO EMCH compare perf without padding bitmask
+		// 8 -> ix 0 -> offset 0
+		// 4 -> ix 0 -> offset 4
+		//   ->    1 -> offset 0
+		// 2 -> ix 0 -> offset 6
+		//   ->    1 -> offset 4
+		//   ->    2 -> offset 2
+		//   ->    3 -> offset 0
+		// 1 -> ix 0 -> offset 7
+		//   ->    1 -> offset 6
+		//   ->    6 -> offset 1
+		//   ->    7 -> offset 0
+
+		let offset = 8 - (Self::bit_per_nibble() as u8 * (ix + 1)); // TODO this is **** bullshit do test
+															// TODO EMCH compare perf without padding bitmask
 		(b & Self::padding_bitmask(ix as usize)) >> offset
 	}
 

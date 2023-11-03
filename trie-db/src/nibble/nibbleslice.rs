@@ -145,15 +145,19 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 			let mut them_start = them.offset / n;
 			let mut first = 0;
 			if self_align != 0 {
-				if NibbleOps::<N>::pad_right(self_align as u8, self.data[self_start]) !=
-					NibbleOps::<N>::pad_right(them_align as u8, them.data[them_start])
-				{
-					// warning only for radix 16 -> TODO!!!
-					return 0
+				let self_first = NibbleOps::<N>::pad_right(self_align as u8, self.data[self_start]);
+				let them_first = NibbleOps::<N>::pad_right(them_align as u8, them.data[them_start]);
+				if self_first != them_first {
+					return if N == 16 {
+						return 0
+					} else {
+						let common = NibbleOps::<N>::left_common(self_first, them_first);
+						return common - self_align
+					}
 				}
 				self_start += 1;
 				them_start += 1;
-				first += 1;
+				first = n - self_align;
 			}
 			NibbleOps::<N>::biggest_depth(&self.data[self_start..], &them.data[them_start..]) +
 				first
