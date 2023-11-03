@@ -120,7 +120,7 @@ impl<const N: usize> NibbleVec<N> {
 		} else {
 			Prefix {
 				slice: &self.inner[..split],
-				last: NibbleOps::<N>::pad_left(n as u8 - pos, self.inner[split]),
+				last: NibbleOps::<N>::pad_left(pos, self.inner[split]),
 				align: pos,
 			}
 		}

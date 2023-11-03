@@ -260,7 +260,7 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 		} else {
 			Prefix {
 				slice: &self.data[..split],
-				last: NibbleOps::<N>::pad_left(n as u8 - ix, self.data[split]),
+				last: NibbleOps::<N>::pad_left(ix, self.data[split]),
 				align: ix,
 			}
 		}
