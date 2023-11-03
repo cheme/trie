@@ -145,14 +145,16 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 			let mut them_start = them.offset / n;
 			let mut first = 0;
 			if self_align != 0 {
-				let self_first = NibbleOps::<N>::pad_right(self_align as u8, self.data[self_start]);
-				let them_first = NibbleOps::<N>::pad_right(them_align as u8, them.data[them_start]);
+				let self_first =
+					NibbleOps::<N>::pad_right((n - self_align) as u8, self.data[self_start]);
+				let them_first =
+					NibbleOps::<N>::pad_right((n - them_align) as u8, them.data[them_start]);
 				if self_first != them_first {
 					return if N == 16 {
-						return 0
+						0
 					} else {
 						let common = NibbleOps::<N>::left_common(self_first, them_first);
-						return common - self_align
+						common - self_align
 					}
 				}
 				self_start += 1;
@@ -258,7 +260,7 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 		} else {
 			Prefix {
 				slice: &self.data[..split],
-				last: NibbleOps::<N>::pad_left(ix, self.data[split]),
+				last: NibbleOps::<N>::pad_left(n as u8 - ix, self.data[split]),
 				align: ix,
 			}
 		}

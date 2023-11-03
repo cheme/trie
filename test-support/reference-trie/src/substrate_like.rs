@@ -80,7 +80,9 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				let nb_padding = nibble_count % n;
 				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
-				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
+				if padding &&
+					NibbleOps::<N>::pad_left((n - nb_padding) as u8, data[input.offset]) != 0
+				{
 					return Err(CodecError::from("Bad format"))
 				}
 				let partial = input.take((nibble_count + (n - 1)) / n)?;
@@ -119,7 +121,9 @@ impl<H: Hasher, const N: usize> NodeCodec<H, N> {
 				let nb_padding = nibble_count % n;
 				let padding = nb_padding != 0;
 				// check that the padding is valid (if any)
-				if padding && NibbleOps::<N>::pad_left(nb_padding as u8, data[input.offset]) != 0 {
+				if padding &&
+					NibbleOps::<N>::pad_left((n - nb_padding) as u8, data[input.offset]) != 0
+				{
 					return Err(CodecError::from("Bad format"))
 				}
 				let partial = input.take((nibble_count + (n - 1)) / n)?;

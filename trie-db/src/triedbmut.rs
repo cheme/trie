@@ -1603,7 +1603,7 @@ where
 								(start, None, 1, NibbleOps::<N>::push_at_left(0, a, 0)),
 							Prefix { slice: start, last: v, align: nb } if nb == (N as u8 - 1) => {
 								let mut so: BackingByteVec = start.into();
-								so.push(NibbleOps::<N>::pad_left(N as u8 - 1, v) | a);
+								so.push(NibbleOps::<N>::pad_left(n as u8 - 1, v) | a);
 								(start, Some(so), 0, 0)
 							},
 							Prefix { slice: start, last: v, align: nb } =>
@@ -1639,6 +1639,8 @@ where
 						match child_node {
 							Node::Leaf(sub_partial, value) => {
 								let mut enc_nibble = enc_nibble;
+								// TODO this n - 1 smell (supposed to be the number of nibbles!! see
+								// pad_right)
 								combine_key::<N>(&mut enc_nibble, (n - 1, &[a][..]));
 								combine_key::<N>(
 									&mut enc_nibble,

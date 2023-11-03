@@ -84,7 +84,7 @@ impl<const N: usize> NibbleOps<N> {
 		// it means there is calls to pad_right where we do not use the number
 		// of elements!
 		if ix > 0 {
-			b & Self::padding_bitmask(ix as usize)
+			b & Self::padding_bitmask(Self::nibble_per_byte() - ix as usize)
 		//b & !(255u8 << (Self::bit_per_nibble() * (N - ix as usize)))
 		//b & Self::PADDING_BITMASK[N - ix as usize].0
 		} else {

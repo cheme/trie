@@ -82,7 +82,7 @@ impl<const N: usize> NibbleVec<N> {
 		self.len -= 1;
 		let i_new = self.len % n;
 		if i_new != 0 {
-			self.inner.push(NibbleOps::<N>::pad_left(i_new as u8, byte));
+			self.inner.push(NibbleOps::<N>::pad_left((n - i_new) as u8, byte));
 		}
 		Some(NibbleOps::<N>::at_left(i_new as u8, byte))
 	}
@@ -106,7 +106,7 @@ impl<const N: usize> NibbleVec<N> {
 		let pos = self.len % n;
 		if pos != 0 {
 			let kl = self.inner.len() - 1;
-			self.inner[kl] = NibbleOps::<N>::pad_left(pos as u8, self.inner[kl]);
+			self.inner[kl] = NibbleOps::<N>::pad_left((n - pos) as u8, self.inner[kl]);
 		}
 	}
 
@@ -120,7 +120,7 @@ impl<const N: usize> NibbleVec<N> {
 		} else {
 			Prefix {
 				slice: &self.inner[..split],
-				last: NibbleOps::<N>::pad_left(pos, self.inner[split]),
+				last: NibbleOps::<N>::pad_left(n as u8 - pos, self.inner[split]),
 				align: pos,
 			}
 		}
@@ -140,7 +140,8 @@ impl<const N: usize> NibbleVec<N> {
 		if offset > 0 {
 			let (s1, s2) = NibbleOps::<N>::split_shifts(offset);
 			self.inner[last_index] =
-				NibbleOps::<N>::pad_left(offset as u8, self.inner[last_index]) | (v.inner[0] >> s2);
+				NibbleOps::<N>::pad_left((n - offset) as u8, self.inner[last_index]) |
+					(v.inner[0] >> s2);
 			(0..v.inner.len() - 1)
 				.for_each(|i| self.inner.push(v.inner[i] << s1 | v.inner[i + 1] >> s2));
 			if final_offset > 0 {
