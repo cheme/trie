@@ -511,6 +511,7 @@ fn test_recorder_with_cache_internal<T: TrieLayout<N>, const N: usize>() {
 
 		let mut recorder = Recorder::<T, N>::new();
 		{
+		
 			let trie = TrieDBBuilder::<T, N>::new(&memdb, &root)
 				.with_cache(&mut cache)
 				.with_recorder(&mut recorder)
@@ -518,8 +519,9 @@ fn test_recorder_with_cache_internal<T: TrieLayout<N>, const N: usize>() {
 
 			for (key, value) in key_value.iter().take(2) {
 				assert_eq!(*value, trie.get(key).unwrap().unwrap());
+				let mut partial_db = MemoryDB::<T::Hash, HashKey<_>, DBValue>::default();
 			}
-
+		
 			assert_eq!(
 				T::Hash::hash(&key_value[2].1),
 				trie.get_hash(&key_value[2].0).unwrap().unwrap()

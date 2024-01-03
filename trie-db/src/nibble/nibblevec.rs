@@ -272,8 +272,8 @@ impl<const N: usize> NibbleVec<N> {
 	/// Return an iterator over `Partial` bytes representation.
 	pub fn right_iter<'a>(&'a self) -> impl Iterator<Item = u8> + 'a {
 		let n = NibbleOps::<N>::nibble_per_byte();
-		let shift = self.len % n;
-		let require_padding = shift != 0;
+		let shift = n - (self.len % n);
+		let require_padding = shift != n;
 		let mut ix = 0;
 		let inner = &self.inner;
 
