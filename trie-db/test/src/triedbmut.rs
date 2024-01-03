@@ -424,7 +424,7 @@ fn stress_internal<T: TrieLayout<N>, const N: usize>() {
 		//eprint!("i {}: {:?}\n", i, seed);
 		let x = StandardMap {
 			alphabet: Alphabet::Custom(b"@QWERTYUIOPASDFGHJKLZXCVBNM[/]^_".to_vec()),
-			min_key: 2,
+			min_key: 5,
 			journal_key: 0,
 			value_mode: ValueMode::Index,
 			count: 4,
