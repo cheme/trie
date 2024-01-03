@@ -208,18 +208,33 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 
 	/// Return `Partial` bytes iterator over a range of byte..
 	/// Warning can be slow when unaligned (similar to `to_stored_range`).
-	pub fn right_range_iter(&'a self, to: usize) -> impl Iterator<Item = u8> + 'a {
+	pub fn right_range_iter(&'a self, nb_nibbles: usize) -> impl Iterator<Item = u8> + 'a {
 		let n = NibbleOps::<N>::nibble_per_byte();
-		let mut nib_res = to % n;
-		let aligned_i = (self.offset + to) % n;
-		let aligned = aligned_i == 0;
-		let mut ix = self.offset / n;
-		let ix_lim = (self.offset + to) / n;
+		let mut res_mask = (n - (nb_nibbles % n)) % n;
+		let offset_mask = self.offset % n;
+		let ix_init = self.offset / n;
+		let mut ix = ix_init;
+		let ix_lim = if (self.offset + nb_nibbles) % n > 0 {
+			((self.offset + nb_nibbles) / n) 
+		} else {
+			((self.offset + nb_nibbles) / n)
+		};
+		
+		let aligned = res_mask == offset_mask;
+		let (sub, s1, s2) = if aligned {
+			(false, 0, 0)
+		} else if res_mask > offset_mask {
+			let (s1, s2) = NibbleOps::<N>::split_shifts(res_mask - offset_mask);
+			(false, s2, s1)
+		} else {
+			let (s1, s2) = NibbleOps::<N>::split_shifts(offset_mask - res_mask);
+			(true, s2, s1)
+		};
 		crate::rstd::iter::from_fn(move || {
 			if aligned {
-				if nib_res > 0 {
-					let v = NibbleOps::<N>::pad_right(nib_res as u8, self.data[ix]);
-					nib_res = 0;
+				if res_mask > 0 {
+					let v = NibbleOps::<N>::pad_right(res_mask as u8, self.data[ix]);
+					res_mask = 0;
 					ix += 1;
 					Some(v)
 				} else if ix < ix_lim {
@@ -229,18 +244,28 @@ impl<'a, const N: usize> NibbleSlice<'a, N> {
 					None
 				}
 			} else {
-				let (s1, s2) = NibbleOps::<N>::split_shifts(aligned_i);
 				// unaligned
-				if nib_res > 0 {
-					let v = self.data[ix] >> s1;
-					let v = NibbleOps::<N>::pad_right(nib_res as u8, v);
-					nib_res = 0;
-					Some(v)
-				} else if ix < ix_lim {
+				if (sub && ix < ix_lim) || (!sub && ix <= ix_lim) {
+					let mut b = if sub {
+						let mut b = self.data[ix] << s1;
+						if ix + 1 <= ix_lim {
+							b |= self.data[ix + 1] >> s2;
+						}
+						b
+					} else {
+						
+						let mut b = self.data[ix] >> s1;
+						if ix > ix_init {
+							b |= self.data[ix - 1] << s2;
+						}
+						b
+					};
+					if res_mask > 0 {
+						b = NibbleOps::<N>::pad_right((n - res_mask) as u8, b);
+						res_mask = 0;
+					}
 					ix += 1;
-					let b1 = self.data[ix - 1] << s2;
-					let b2 = self.data[ix] >> s1;
-					Some(b1 | b2)
+					Some(b)
 				} else {
 					None
 				}

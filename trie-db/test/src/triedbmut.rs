@@ -73,6 +73,7 @@ fn reference_hashed_null_node<T: TrieLayout<N>, const N: usize>() -> <T::Hash as
 #[test]
 fn playpen() {
 	env_logger::init();
+	playpen_internal::<HashedValueNoExtThreshold<33, 2>, 2>();
 	playpen_internal::<HashedValueNoExtThreshold<1, 16>, 16>();
 	playpen_internal::<HashedValueNoExt, 16>();
 	playpen_internal::<NoExtensionLayout, 16>();
@@ -419,10 +420,11 @@ fn test_nibbled_branch_changed_value() {
 test_layouts!(stress, stress_internal);
 fn stress_internal<T: TrieLayout<N>, const N: usize>() {
 	let mut seed = Default::default();
-	for _ in 0..1000 {
+	for i in 0..1000 {
+		//eprint!("i {}: {:?}\n", i, seed);
 		let x = StandardMap {
 			alphabet: Alphabet::Custom(b"@QWERTYUIOPASDFGHJKLZXCVBNM[/]^_".to_vec()),
-			min_key: 5,
+			min_key: 2,
 			journal_key: 0,
 			value_mode: ValueMode::Index,
 			count: 4,
