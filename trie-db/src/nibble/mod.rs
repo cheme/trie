@@ -134,6 +134,7 @@ impl<const N: usize> NibbleOps<N> {
 	pub fn push_at_left(ix: u8, v: u8, into: u8) -> u8 {
 		let offset = 8 - (Self::bit_per_nibble() as u8 * (ix + 1));
 		//into | (v << (8 - (bit_per_nibble * ix)))
+		debug_assert!((into & (v << offset)) == 0);
 		into | (v << offset)
 	}
 

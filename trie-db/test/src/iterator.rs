@@ -315,12 +315,25 @@ fn iterate_over_incomplete_db_internal<T: TrieLayout<N>, const N: usize>() {
 		let mut iter = TrieDBNodeIterator::new(&trie).unwrap();
 
 		TrieIterator::seek(&mut iter, &hex!("0130")[..]).unwrap();
-		match iter.next() {
-			Some(Err(e)) =>
-				if let TrieError::IncompleteDatabase(err_hash) = *e {
-					assert_eq!(err_hash.as_ref(), leaf_hash.as_ref());
+		loop {
+			match iter.next() {
+				Some(Err(e)) =>
+					if let TrieError::IncompleteDatabase(err_hash) = *e {
+						assert_eq!(err_hash.as_ref(), leaf_hash.as_ref());
+						break;
+					},
+				Some(Ok((_, _, node))) => match node.node() {
+					Node::Branch(_, v) | Node::NibbledBranch(_, _, v) => {
+						if v.is_none() && N != 16 {
+							// possible paretnt branch when N is less than 16.
+							continue;
+						}
+					},
+					_ => {},
 				},
-			_ => panic!("expected IncompleteDatabase error"),
+				_ => {},
+			}
+			panic!("expected IncompleteDatabase error");
 		}
 		match iter.next() {
 			Some(Ok((_, _, node))) => match node.node() {
