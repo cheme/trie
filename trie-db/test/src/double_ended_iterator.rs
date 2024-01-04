@@ -37,42 +37,9 @@ fn node_double_ended_iterator<T: TrieLayout>() {
 	if T::USE_EXTENSION {
 		match iter.next_back() {
 			Some(Ok((prefix, Some(_), node))) => {
-				assert_eq!(prefix, nibble_vec(hex!(""), 0));
-				match node.node() {
-					Node::Extension(partial, _) =>
-						assert_eq!(partial, NibbleSlice::new_offset(&hex!("00")[..], 1)),
-					_ => panic!("unexpected node"),
-				}
-			},
-			_ => panic!("unexpected item"),
-		}
-
-		match iter.next_back() {
-			Some(Ok((prefix, Some(_), node))) => {
-				assert_eq!(prefix, nibble_vec(hex!("00"), 1));
-				match node.node() {
-					Node::Branch(_, _) => {},
-					_ => panic!("unexpected node"),
-				}
-			},
-			_ => panic!("unexpected item"),
-		}
-		match iter.next_back() {
-			Some(Ok((prefix, Some(_), node))) => {
 				assert_eq!(prefix, nibble_vec(hex!("02"), 2));
 				match node.node() {
 					Node::Leaf(partial, _) => assert_eq!(partial, NibbleSlice::new(&hex!("")[..])),
-					_ => panic!("unexpected node"),
-				}
-			},
-			_ => panic!("unexpected item"),
-		}
-
-		match iter.next_back() {
-			Some(Ok((prefix, None, node))) => {
-				assert_eq!(prefix, nibble_vec(hex!("01"), 2));
-				match node.node() {
-					Node::Branch(_, _) => {},
 					_ => panic!("unexpected node"),
 				}
 			},
@@ -91,16 +58,33 @@ fn node_double_ended_iterator<T: TrieLayout>() {
 			_ => panic!("unexpected item"),
 		}
 
-		assert!(iter.next_back().is_none());
-	} else {
-		let can_expand =
-			T::MAX_INLINE_VALUE.unwrap_or(T::Hash::LENGTH as u32) < T::Hash::LENGTH as u32;
+		match iter.next_back() {
+			Some(Ok((prefix, None, node))) => {
+				assert_eq!(prefix, nibble_vec(hex!("01"), 2));
+				match node.node() {
+					Node::Branch(_, _) => {},
+					_ => panic!("unexpected node"),
+				}
+			},
+			_ => panic!("unexpected item"),
+		}
+
+		match iter.next_back() {
+			Some(Ok((prefix, Some(_), node))) => {
+				assert_eq!(prefix, nibble_vec(hex!("00"), 1));
+				match node.node() {
+					Node::Branch(_, _) => {},
+					_ => panic!("unexpected node"),
+				}
+			},
+			_ => panic!("unexpected item"),
+		}
 
 		match iter.next_back() {
 			Some(Ok((prefix, Some(_), node))) => {
 				assert_eq!(prefix, nibble_vec(hex!(""), 0));
 				match node.node() {
-					Node::NibbledBranch(partial, _, _) =>
+					Node::Extension(partial, _) =>
 						assert_eq!(partial, NibbleSlice::new_offset(&hex!("00")[..], 1)),
 					_ => panic!("unexpected node"),
 				}
@@ -108,7 +92,11 @@ fn node_double_ended_iterator<T: TrieLayout>() {
 			_ => panic!("unexpected item"),
 		}
 
-		// Start from the last element and move backwards
+		assert!(iter.next_back().is_none());
+	} else {
+		let can_expand =
+			T::MAX_INLINE_VALUE.unwrap_or(T::Hash::LENGTH as u32) < T::Hash::LENGTH as u32;
+
 		match iter.next_back() {
 			Some(Ok((prefix, Some(_), node))) => {
 				assert_eq!(prefix, nibble_vec(hex!("02"), 2));
@@ -117,6 +105,22 @@ fn node_double_ended_iterator<T: TrieLayout>() {
 					_ => panic!("unexpected node"),
 				}
 			},
+			_ => panic!("unexpected item"),
+		}
+
+		match iter.next_back() {
+			Some(Ok((prefix, hash, node))) => {
+				if !can_expand {
+					assert!(hash.is_none());
+				}
+				assert_eq!(prefix, nibble_vec(hex!("0120"), 3));
+				match node.node() {
+					Node::Leaf(partial, _) =>
+						assert_eq!(partial, NibbleSlice::new_offset(&hex!("03")[..], 1)),
+					_ => panic!("unexpected node"),
+				}
+			},
+
 			_ => panic!("unexpected item"),
 		}
 
@@ -136,14 +140,11 @@ fn node_double_ended_iterator<T: TrieLayout>() {
 		}
 
 		match iter.next_back() {
-			Some(Ok((prefix, hash, node))) => {
-				if !can_expand {
-					assert!(hash.is_none());
-				}
-				assert_eq!(prefix, nibble_vec(hex!("0120"), 3));
+			Some(Ok((prefix, Some(_), node))) => {
+				assert_eq!(prefix, nibble_vec(hex!(""), 0));
 				match node.node() {
-					Node::Leaf(partial, _) =>
-						assert_eq!(partial, NibbleSlice::new_offset(&hex!("03")[..], 1)),
+					Node::NibbledBranch(partial, _, _) =>
+						assert_eq!(partial, NibbleSlice::new_offset(&hex!("00")[..], 1)),
 					_ => panic!("unexpected node"),
 				}
 			},
