@@ -1601,7 +1601,7 @@ where
 						let (start, alloc_start, align, last) = match key2.left() {
 							Prefix { slice: start, align: 0, last: _ } =>
 								(start, None, 1, NibbleOps::<N>::push_at_left(0, a, 0)),
-							Prefix { slice: start, last: v, align: nb } if nb == (N as u8 - 1) => {
+							Prefix { slice: start, last: v, align: nb } if nb == (n as u8 - 1) => {
 								let mut so: BackingByteVec = start.into();
 								so.push(NibbleOps::<N>::pad_left(n as u8 - 1, v) | a);
 								(start, Some(so), 0, 0)

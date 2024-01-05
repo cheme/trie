@@ -104,7 +104,7 @@ fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 		// avoid duplicate
 		let value_set: std::collections::BTreeMap<&[u8], &[u8]> =
 			x.iter().map(|(k, v)| (k.as_slice(), v.as_slice())).collect();
-		for (k, v) in value_set {
+		for (k, v) in value_set.clone() {
 			assert_eq!(memtrie.get(k).unwrap().unwrap(), v);
 		}
 
@@ -116,6 +116,9 @@ fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 			for i in &x {
 				println!("{:#x?} -> {:#x?}", i.0, i.1);
 			}
+		}
+		for (k, v) in value_set.clone() {
+			assert_eq!(memtrie.get(k).unwrap().unwrap(), v);
 		}
 		assert_eq!(*memtrie.root(), real);
 		assert!(unpopulate_trie(&mut memtrie, &x), "{:?}", (test_i, initial_seed));
@@ -421,7 +424,7 @@ fn test_nibbled_branch_changed_value() {
 test_layouts!(stress, stress_internal);
 fn stress_internal<T: TrieLayout<N>, const N: usize>() {
 	let mut seed = Default::default();
-	for i in 0..1000 {
+	for _ in 0..1000 {
 		//eprint!("i {}: {:?}\n", i, seed);
 		let x = StandardMap {
 			alphabet: Alphabet::Custom(b"@QWERTYUIOPASDFGHJKLZXCVBNM[/]^_".to_vec()),
