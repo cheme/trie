@@ -81,9 +81,8 @@ fn playpen() {
 }
 fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 	let mut seed = [0u8; 32];
-	seed = [15, 102, 175, 36, 35, 243, 159, 144, 12, 233, 103, 85, 194, 162, 181, 155, 227, 121, 24, 179, 91, 242, 138, 187, 15, 199, 83, 89, 204, 83, 69, 38];
 	for test_i in 0..10_000 {
-		eprint!("{}, {:?}\n", test_i, seed);
+		//eprint!("{}, {:?}\n", test_i, seed);
 		if test_i % 50 == 0 {
 			debug!("{:?} of 10000 stress tests done", test_i);
 		}
@@ -93,7 +92,7 @@ fn playpen_internal<T: TrieLayout<N>, const N: usize>() {
 			min_key: 5,
 			journal_key: 0,
 			value_mode: ValueMode::Index,
-			count: 4,
+			count: 100,
 		}
 		.make_with(&mut seed);
 
