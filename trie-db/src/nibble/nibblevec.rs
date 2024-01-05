@@ -167,7 +167,7 @@ impl<const N: usize> NibbleVec<N> {
 			let kend = self.inner.len() - 1;
 			if sl.len() > 0 {
 				self.inner[kend] = NibbleOps::<N>::pad_left(pad as u8, self.inner[kend]);
-				let (s1, s2) = NibbleOps::<N>::split_shifts(pad);
+				let (s2, s1) = NibbleOps::<N>::split_shifts(pad);
 				self.inner[kend] |= sl[0] >> s1;
 				(0..sl.len() - 1).for_each(|i| self.inner.push(sl[i] << s2 | sl[i + 1] >> s1));
 				self.inner.push(sl[sl.len() - 1] << s2);
