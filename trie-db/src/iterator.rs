@@ -15,7 +15,7 @@
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
-	node::{Node, NodeHandle, NodePlan, OwnedNode, Value},
+	node::{Node, NodeHandle, NodePlan, OwnedNode, Value, NodeOwned},
 	triedb::TrieDB,
 	TrieError, TrieItem, TrieKeyItem,
 };
@@ -606,3 +606,68 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 		})
 	}
 }
+
+//--
+// warp sync : bunch of partial and val + left hand hash child + right hand hash child
+// random proof: can put hash child anywhere: need index
+// p -> p -> p
+//
+
+// TODO rename Partial per key
+enum ProofOp {
+	Partial, // NibbleVec next (stop on a branch value depth).
+	Value, // value next
+	DropPartial, // followed by depth
+	ChildHash(u8), // index and hash next TODO note that u8 is needed due to possible missing nibble which is something only for
+				   // more than binary and allow value in the middle.
+}
+
+impl ProofOp {
+	fn as_u8(&self) -> u8 {
+		match self {
+			ProofOp::Partial => 0,
+			ProofOp::Value => 1,
+			ProofOp::DropPartial => 2,
+			ProofOp::ChildHash(ix) => 3 + ix,
+		}
+	}
+	fn from_u8(encoded: u8) -> Self {
+		match encoded {
+			0 => ProofOp::Partial,
+			1 => ProofOp::Value,
+			2 => ProofOp::DropPartial,
+			_ => ProofOp::ChildHash(encoded - 3),
+		}
+	}
+}
+
+// TODO chunk it TODO Write like trait out of std.
+fn full_state<'a, 'cache, L: TrieLayout>(iter: TrieDBNodeIterator<'a, 'cache, L>, output: &mut impl std::io::Write) -> Result<(), TrieHash<L>, CError<L>> {
+	for n in iter {
+		let (prefix, o_hash, node) = n?;
+		match node.node_plan() {
+					NodePlan::Leaf{partial, value} => {
+//			let value = match value {
+//				Value::Node(hash, location) =>
+//					match Self::fetch_value(db, &hash, (key_slice, None), location) {
+//						Ok(value) => value,
+//						Err(err) => return Some(Err(err)),
+//					},
+//				Value::Inline(value) => value.to_vec(),
+//			};
+
+
+					},
+					NodePlan::Extension{..} => unimplemented!(),
+					NodePlan::Branch{..} => unimplemented!(),
+					NodePlan::NibbledBranch{partial, children, value} => {
+					},
+					NodePlan::Empty => {
+					},
+
+		}
+	}
+	Ok(())
+}
+
+//fn state_warp
