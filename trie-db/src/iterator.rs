@@ -15,7 +15,7 @@
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
-	node::{Node, NodeHandle, NodePlan, OwnedNode, Value, NodeOwned},
+	node::{Node, NodeHandle, NodeOwned, NodePlan, OwnedNode, Value},
 	triedb::TrieDB,
 	TrieError, TrieItem, TrieKeyItem,
 };
@@ -615,56 +615,162 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 
 // TODO rename Partial per key
 enum ProofOp {
-	Partial, // NibbleVec next (stop on a branch value depth).
-	Value, // value next
-	DropPartial, // followed by depth
-	ChildHash(u8), // index and hash next TODO note that u8 is needed due to possible missing nibble which is something only for
-				   // more than binary and allow value in the middle.
+	Partial(bool), // slice next (stop on a branch value depth).
+	Value,         // value next
+	DropPartial,   // followed by depth
+	ChildHash(u8), /* index and hash next TODO note that u8 is needed due to possible missing
+	                * nibble which is something only for more than binary and allow
+	                * value in the middle. */
 }
 
 impl ProofOp {
 	fn as_u8(&self) -> u8 {
 		match self {
-			ProofOp::Partial => 0,
-			ProofOp::Value => 1,
-			ProofOp::DropPartial => 2,
+			ProofOp::Partial(false) => 0,
+			ProofOp::Partial(true) => 1,
+			ProofOp::Value => 2,
+			ProofOp::DropPartial => 3,
 			ProofOp::ChildHash(ix) => 3 + ix,
 		}
 	}
 	fn from_u8(encoded: u8) -> Self {
 		match encoded {
-			0 => ProofOp::Partial,
-			1 => ProofOp::Value,
-			2 => ProofOp::DropPartial,
-			_ => ProofOp::ChildHash(encoded - 3),
+			0 => ProofOp::Partial(false),
+			1 => ProofOp::Partial(true),
+			2 => ProofOp::Value,
+			3 => ProofOp::DropPartial,
+			_ => ProofOp::ChildHash(encoded - 4),
 		}
 	}
 }
 
+// TODO test combine prev_height align and prefix align and height align
+// 2^3 -> 8 bad.
+// TODO generic function with start and end align over slice, start mask
+// and end mask.
+fn put_key<L: TrieLayout>(
+	size: usize,
+	prev_height: usize,
+	prefix: &NibbleVec,
+	mut partial: NibbleSlice,
+	output: &mut impl std::io::Write,
+) -> Result<(), TrieHash<L>, CError<L>> {
+	if prev_height < prefix.len() {
+		let pref_len = prefix.len() - prev_height;
+		let end_aligned = (pref_len % nibble_ops::NIBBLE_PER_BYTE) == 0;
+		if (prev_height % nibble_ops::NIBBLE_PER_BYTE) == 0 {
+			let off = if end_aligned { 0 } else { 1 };
+			output
+				.write(
+					&prefix.inner()
+						[prev_height / nibble_ops::NIBBLE_PER_BYTE..prefix.inner().len() - off],
+				)
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			if !end_aligned {
+				let mut last = prefix.inner()[prefix.inner().len() - 1];
+				if partial.len() > 0 {
+					let b = partial.at(0);
+					partial.advance(1);
+					last &= 0xf0;
+					last |= b;
+				}
+				output
+					.write(&[last])
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+		} else {
+			let nb_byte = pref_len / nibble_ops::NIBBLE_PER_BYTE;
+			let slice = &prefix.inner()[prev_height / nibble_ops::NIBBLE_PER_BYTE..];
+			let off = if !end_aligned { 0 } else { 1 };
+			for i in 0..nb_byte - off {
+				let mut b = slice[i] << 4;
+				b |= slice[i + 1] >> 4;
+				output
+					.write(&[b])
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+			if !end_aligned {
+				let mut last = slice[nb_byte - 1] << 4;
+				if partial.len() > 0 {
+					let b = partial.at(0);
+					partial.advance(1);
+					last &= 0xf0;
+					last |= b;
+				}
+				output
+					.write(&[last])
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+		}
+	}
+	if partial.len() > 0 {
+		// TODO
+		let (slice, offset) = partial.right_ref();
+		let aligned = offset == 0;
+		if aligned {
+			output
+				.write(slice)
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		} else {
+			let nb_byte = partial.len() / nibble_ops::NIBBLE_PER_BYTE;
+			for i in 0..nb_byte - 1 {
+				let mut b = slice[i] << 4;
+				b |= slice[i + 1] >> 4;
+				output
+					.write(&[b])
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+			let b = slice[nb_byte - 1] << 4;
+			output
+				.write(&[b])
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		}
+	}
+	Ok(())
+}
+
 // TODO chunk it TODO Write like trait out of std.
-fn full_state<'a, 'cache, L: TrieLayout>(iter: TrieDBNodeIterator<'a, 'cache, L>, output: &mut impl std::io::Write) -> Result<(), TrieHash<L>, CError<L>> {
+fn full_state<'a, 'cache, L: TrieLayout>(
+	iter: TrieDBNodeIterator<'a, 'cache, L>,
+	output: &mut impl std::io::Write,
+) -> Result<(), TrieHash<L>, CError<L>> {
+	let mut prev_height: usize = 0;
 	for n in iter {
 		let (prefix, o_hash, node) = n?;
 		match node.node_plan() {
-					NodePlan::Leaf{partial, value} => {
-//			let value = match value {
-//				Value::Node(hash, location) =>
-//					match Self::fetch_value(db, &hash, (key_slice, None), location) {
-//						Ok(value) => value,
-//						Err(err) => return Some(Err(err)),
-//					},
-//				Value::Inline(value) => value.to_vec(),
-//			};
+			NodePlan::Empty => {},
+			NodePlan::Leaf { partial, value } => {
+				let height = prefix.len() + partial.len();
+				debug_assert!(height > prev_height);
+				let size = height - prev_height;
+				let aligned = (size % nibble_ops::NIBBLE_PER_BYTE) == 0;
+				let op = ProofOp::Partial(aligned);
+				output
+					.write(&[op.as_u8()])
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-
+				let partial = partial.build(node.data());
+				put_key::<L>(size, prev_height, &prefix, partial, output)?;
+				prev_height += size;
+				match value {
+					ValuePlan::Inline(value) => {
 					},
-					NodePlan::Extension{..} => unimplemented!(),
-					NodePlan::Branch{..} => unimplemented!(),
-					NodePlan::NibbledBranch{partial, children, value} => {
+					ValuePlan::Node(hash) => {
 					},
-					NodePlan::Empty => {
-					},
-
+				}
+				//			let value = match value {
+				//				Value::Node(hash, location) =>
+				//					match Self::fetch_value(db, &hash, (key_slice, None), location) {
+				//						Ok(value) => value,
+				//						Err(err) => return Some(Err(err)),
+				//					},
+				//				Value::Inline(value) => value.to_vec(),
+				//			};
+			},
+			NodePlan::NibbledBranch { partial, children, value } => {},
+			NodePlan::Extension { .. } => unimplemented!(),
+			NodePlan::Branch { .. } => unimplemented!(),
 		}
 	}
 	Ok(())

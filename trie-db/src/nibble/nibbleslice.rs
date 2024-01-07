@@ -164,6 +164,10 @@ impl<'a> NibbleSlice<'a> {
 		}
 	}
 
+	pub fn right_ref(&'a self) -> (&'a [u8], usize) {
+		let start = self.offset / nibble_ops::NIBBLE_PER_BYTE;
+		(&self.data[start..], self.offset % nibble_ops::NIBBLE_PER_BYTE)
+	}
 	/// Return `Partial` representation of this slice:
 	/// first encoded byte and following slice.
 	pub fn right(&'a self) -> Partial {
