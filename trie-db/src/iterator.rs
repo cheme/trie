@@ -15,7 +15,7 @@
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
-	node::{Node, NodeHandle, NodeOwned, NodePlan, OwnedNode, Value},
+	node::{Node, NodeHandle, NodeOwned, NodePlan, OwnedNode, Value, ValuePlan},
 	triedb::TrieDB,
 	TrieError, TrieItem, TrieKeyItem,
 };
@@ -729,20 +729,45 @@ fn put_key<L: TrieLayout>(
 	Ok(())
 }
 
+fn put_value<L: TrieLayout>(
+	value: &[u8],
+	output: &mut impl std::io::Write,
+) -> Result<(), TrieHash<L>, CError<L>> {
+	let op = ProofOp::Value;
+	output
+		.write(&[op.as_u8()])
+		// TODO right error (when doing no_std writer / reader
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+	VarInt(value.len() as u32)
+		.encode_into(output)
+		// TODO right error (when doing no_std writer / reader
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+	output
+		.write(value)
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+	Ok(())
+}
+
 // TODO chunk it TODO Write like trait out of std.
 fn full_state<'a, 'cache, L: TrieLayout>(
-	iter: TrieDBNodeIterator<'a, 'cache, L>,
+	mut iter: TrieDBNodeIterator<'a, 'cache, L>,
 	output: &mut impl std::io::Write,
 ) -> Result<(), TrieHash<L>, CError<L>> {
 	let mut prev_height: usize = 0;
-	for n in iter {
-		let (prefix, o_hash, node) = n?;
+	while let Some(n) = iter.next() {
+		let (mut prefix, o_hash, node) = n?;
 		match node.node_plan() {
 			NodePlan::Empty => {},
 			NodePlan::Leaf { partial, value } => {
 				let height = prefix.len() + partial.len();
 				debug_assert!(height > prev_height);
 				let size = height - prev_height;
+				// TODO plug scale encode?
+				VarInt(size as u32)
+					.encode_into(output)
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 				let aligned = (size % nibble_ops::NIBBLE_PER_BYTE) == 0;
 				let op = ProofOp::Partial(aligned);
 				output
@@ -753,22 +778,39 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 				let partial = partial.build(node.data());
 				put_key::<L>(size, prev_height, &prefix, partial, output)?;
 				prev_height += size;
+
+				let value = value.build(node.data(), node.locations());
 				match value {
-					ValuePlan::Inline(value) => {
+					Value::Inline(value) => {
+						put_value::<L>(value, output)?;
 					},
-					ValuePlan::Node(hash) => {
+					Value::Node(hash, location) => {
+						prefix.append_partial(partial.right());
+						let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
+						if let Some(extra_nibble) = maybe_extra_nibble {
+							return Err(Box::new(TrieError::ValueAtIncompleteKey(key_slice.to_vec(), extra_nibble)))
+						}
+
+						match TrieDBRawIterator::fetch_value(
+							iter.db,
+							&hash,
+							(key_slice, None),
+							location[0],
+						) {
+							Ok(value) => {
+								put_value::<L>(value.as_slice(), output)?;
+							},
+							Err(err) => return Err(err),
+						};
 					},
 				}
-				//			let value = match value {
-				//				Value::Node(hash, location) =>
-				//					match Self::fetch_value(db, &hash, (key_slice, None), location) {
-				//						Ok(value) => value,
-				//						Err(err) => return Some(Err(err)),
-				//					},
-				//				Value::Inline(value) => value.to_vec(),
-				//			};
 			},
-			NodePlan::NibbledBranch { partial, children, value } => {},
+			NodePlan::NibbledBranch { partial, children, value } => {
+				// TODO partial if value present only
+
+				// TODO when restart you just seek: so iterate on crumb to push all children befor index.
+				// TODO when exiting return all children after index
+			},
 			NodePlan::Extension { .. } => unimplemented!(),
 			NodePlan::Branch { .. } => unimplemented!(),
 		}
@@ -776,4 +818,65 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 	Ok(())
 }
 
+// Limiting size to u32 (could also just use a terminal character).
+#[derive(Debug, PartialEq, Eq)]
+#[repr(transparent)]
+struct VarInt(u32);
+
+impl VarInt {
+	fn encoded_len(&self) -> usize {
+		if self.0 == 0 {
+			return 1
+		}
+		let len = 32 - self.0.leading_zeros() as usize;
+		if len % 7 == 0 {
+			len / 7
+		} else {
+			len / 7 + 1
+		}
+		/*
+		match self.0 {
+			l if l < 2 ^ 7 => 1, // leading 0: 25
+			l if l < 2 ^ 14 => 2, // leading 0: 18
+
+			l if l < 2 ^ 21 => 3, // 11
+			l if l < 2 ^ 28 => 4, // 4
+			_ => 5,
+		}
+		*/
+	}
+
+	fn encode_into(&self, out: &mut impl std::io::Write) -> core::result::Result<(), ()> {
+		let mut to_encode = self.0;
+		for _ in 0..self.encoded_len() - 1 {
+			out.write(&[0b1000_0000 | to_encode as u8]).map_err(|_| ())?;
+			to_encode >>= 7;
+		}
+		out.write(&[to_encode as u8]).map_err(|_| ())?;
+		Ok(())
+	}
+
+	fn decode(encoded: &[u8]) -> core::result::Result<(Self, usize), ()> {
+		let mut value = 0u32;
+		for (i, byte) in encoded.iter().enumerate() {
+			let last = byte & 0b1000_0000 == 0;
+			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
+			if last {
+				return Ok((VarInt(value), i + 1))
+			}
+		}
+		Err(())
+	}
+}
+
+#[test]
+fn varint_encode_decode() {
+	let mut buf = crate::query_plan::InMemoryRecorder::default();
+	for i in 0..u16::MAX as u32 + 1 {
+		VarInt(i).encode_into(&mut buf);
+		assert_eq!(buf.buffer.len(), VarInt(i).encoded_len());
+		assert_eq!(Ok((VarInt(i), buf.buffer.len())), VarInt::decode(&buf.buffer));
+		buf.buffer.clear();
+	}
+}
 //fn state_warp
