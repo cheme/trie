@@ -30,7 +30,6 @@ enum Status {
 	At,
 	AtChild(usize),
 	Exiting,
-	BefExiting,
 }
 
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -54,8 +53,7 @@ impl<H: Hasher, L: Copy + Default> Crumb<H, L> {
 			(Status::AtChild(x), NodePlan::NibbledBranch { .. })
 				if x < (nibble_ops::NIBBLE_LENGTH - 1) =>
 				Status::AtChild(x + 1),
-			(Status::BefExiting, _) => Status::Exiting,
-			_ => Status::BefExiting,
+			_ => Status::Exiting,
 		}
 	}
 }
@@ -64,22 +62,18 @@ impl<H: Hasher, L: Copy + Default> Crumb<H, L> {
 pub struct TrieDBRawIterator<L: TrieLayout> {
 	trail: Vec<Crumb<L::Hash, L::Location>>,
 	key_nibbles: NibbleVec,
-	return_on_exit: bool,
 }
 
 impl<L: TrieLayout> TrieDBRawIterator<L> {
 	/// Create a new empty iterator.
 	pub fn empty() -> Self {
-		Self { trail: Vec::new(), key_nibbles: NibbleVec::new(), return_on_exit: false }
+		Self { trail: Vec::new(), key_nibbles: NibbleVec::new() }
 	}
 
 	/// Create a new iterator.
 	pub fn new(db: &TrieDB<L>) -> Result<Self, TrieHash<L>, CError<L>> {
-		let mut r = TrieDBRawIterator {
-			trail: Vec::with_capacity(8),
-			key_nibbles: NibbleVec::new(),
-			return_on_exit: false,
-		};
+		let mut r =
+			TrieDBRawIterator { trail: Vec::with_capacity(8), key_nibbles: NibbleVec::new() };
 		let (root_node, root_hash) = db.get_raw_or_lookup(
 			*db.root(),
 			NodeHandle::Hash(db.root().as_ref(), Default::default()),
@@ -374,7 +368,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 					crumb.increment();
 					return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
 				},
-				(Status::BefExiting, node) => {
+				(Status::Exiting, node) => {
 					match node {
 						Node::Empty | Node::Leaf { .. } => {},
 						Node::Extension(partial, ..) => {
@@ -387,15 +381,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
 					}
-					if self.return_on_exit {
-						let crumb = self.trail.last_mut().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
-						crumb.increment();
-						return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
-					} else {
-						self.trail.last_mut()?.increment();
-					}
-				},
-				(Status::Exiting, node) => {
 					self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
 					self.trail.last_mut()?.increment();
 				},
@@ -633,7 +618,7 @@ enum ProofOp {
 	Partial(bool), // slice next (stop on a branch value depth).
 	Value,         // value next
 	DropPartial,   // followed by depth
-	ChildHash,     /* index and hash next TODO note that u8 is needed due to possible missing
+	ChildHash, /* index and hash next TODO note that u8 is needed due to possible missing
 	                * nibble which is something only for more than binary and allow
 	                * value in the middle. */
 }
@@ -770,7 +755,6 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 	mut iter: TrieDBNodeIterator<'a, 'cache, L>,
 	output: &mut impl std::io::Write,
 ) -> Result<(), TrieHash<L>, CError<L>> {
-	iter.raw_iter.return_on_exit = true;
 	let mut prev_height: usize = 0;
 	while let Some(n) = iter.next() {
 		let (mut prefix, o_hash, node) = n?;
@@ -805,10 +789,7 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 						prefix.append_partial(partial.right());
 						let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
 						if let Some(extra_nibble) = maybe_extra_nibble {
-							return Err(Box::new(TrieError::ValueAtIncompleteKey(
-								key_slice.to_vec(),
-								extra_nibble,
-							)))
+							return Err(Box::new(TrieError::ValueAtIncompleteKey(key_slice.to_vec(), extra_nibble)))
 						}
 
 						match TrieDBRawIterator::fetch_value(
@@ -828,8 +809,8 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 			NodePlan::NibbledBranch { partial, children, value } => {
 				// TODO partial if value present only
 
-				// TODO when restart you just seek: so iterate on crumb to push all children befor
-				// index. TODO when exiting return all children after index
+				// TODO when restart you just seek: so iterate on crumb to push all children befor index.
+				// TODO when exiting return all children after index
 			},
 			NodePlan::Extension { .. } => unimplemented!(),
 			NodePlan::Branch { .. } => unimplemented!(),
