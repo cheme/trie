@@ -618,7 +618,7 @@ enum ProofOp {
 	Partial(bool), // slice next (stop on a branch value depth).
 	Value,         // value next
 	DropPartial,   // followed by depth
-	ChildHash, /* index and hash next TODO note that u8 is needed due to possible missing
+	ChildHash,     /* index and hash next TODO note that u8 is needed due to possible missing
 	                * nibble which is something only for more than binary and allow
 	                * value in the middle. */
 }
@@ -789,7 +789,10 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 						prefix.append_partial(partial.right());
 						let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
 						if let Some(extra_nibble) = maybe_extra_nibble {
-							return Err(Box::new(TrieError::ValueAtIncompleteKey(key_slice.to_vec(), extra_nibble)))
+							return Err(Box::new(TrieError::ValueAtIncompleteKey(
+								key_slice.to_vec(),
+								extra_nibble,
+							)))
 						}
 
 						match TrieDBRawIterator::fetch_value(
@@ -807,14 +810,81 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 				}
 			},
 			NodePlan::NibbledBranch { partial, children, value } => {
+				let height = prefix.len() + partial.len();
+
 				// TODO partial if value present only
 
-				// TODO when restart you just seek: so iterate on crumb to push all children befor index.
-				// TODO when exiting return all children after index
+				// TODO when restart you just seek: so iterate on crumb to push all children befor
+				// index. TODO when exiting return all children after index
 			},
 			NodePlan::Extension { .. } => unimplemented!(),
 			NodePlan::Branch { .. } => unimplemented!(),
 		}
+	}
+	Ok(())
+}
+
+// TODO chunk it TODO Write like trait out of std.
+pub fn full_state2<'a, 'cache, L: TrieLayout>(
+	mut iter: crate::triedb::TrieDBIterator<'a, 'cache, L>,
+	output: &mut impl std::io::Write,
+) -> Result<(), TrieHash<L>, CError<L>> {
+	let mut prev_height: usize = 0;
+	// TODO at start key do a seek then iterate on crumb and add key portion plus all children hash
+	// along the branches before ix and value hash or value.
+
+	// TODO when exiting on limit: pop all crumb and add siblings hash after index
+
+	let mut prev_key = Vec::new();
+	let mut prev_key_len = 0;
+	while let Some(n) = iter.next() {
+		let (key, value) = n?;
+		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
+		let common_depth = nibble_ops::biggest_depth(&prev_key[..], &key[..]);
+
+		if common_depth < prev_key_len {
+			let op = ProofOp::DropPartial;
+			output
+				.write(&[op.as_u8()])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+			let nb = VarInt((prev_key_len - common_depth) as u32).encode_into(output);
+		}
+		if common_depth < key_len {
+			let to_write = key_len - common_depth;
+			let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
+			let op = ProofOp::Partial(aligned);
+			output
+				.write(&[op.as_u8()])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+			let start_aligned = common_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
+			let start_ix = common_depth / nibble_ops::NIBBLE_PER_BYTE;
+			if start_aligned {
+				let off = if aligned { 0 } else { 1 };
+				output.write(&key[start_ix..key.len() - off]);
+				if !aligned {
+					output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+				}
+			} else {
+				for i in start_ix..key.len() - 1 {
+					let mut b = key[i] << 4;
+					b |= key[i + 1] >> 4;
+					output.write(&[b]);
+				}
+				if !aligned {
+					let b = key[key.len() - 1] << 4;
+					output.write(&[b]);
+				}
+			}
+		}
+
+		put_value::<L>(value.as_slice(), output)?;
+
+		prev_key = key;
+		prev_key_len = key_len;
 	}
 	Ok(())
 }
