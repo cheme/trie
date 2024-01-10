@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use hash_db::{Hasher, EMPTY_PREFIX};
-use reference_trie::{test_layouts, ExtensionLayout};
+use reference_trie::{test_layouts, test_layouts_substrate, ExtensionLayout, PrefixedMemoryDB};
 use trie_db::{
 	decode_compact, encode_compact, DBValue, NodeCodec, Recorder, Trie, TrieDBBuilder,
 	TrieDBMutBuilder, TrieError, TrieLayout,
@@ -191,3 +191,52 @@ fn encoding_node_owned_and_decoding_node_works() {
 		assert_eq!(record.data, node_owned.to_encoded::<<ExtensionLayout as TrieLayout>::Codec>());
 	}
 }
+
+fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
+	entries: Vec<(&'static [u8], &'static [u8])>,
+) -> (<L::Hash as Hasher>::Out, Vec<u8>) {
+	// Populate DB with full trie from entries.
+	let (db, root) = {
+		let mut db = DB::default();
+		let mut trie = <TrieDBMutBuilder<L>>::new(&mut db).build();
+		for (key, value) in entries.iter() {
+			trie.insert(key, value).unwrap();
+		}
+		let commit = trie.commit();
+		let root = db.commit(commit);
+		(db, root)
+	};
+
+	let mut output = Vec::new();
+	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
+	let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
+	trie_db::full_state2(iter, &mut output).unwrap();
+
+	(root, output)
+}
+
+
+test_layouts_substrate!(trie_full_state);
+fn trie_full_state<T: TrieLayout>() {
+	let (root, encoded) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(
+		vec![
+			// "alfa" is at a hash-referenced leaf node.
+			(b"alfa", &[0; 32]),
+			// "bravo" is at an inline leaf node.
+			(b"bravo", b"bravo"),
+			// "do" is at a hash-referenced branch node.
+			(b"do", b"verb"),
+			// "dog" is at an inline leaf node.
+			(b"dog", b"puppy"),
+			// "doge" is at a hash-referenced leaf node.
+			(b"doge", &[0; 32]),
+			// extension node "o" (plus nibble) to next branch.
+			(b"horse", b"stallion"),
+			(b"house", b"building"),
+		]
+	);
+
+	//test_decode_decode_full_state::<T>(&encoded, items, root, encoded.len() - 1);
+}
+
+

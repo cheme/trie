@@ -880,7 +880,6 @@ pub fn full_state2<'a, 'cache, L: TrieLayout>(
 				}
 			}
 		}
-
 		put_value::<L>(value.as_slice(), output)?;
 
 		prev_key = key;
