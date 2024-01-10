@@ -618,7 +618,7 @@ enum ProofOp {
 	Partial(bool), // slice next (stop on a branch value depth).
 	Value,         // value next
 	DropPartial,   // followed by depth
-	ChildHash(u8), /* index and hash next TODO note that u8 is needed due to possible missing
+	ChildHash, /* index and hash next TODO note that u8 is needed due to possible missing
 	                * nibble which is something only for more than binary and allow
 	                * value in the middle. */
 }
@@ -630,17 +630,18 @@ impl ProofOp {
 			ProofOp::Partial(true) => 1,
 			ProofOp::Value => 2,
 			ProofOp::DropPartial => 3,
-			ProofOp::ChildHash(ix) => 3 + ix,
+			ProofOp::ChildHash => 4,
 		}
 	}
-	fn from_u8(encoded: u8) -> Self {
-		match encoded {
+	fn from_u8(encoded: u8) -> Option<Self> {
+		Some(match encoded {
 			0 => ProofOp::Partial(false),
 			1 => ProofOp::Partial(true),
 			2 => ProofOp::Value,
 			3 => ProofOp::DropPartial,
-			_ => ProofOp::ChildHash(encoded - 4),
-		}
+			4 => ProofOp::ChildHash,
+			_ => return None,
+		})
 	}
 }
 
