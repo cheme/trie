@@ -65,10 +65,10 @@ where
 
 	#[inline(always)]
 	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
-		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
+		let last = self.0.len() - 1;
+		if self.0.is_empty() || self.0[last].2 < depth {
 			self.0.push((new_vec_slice_buffer(), None, depth));
 		}
-		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
 		self.0[last].1 = value;
 	}
@@ -114,6 +114,42 @@ where
 	#[inline(always)]
 	fn is_one(&self) -> bool {
 		self.0.len() == 1
+	}
+
+	fn drop_to(
+		&mut self,
+		key: &mut NibbleVec,
+		target_depth: usize,
+		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
+	) {
+		let hashed;
+		let index = nibble_ops::left_nibble_at(&key.inner()[..], target_depth);
+		let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
+		let prefix = NibbleSlice::new_offset(
+			&key.inner()[..],
+			key.inner().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
+		);
+
+		let Some((children, value, _depth)) = self.0.pop() else {
+			unimplemented!("TODO an error");
+		};
+
+		let is_branch = children.iter().any(|c| c.is_some());
+		let hash = if is_branch {
+		} else {
+			let value = if let Some(value) =
+				Value::new_inline(value.as_ref().unwrap().as_ref(), T::MAX_INLINE_VALUE)
+			{
+				value
+			} else {
+				hashed = callback
+					.process_inner_hashed_value((key.inner(), None), value.unwrap().as_ref());
+				Value::Node(hashed.as_ref(), ())
+			};
+
+			let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
+			callback.process(prefix.left(), encoded, false);
+		};
 	}
 
 	fn flush_value(
@@ -528,6 +564,7 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
 	input: &mut impl std::io::Read,
 	db: &mut memory_db::MemoryDB<L::Hash, memory_db::PrefixedKey<L::Hash>, DBValue>,
+	callback: &mut F,
 ) -> Result<TrieHash<L>, ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
@@ -567,8 +604,23 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 			}
 			key.append(&nibble_vec);
 		},
-		ProofOp::Value => {},
-		ProofOp::DropPartial => {},
+		ProofOp::Value => {
+			let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
+			let mut value = DBValue::with_capacity(nb_byte);
+			while nb_byte > 0 {
+				let bound = core::cmp::min(nb_byte, BUFF_LEN);
+				input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+				value.extend_from_slice(&buff[..bound]);
+				nb_byte -= bound;
+			}
+			// not the most efficient as this is guaranted to be a push
+			depth_queue.set_cache_value(key.len(), Some(value));
+		},
+		ProofOp::DropPartial => {
+			let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
+			let to = key.len() - to_drop;
+			depth_queue.drop_to(&mut key, to, callback);
+		},
 		ProofOp::ChildHash => {
 			unreachable!("TODO after start and stop impl");
 		},
