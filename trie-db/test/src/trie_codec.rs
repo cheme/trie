@@ -238,5 +238,3 @@ fn trie_full_state<T: TrieLayout>() {
 
 	//test_decode_decode_full_state::<T>(&encoded, items, root, encoded.len() - 1);
 }
-
-

@@ -615,7 +615,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 
 // TODO rename Partial per key
 enum ProofOp {
-	Partial(bool), // slice next (stop on a branch value depth).
+	Partial,			 // slice next, with size as number of nibbles
 	Value,         // value next
 	DropPartial,   // followed by depth
 	ChildHash,     /* index and hash next TODO note that u8 is needed due to possible missing
@@ -626,20 +626,18 @@ enum ProofOp {
 impl ProofOp {
 	fn as_u8(&self) -> u8 {
 		match self {
-			ProofOp::Partial(false) => 0,
-			ProofOp::Partial(true) => 1,
-			ProofOp::Value => 2,
-			ProofOp::DropPartial => 3,
-			ProofOp::ChildHash => 4,
+			ProofOp::Partial => 0,
+			ProofOp::Value => 1,
+			ProofOp::DropPartial => 2,
+			ProofOp::ChildHash => 3,
 		}
 	}
 	fn from_u8(encoded: u8) -> Option<Self> {
 		Some(match encoded {
-			0 => ProofOp::Partial(false),
-			1 => ProofOp::Partial(true),
-			2 => ProofOp::Value,
-			3 => ProofOp::DropPartial,
-			4 => ProofOp::ChildHash,
+			0 => ProofOp::Partial,
+			1 => ProofOp::Value,
+			2 => ProofOp::DropPartial,
+			3 => ProofOp::ChildHash,
 			_ => return None,
 		})
 	}
@@ -770,7 +768,7 @@ fn full_state<'a, 'cache, L: TrieLayout>(
 					// TODO right error (when doing no_std writer / reader
 					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 				let aligned = (size % nibble_ops::NIBBLE_PER_BYTE) == 0;
-				let op = ProofOp::Partial(aligned);
+				let op = ProofOp::Partial;
 				output
 					.write(&[op.as_u8()])
 					// TODO right error (when doing no_std writer / reader
@@ -851,15 +849,19 @@ pub fn full_state2<'a, 'cache, L: TrieLayout>(
 
 			let nb = VarInt((prev_key_len - common_depth) as u32).encode_into(output);
 		}
+		debug_assert!(common_depth < key_len);
 		if common_depth < key_len {
 			let to_write = key_len - common_depth;
 			let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
-			let op = ProofOp::Partial(aligned);
+			let op = ProofOp::Partial;
 			output
 				.write(&[op.as_u8()])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-
+			VarInt(to_write as u32)
+				.encode_into(output)
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 			let start_aligned = common_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
 			let start_ix = common_depth / nibble_ops::NIBBLE_PER_BYTE;
 			if start_aligned {
@@ -886,6 +888,14 @@ pub fn full_state2<'a, 'cache, L: TrieLayout>(
 		prev_key_len = key_len;
 	}
 	Ok(())
+}
+
+
+pub fn build_from_proof<'a, 'cache, L: TrieLayout>(
+	input: &mut impl std::io::Read,
+	db: &mut memory_db::MemoryDB<L::Hash, memory_db::PrefixedKey<L::Hash>, DBValue>,
+) -> TrieHash<L> {
+	unimplemented!()
 }
 
 // Limiting size to u32 (could also just use a terminal character).
