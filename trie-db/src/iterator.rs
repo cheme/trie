@@ -734,7 +734,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 // Limiting size to u32 (could also just use a terminal character).
 #[derive(Debug, PartialEq, Eq)]
 #[repr(transparent)]
-struct VarInt(u32);
+pub struct VarInt(u32);
 
 impl VarInt {
 	fn encoded_len(&self) -> usize {
@@ -777,6 +777,23 @@ impl VarInt {
 			if last {
 				return Ok((VarInt(value), i + 1))
 			}
+		}
+		Err(())
+	}
+
+	pub fn decode_from(input: &mut impl std::io::Read) -> core::result::Result<u32, ()> {
+		let mut value = 0u32;
+		let mut buff = [0u8];
+		let mut i = 0;
+		loop {
+			input.read_exact(&mut buff[..]).map_err(|_| ())?;
+			let byte = buff[0];
+			let last = byte & 0b1000_0000 == 0;
+			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
+			if last {
+				return Ok(value);
+			}
+			i += 1;
 		}
 		Err(())
 	}

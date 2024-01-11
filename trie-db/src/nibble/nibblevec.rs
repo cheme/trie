@@ -289,6 +289,13 @@ impl NibbleVec {
 	}
 }
 
+impl From<BackingByteVec> for NibbleVec {
+	fn from(inner: BackingByteVec) -> Self {
+		let len = inner.len() * nibble_ops::NIBBLE_PER_BYTE;
+		Self { inner, len }
+	}
+}
+
 impl<'a> From<NibbleSlice<'a>> for NibbleVec {
 	fn from(s: NibbleSlice<'a>) -> Self {
 		let mut v = NibbleVec::new();

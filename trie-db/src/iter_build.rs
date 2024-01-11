@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{nibble_ops, NibbleSlice},
+	nibble::{nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
@@ -529,10 +529,13 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	input: &mut impl std::io::Read,
 	db: &mut memory_db::MemoryDB<L::Hash, memory_db::PrefixedKey<L::Hash>, DBValue>,
 ) -> Result<TrieHash<L>, ()> {
+	use crate::iterator::{ProofOp, VarInt};
+	let mut key = NibbleVec::new();
 	let mut last_value: Option<DBValue> = None;
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
 
-	let mut buff = [0u8; 1];
+	const BUFF_LEN: usize = 32;
+	let mut buff = [0u8; BUFF_LEN];
 	input.read_exact(&mut buff[..]).map_err(|e| {
 		match e.kind() {
 			std::io::ErrorKind::UnexpectedEof => {}, // aka ccannot read
@@ -540,7 +543,36 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 		}
 		()
 	})?; // TODO right erro from trie crate
-	let proof_op = crate::iterator::ProofOp::from_u8(buff[0]).ok_or(())?;
+	let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
+	match proof_op {
+		ProofOp::Partial => {
+			let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
+			let mut nb_byte = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
+				size / nibble_ops::NIBBLE_PER_BYTE
+			} else {
+				(size / nibble_ops::NIBBLE_PER_BYTE) + 1
+			};
+
+			// TODO allocating a nibble_vec not really usefull.
+			let mut nibble_vec = BackingByteVec::with_capacity(nb_byte);
+			while nb_byte > 0 {
+				let bound = core::cmp::min(nb_byte, BUFF_LEN);
+				input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+				nibble_vec.extend_from_slice(&buff[..bound]);
+				nb_byte -= bound;
+			}
+			let mut nibble_vec: NibbleVec = nibble_vec.into();
+			if nibble_vec.len() > size {
+				nibble_vec.drop_lasts(nibble_vec.len() - size);
+			}
+			key.append(&nibble_vec);
+		},
+		ProofOp::Value => {},
+		ProofOp::DropPartial => {},
+		ProofOp::ChildHash => {
+			unreachable!("TODO after start and stop impl");
+		},
+	}
 	// TODO close to iter build, but we want something more low level here.
 	// iterate on op. do compare as in iter_build. Call callback as in iter_build.
 	//
