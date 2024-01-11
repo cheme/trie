@@ -23,7 +23,7 @@ use crate::{
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
-	DBValue, TrieHash, TrieLayout,
+	DBValue, NibbleVec, TrieHash, TrieLayout,
 };
 use hash_db::{Hasher, Prefix};
 use memory_db::MemoryDB;
@@ -523,4 +523,34 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 	fn process_inner_hashed_value(&mut self, _prefix: Prefix, value: &[u8]) -> TrieHash<T> {
 		<T::Hash as Hasher>::hash(value)
 	}
+}
+
+pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
+	input: &mut impl std::io::Read,
+	db: &mut memory_db::MemoryDB<L::Hash, memory_db::PrefixedKey<L::Hash>, DBValue>,
+) -> Result<TrieHash<L>, ()> {
+	let mut last_value: Option<DBValue> = None;
+	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
+
+	let mut buff = [0u8; 1];
+	input.read_exact(&mut buff[..]).map_err(|e| {
+		match e.kind() {
+			std::io::ErrorKind::UnexpectedEof => {}, // aka ccannot read
+			_ => (),
+		}
+		()
+	})?; // TODO right erro from trie crate
+	let proof_op = crate::iterator::ProofOp::from_u8(buff[0]).ok_or(())?;
+	// TODO close to iter build, but we want something more low level here.
+	// iterate on op. do compare as in iter_build. Call callback as in iter_build.
+	//
+	// algo will be
+	// - stack key: push on nibblevec
+	// - value: set in cache accum as a new node with no children
+	// - pop key: partial from size popped, rem cache accum and call back, truncate nibblevec
+	// write hash in cache accum: if present at right depth or put item in cache accum at right
+	// depth with no value.
+	//
+	//
+	unimplemented!()
 }

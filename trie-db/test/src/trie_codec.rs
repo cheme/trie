@@ -210,31 +210,28 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	let mut output = Vec::new();
 	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
 	let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
-	trie_db::full_state2(iter, &mut output).unwrap();
+	trie_db::range_proof(iter, &mut output).unwrap();
 
 	(root, output)
 }
 
-
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	let (root, encoded) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(
-		vec![
-			// "alfa" is at a hash-referenced leaf node.
-			(b"alfa", &[0; 32]),
-			// "bravo" is at an inline leaf node.
-			(b"bravo", b"bravo"),
-			// "do" is at a hash-referenced branch node.
-			(b"do", b"verb"),
-			// "dog" is at an inline leaf node.
-			(b"dog", b"puppy"),
-			// "doge" is at a hash-referenced leaf node.
-			(b"doge", &[0; 32]),
-			// extension node "o" (plus nibble) to next branch.
-			(b"horse", b"stallion"),
-			(b"house", b"building"),
-		]
-	);
+	let (root, encoded) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(vec![
+		// "alfa" is at a hash-referenced leaf node.
+		(b"alfa", &[0; 32]),
+		// "bravo" is at an inline leaf node.
+		(b"bravo", b"bravo"),
+		// "do" is at a hash-referenced branch node.
+		(b"do", b"verb"),
+		// "dog" is at an inline leaf node.
+		(b"dog", b"puppy"),
+		// "doge" is at a hash-referenced leaf node.
+		(b"doge", &[0; 32]),
+		// extension node "o" (plus nibble) to next branch.
+		(b"horse", b"stallion"),
+		(b"house", b"building"),
+	]);
 
 	//test_decode_decode_full_state::<T>(&encoded, items, root, encoded.len() - 1);
 }
