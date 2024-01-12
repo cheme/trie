@@ -72,7 +72,9 @@ pub use self::{
 	},
 };
 pub use crate::{
-	iter_build::{trie_visit, ProcessEncodedNode, TrieBuilder, TrieRoot, TrieRootUnhashed},
+	iter_build::{
+		trie_visit, visit_range_proof, ProcessEncodedNode, TrieBuilder, TrieRoot, TrieRootUnhashed,
+	},
 	iterator::{range_proof, TrieDBNodeIterator, TrieDBRawIterator},
 	node_codec::{NodeCodec, Partial},
 	trie_codec::{decode_compact, decode_compact_from_iter, encode_compact},

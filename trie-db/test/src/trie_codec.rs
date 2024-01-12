@@ -211,13 +211,14 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
 	let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
 	trie_db::range_proof(iter, &mut output).unwrap();
+	println!("proof: {:?}", output);
 
 	(root, output)
 }
 
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	let (root, encoded) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(vec![
+	let (root, proof) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(vec![
 		// "alfa" is at a hash-referenced leaf node.
 		(b"alfa", &[0; 32]),
 		// "bravo" is at an inline leaf node.
@@ -232,6 +233,9 @@ fn trie_full_state<T: TrieLayout>() {
 		(b"horse", b"stallion"),
 		(b"house", b"building"),
 	]);
-
-	//test_decode_decode_full_state::<T>(&encoded, items, root, encoded.len() - 1);
+	let (mut memdb, _) = MemoryDB::<T>::default_with_root();
+	//ProcessEncodedNode<TrieHash<L>
+	let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
+	trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb).unwrap();
+	assert_eq!(cb.root.unwrap_or_default(), root);
 }

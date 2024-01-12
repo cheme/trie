@@ -65,10 +65,10 @@ where
 
 	#[inline(always)]
 	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
-		let last = self.0.len() - 1;
-		if self.0.is_empty() || self.0[last].2 < depth {
+		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
 			self.0.push((new_vec_slice_buffer(), None, depth));
 		}
+		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
 		self.0[last].1 = value;
 	}
@@ -119,37 +119,77 @@ where
 	fn drop_to(
 		&mut self,
 		key: &mut NibbleVec,
-		target_depth: usize,
+		to: Option<usize>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
 	) {
-		let hashed;
-		let index = nibble_ops::left_nibble_at(&key.inner()[..], target_depth);
-		let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
-		let prefix = NibbleSlice::new_offset(
-			&key.inner()[..],
-			key.inner().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
-		);
+		loop {
+			debug_assert!(!T::USE_EXTENSION);
+			let mut target_depth = to.unwrap_or(0);
+			let parent_parent_depth = self.last_last_depth();
+			if target_depth < parent_parent_depth {
+				target_depth = parent_parent_depth;
+			}
 
-		let Some((children, value, _depth)) = self.0.pop() else {
-			unimplemented!("TODO an error");
-		};
+			let hashed;
+			let index = nibble_ops::left_nibble_at(&key.inner()[..], target_depth) as usize;
+			let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
+			let prefix = NibbleSlice::new_offset(
+				&key.inner()[..],
+				key.inner().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
+			); // TODO is prefix ever different from nkey?
 
-		let is_branch = children.iter().any(|c| c.is_some());
-		let hash = if is_branch {
-		} else {
-			let value = if let Some(value) =
-				Value::new_inline(value.as_ref().unwrap().as_ref(), T::MAX_INLINE_VALUE)
-			{
-				value
-			} else {
-				hashed = callback
-					.process_inner_hashed_value((key.inner(), None), value.unwrap().as_ref());
-				Value::Node(hashed.as_ref(), ())
+			let Some((children, value, _depth)) = self.0.pop() else {
+				unimplemented!("TODO an error");
 			};
 
-			let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value);
-			callback.process(prefix.left(), encoded, false);
-		};
+			let value = if let Some(value) = value.as_ref() {
+				Some(if let Some(value) = Value::new_inline(value.as_ref(), T::MAX_INLINE_VALUE) {
+					value
+				} else {
+					hashed =
+						callback.process_inner_hashed_value((key.inner(), None), value.as_ref());
+					Value::Node(hashed.as_ref(), ())
+				})
+			} else {
+				None
+			};
+
+			let is_root = self.0.is_empty() && to.is_none();
+			let is_branch = children.iter().any(|c| c.is_some());
+			let hash = if is_branch {
+				let encoded = T::Codec::branch_node_nibbled(
+					nkey.right_iter(),
+					nkey.len(),
+					children.iter(),
+					value,
+				);
+				callback.process(prefix.left(), encoded, is_root)
+			} else {
+				let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value.unwrap());
+				callback.process(prefix.left(), encoded, is_root)
+			};
+
+			key.drop_lasts(key.len() - target_depth);
+
+			if is_root {
+				return;
+			}
+			let insert = if let Some(parent_depth) = self.0.last().map(|i| i.2) {
+				//debug_assert!(target_depth >= parent_depth);
+				parent_depth != target_depth
+			} else {
+				true
+			};
+			if insert {
+				self.0.push((new_vec_slice_buffer(), None, target_depth));
+			}
+			let (parent_children, _, _) = self.0.last_mut().unwrap();
+			debug_assert!(parent_children[index].is_none());
+			parent_children[index] = Some(hash);
+			if to.map(|t| t == target_depth).unwrap_or(false) {
+				return;
+			}
+		}
 	}
 
 	fn flush_value(
@@ -563,9 +603,8 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 
 pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
 	input: &mut impl std::io::Read,
-	db: &mut memory_db::MemoryDB<L::Hash, memory_db::PrefixedKey<L::Hash>, DBValue>,
 	callback: &mut F,
-) -> Result<TrieHash<L>, ()> {
+) -> Result<(), ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
 	let mut last_value: Option<DBValue> = None;
@@ -573,68 +612,67 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
-	input.read_exact(&mut buff[..]).map_err(|e| {
-		match e.kind() {
-			std::io::ErrorKind::UnexpectedEof => {}, // aka ccannot read
-			_ => (),
-		}
-		()
-	})?; // TODO right erro from trie crate
-	let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
-	match proof_op {
-		ProofOp::Partial => {
-			let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
-			let mut nb_byte = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
-				size / nibble_ops::NIBBLE_PER_BYTE
-			} else {
-				(size / nibble_ops::NIBBLE_PER_BYTE) + 1
-			};
+	loop {
+		if let Err(e) = input.read_exact(&mut buff[..1]) {
+			match e.kind() {
+				std::io::ErrorKind::UnexpectedEof => {
+					depth_queue.drop_to(&mut key, None, callback);
+					return Ok(());
+				}, // aka ccannot read
+				_ => (),
+			}
+			return Err(());
+		}; // TODO right erro from trie crate
+		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
+		match proof_op {
+			ProofOp::Partial => {
+				let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				if size == 0 {
+					return Err(());
+				}
+				let mut nb_byte = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
+					size / nibble_ops::NIBBLE_PER_BYTE
+				} else {
+					(size / nibble_ops::NIBBLE_PER_BYTE) + 1
+				};
 
-			// TODO allocating a nibble_vec not really usefull.
-			let mut nibble_vec = BackingByteVec::with_capacity(nb_byte);
-			while nb_byte > 0 {
-				let bound = core::cmp::min(nb_byte, BUFF_LEN);
-				input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
-				nibble_vec.extend_from_slice(&buff[..bound]);
-				nb_byte -= bound;
-			}
-			let mut nibble_vec: NibbleVec = nibble_vec.into();
-			if nibble_vec.len() > size {
-				nibble_vec.drop_lasts(nibble_vec.len() - size);
-			}
-			key.append(&nibble_vec);
-		},
-		ProofOp::Value => {
-			let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
-			let mut value = DBValue::with_capacity(nb_byte);
-			while nb_byte > 0 {
-				let bound = core::cmp::min(nb_byte, BUFF_LEN);
-				input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
-				value.extend_from_slice(&buff[..bound]);
-				nb_byte -= bound;
-			}
-			// not the most efficient as this is guaranted to be a push
-			depth_queue.set_cache_value(key.len(), Some(value));
-		},
-		ProofOp::DropPartial => {
-			let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
-			let to = key.len() - to_drop;
-			depth_queue.drop_to(&mut key, to, callback);
-		},
-		ProofOp::ChildHash => {
-			unreachable!("TODO after start and stop impl");
-		},
+				// TODO allocating a nibble_vec not really usefull.
+				let mut nibble_vec = BackingByteVec::with_capacity(nb_byte);
+				while nb_byte > 0 {
+					let bound = core::cmp::min(nb_byte, BUFF_LEN);
+					input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+					nibble_vec.extend_from_slice(&buff[..bound]);
+					nb_byte -= bound;
+				}
+				let mut nibble_vec: NibbleVec = nibble_vec.into();
+				if nibble_vec.len() > size {
+					nibble_vec.drop_lasts(nibble_vec.len() - size);
+				}
+				key.append(&nibble_vec);
+			},
+			ProofOp::Value => {
+				let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				let mut value = DBValue::with_capacity(nb_byte);
+				while nb_byte > 0 {
+					let bound = core::cmp::min(nb_byte, BUFF_LEN);
+					input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+					value.extend_from_slice(&buff[..bound]);
+					nb_byte -= bound;
+				}
+				// not the most efficient as this is guaranted to be a push
+				depth_queue.set_cache_value(key.len(), Some(value));
+			},
+			ProofOp::DropPartial => {
+				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				if to_drop > key.len() {
+					return Err(());
+				}
+				let to = key.len() - to_drop;
+				depth_queue.drop_to(&mut key, Some(to), callback);
+			},
+			ProofOp::ChildHash => {
+				unreachable!("TODO after start and stop impl");
+			},
+		}
 	}
-	// TODO close to iter build, but we want something more low level here.
-	// iterate on op. do compare as in iter_build. Call callback as in iter_build.
-	//
-	// algo will be
-	// - stack key: push on nibblevec
-	// - value: set in cache accum as a new node with no children
-	// - pop key: partial from size popped, rem cache accum and call back, truncate nibblevec
-	// write hash in cache accum: if present at right depth or put item in cache accum at right
-	// depth with no value.
-	//
-	//
-	unimplemented!()
 }
