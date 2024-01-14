@@ -124,15 +124,22 @@ where
 	) {
 		loop {
 			debug_assert!(!T::USE_EXTENSION);
+			let is_root = to.is_none() && self.0.len() == 1;
 			let mut target_depth = to.unwrap_or(0);
-			let parent_parent_depth = self.last_last_depth();
-			if target_depth < parent_parent_depth {
-				target_depth = parent_parent_depth;
-			}
-
 			let hashed;
-			let index = nibble_ops::left_nibble_at(&key.inner()[..], target_depth) as usize;
-			let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
+			let (index, nkey, nsize) = if is_root {
+				let nsize = key.len() - (target_depth);
+				(0, NibbleSlice::new_offset(&key.inner()[..], 0), nsize)
+			} else {
+				let parent_parent_depth = self.last_last_depth();
+				if target_depth < parent_parent_depth {
+					target_depth = parent_parent_depth;
+				}
+				let nsize = key.len() - (target_depth + 1);
+				let index = nibble_ops::left_nibble_at(&key.inner()[..], target_depth) as usize;
+				let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
+				(index, nkey, nsize)
+			};
 			let prefix = NibbleSlice::new_offset(
 				&key.inner()[..],
 				key.inner().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
@@ -154,12 +161,11 @@ where
 				None
 			};
 
-			let is_root = self.0.is_empty() && to.is_none();
 			let is_branch = children.iter().any(|c| c.is_some());
 			let hash = if is_branch {
 				let encoded = T::Codec::branch_node_nibbled(
-					nkey.right_iter(),
-					nkey.len(),
+					nkey.right_range_iter(nsize),
+					nsize,
 					children.iter(),
 					value,
 				);

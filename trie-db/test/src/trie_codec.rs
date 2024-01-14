@@ -206,6 +206,10 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 		let root = db.commit(commit);
 		(db, root)
 	};
+	{
+		let mut trie = <TrieDBBuilder<L>>::new(&db, &root).build();
+		println!("original: {:?}", trie);
+	};
 
 	let mut output = Vec::new();
 	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
@@ -234,8 +238,16 @@ fn trie_full_state<T: TrieLayout>() {
 		(b"house", b"building"),
 	]);
 	let (mut memdb, _) = MemoryDB::<T>::default_with_root();
-	//ProcessEncodedNode<TrieHash<L>
-	let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-	trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb).unwrap();
-	assert_eq!(cb.root.unwrap_or_default(), root);
+	let cb_root = {
+		//ProcessEncodedNode<TrieHash<L>
+		let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
+		trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb).unwrap();
+		cb.root.unwrap()
+	};
+	{
+		let mut trie = <TrieDBBuilder<T>>::new(&memdb, &cb_root).build();
+		println!("Proved: {:?}", trie);
+	};
+
+	assert_eq!(cb_root, root);
 }

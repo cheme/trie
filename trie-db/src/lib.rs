@@ -356,7 +356,7 @@ pub trait TrieLayout {
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
 	type Codec: NodeCodec<HashOut = <Self::Hash as Hasher>::Out>;
-	type Location: Copy + Default + Eq + PartialEq;
+	type Location: Copy + Default + Eq + PartialEq + MaybeDebug;
 }
 
 /// This trait associates a trie definition with preferred methods.

@@ -14,6 +14,7 @@
 
 //! Reference implementation of a streamer.
 
+use hash_db::MaybeDebug;
 use hashbrown::{hash_map::Entry, HashMap};
 use memory_db::MemoryDB;
 use parity_scale_codec::{Compact, Decode, Encode, Error as CodecError, Input, Output};
@@ -152,7 +153,9 @@ impl<H, L> Clone for GenericNoExtensionLayout<H, L> {
 	}
 }
 
-impl<H: Hasher, L: Copy + Default + Eq + PartialEq> TrieLayout for GenericNoExtensionLayout<H, L> {
+impl<H: Hasher, L: Copy + Default + Eq + PartialEq + MaybeDebug> TrieLayout
+	for GenericNoExtensionLayout<H, L>
+{
 	const USE_EXTENSION: bool = false;
 	const ALLOW_EMPTY: bool = false;
 	const MAX_INLINE_VALUE: Option<u32> = None;
@@ -174,7 +177,7 @@ impl TrieLayout for AllowEmptyLayout {
 	type Location = ();
 }
 
-impl<H: Hasher, L: Copy + Default + Eq + PartialEq> TrieConfiguration
+impl<H: Hasher, L: Copy + Default + Eq + PartialEq + MaybeDebug> TrieConfiguration
 	for GenericNoExtensionLayout<H, L>
 {
 }

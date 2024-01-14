@@ -15,6 +15,7 @@
 //! Codec and layout configuration similar to upstream default substrate one.
 
 use super::{CodecError as Error, NodeCodec as NodeCodecT, *};
+use hash_db::MaybeDebug;
 use trie_db::node::Value;
 
 /// No extension trie with no hashed value.
@@ -34,7 +35,7 @@ impl TrieLayout for HashedValueNoExt {
 	type Location = mem_tree_db::Location;
 }
 
-impl<const C: u32, L: Copy + Default + Eq + PartialEq> TrieLayout
+impl<const C: u32, L: Copy + Default + Eq + PartialEq + MaybeDebug> TrieLayout
 	for HashedValueNoExtThreshold<C, L>
 {
 	const USE_EXTENSION: bool = false;
