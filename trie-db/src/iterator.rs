@@ -347,9 +347,10 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	/// Fetches the next raw item.
 	//
 	/// Must be called with the same `db` as when the iterator was created.
-	pub(crate) fn next_raw_item(
+	pub(crate) fn next_raw_item<O>(
 		&mut self,
 		db: &TrieDB<L>,
+		cb: Option<&mut IterCallback<L, O>>,
 	) -> Option<
 		Result<
 			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
@@ -447,7 +448,25 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db) {
+		self.next_inline::<()>(db, None)
+	}
+
+	/// Same as `next_item` but with callback.
+	pub fn next_item_with_callback<O>(
+		&mut self,
+		db: &TrieDB<L>,
+		cb: IterCallback<L, O>,
+	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
+		self.next_inline(db, Some(cb))
+	}
+
+	#[inline]
+	fn next_inline<O>(
+		&mut self,
+		db: &TrieDB<L>,
+		mut cb: Option<IterCallback<L, O>>,
+	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
+		while let Some(raw_item) = self.next_raw_item::<O>(db, cb.as_mut()) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -497,7 +516,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(&mut self, db: &TrieDB<L>) -> Option<TrieKeyItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item(db) {
+		while let Some(raw_item) = self.next_raw_item::<()>(db, None) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -601,7 +620,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 	>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		self.raw_iter.next_raw_item(self.db).map(|result| {
+		self.raw_iter.next_raw_item::<()>(self.db, None).map(|result| {
 			result.map(|(nibble, hash, node)| (nibble.clone(), hash.cloned(), node.clone()))
 		})
 	}
@@ -631,6 +650,7 @@ pub trait ProofOpHeadCodec {
 	/// op can have some data attached (depending on encoding).
 	fn encode_op(op: ProofOp, attached: u8) -> u8;
 
+	/// Return op and range attached.
 	fn decode_op(encoded: u8) -> (ProofOp, u8);
 }
 
@@ -683,11 +703,7 @@ where
 	loop {
 		let mut i = 0;
 		let mut bitmap = Bitmap1::default();
-		let bound = if !header_written && header_bitmap_len > 0 {
-			header_bitmap_len
-		} else {
-			8
-		};
+		let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
 				bitmap.set(i);
@@ -770,6 +786,21 @@ fn put_value<L: TrieLayout>(
 	Ok(())
 }
 
+// Call on pop, passed as parameter.
+pub(crate) struct IterCallback<'a, L, O> {
+	output: &'a mut O,
+	_ph: core::marker::PhantomData<L>,
+}
+
+impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
+	fn on_pop(
+		&mut self,
+		crumb: Crumb<L::Hash, L::Location>,
+	) -> Result<bool, TrieHash<L>, CError<L>> {
+		unimplemented!()
+	}
+}
+
 // TODO chunk it TODO Write like trait out of std.
 /// `exclusive_start` is the last returned key from a previous proof.
 /// Proof will there for contains seek information for this key. The proof
@@ -796,9 +827,13 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 	let mut prev_key = Vec::new();
 	let mut prev_key_len = 0;
-	while let Some(n) = iter.next() {
+	while let Some(n) =
+		{ iter.next_with_callback(IterCallback { output, _ph: Default::default() }) }
+	{
 		let (key, value) = n?;
 		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
+		// Note that this is largely suboptimal: could be rewritten to use directly node iterator,
+		// but this makes code simple (no need to manage branch skipping).
 		let common_depth = nibble_ops::biggest_depth(&prev_key[..], &key[..]);
 
 		if common_depth < prev_key_len {
@@ -849,7 +884,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		}
 		put_value::<L>(value.as_slice(), output)?;
 		if size_limit.map(|l| (start_written - output.written()) >= l).unwrap_or(false) {
-			unimplemented!("TODO child indexes and pop from crumb");
+			unimplemented!("TODO child indexes and pop from crumb, start needed hash from index from start key, after needed from crumb");
 			return Ok(false);
 		}
 
