@@ -618,9 +618,8 @@ pub enum ProofOp {
 	Partial,     // slice next, with size as number of nibbles
 	Value,       // value next
 	DropPartial, // followed by depth
-	ChildHash,   /* index and hash next TODO note that u8 is needed due to possible missing
-	              * nibble which is something only for more than binary and allow
-	              * value in the middle. */
+	ChildrenHash, // unknown children bitmap (0, 1, 2 or 3 byte length) and numbers of hashes next, last index is value
+				  // hash if possible (can touch a 17 hash for branch full on query to hash value only).
 }
 
 impl ProofOp {
@@ -629,7 +628,7 @@ impl ProofOp {
 			ProofOp::Partial => 0,
 			ProofOp::Value => 1,
 			ProofOp::DropPartial => 2,
-			ProofOp::ChildHash => 3,
+			ProofOp::ChildrenHash => 3,
 		}
 	}
 	pub fn from_u8(encoded: u8) -> Option<Self> {
@@ -637,7 +636,7 @@ impl ProofOp {
 			0 => ProofOp::Partial,
 			1 => ProofOp::Value,
 			2 => ProofOp::DropPartial,
-			3 => ProofOp::ChildHash,
+			3 => ProofOp::ChildrenHash,
 			_ => return None,
 		})
 	}
@@ -673,8 +672,7 @@ fn put_value<L: TrieLayout>(
 /// Inline value contain in the proof are also added as they got no additional
 /// size cost.
 ///
-/// Return true if the proof reach end of trie (last node will be a value).
-/// Return false if it needs other calls to get have full proof (last node will be a child hash).
+/// Return true if the proof reach end of trie.
 pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	mut iter: crate::triedb::TrieDBIterator<'a, 'cache, L>,
 	output: &mut impl CountedWrite,
@@ -682,14 +680,10 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	size_limit: Option<usize>,
 ) -> Result<bool, TrieHash<L>, CError<L>> {
 	let start_written = output.written();
-	// TODO at start key do a seek then iterate on crumb and add key portion plus all children hash
-	// along the branches before ix and value hash or value.
-
-	// TODO when exiting on limit: pop all crumb and add siblings hash after index
+	// TODO when exiting a node: write children and value hash if needed.
 
 	if let Some(start) = exclusive_start {
 		iter.seek(start)?;
-		unimplemented!("TODO put child indexes from crumb");
 	}
 
 	let mut prev_key = Vec::new();

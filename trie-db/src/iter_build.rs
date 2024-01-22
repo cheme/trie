@@ -676,7 +676,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				let to = key.len() - to_drop;
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
-			ProofOp::ChildHash => {
+			ProofOp::ChildrenHash => {
 				unreachable!("TODO after start and stop impl");
 			},
 		}
