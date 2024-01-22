@@ -645,7 +645,7 @@ impl ProofOp {
 
 fn put_value<L: TrieLayout>(
 	value: &[u8],
-	output: &mut impl std::io::Write,
+	output: &mut impl CountedWrite,
 ) -> Result<(), TrieHash<L>, CError<L>> {
 	let op = ProofOp::Value;
 	output
@@ -664,15 +664,33 @@ fn put_value<L: TrieLayout>(
 }
 
 // TODO chunk it TODO Write like trait out of std.
+/// `exclusive_start` is the last returned key from a previous proof.
+/// Proof will there for contains seek information for this key. The proof
+/// itself may contain value that where already returned by previous proof.
+/// `size_limit` is a minimal limit, after being reach
+/// child sibling will be added (up to NB_CHILDREN - 1 * stack node depth and stack node depth drop key info).
+/// Also limit is only applyied after a first new value is written.
+/// Inline value contain in the proof are also added as they got no additional
+/// size cost.
+///
+/// Return true if the proof reach end of trie (last node will be a value).
+/// Return false if it needs other calls to get have full proof (last node will be a child hash).
 pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	mut iter: crate::triedb::TrieDBIterator<'a, 'cache, L>,
-	output: &mut impl std::io::Write,
-) -> Result<(), TrieHash<L>, CError<L>> {
-	let mut prev_height: usize = 0;
+	output: &mut impl CountedWrite,
+	exclusive_start: Option<&[u8]>,
+	size_limit: Option<usize>,
+) -> Result<bool, TrieHash<L>, CError<L>> {
+	let start_written = output.written();
 	// TODO at start key do a seek then iterate on crumb and add key portion plus all children hash
 	// along the branches before ix and value hash or value.
 
 	// TODO when exiting on limit: pop all crumb and add siblings hash after index
+
+	if let Some(start) = exclusive_start {
+		iter.seek(start)?;
+		unimplemented!("TODO put child indexes from crumb");
+	}
 
 	let mut prev_key = Vec::new();
 	let mut prev_key_len = 0;
@@ -688,7 +706,9 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-			let nb = VarInt((prev_key_len - common_depth) as u32).encode_into(output);
+			let nb = VarInt((prev_key_len - common_depth) as u32).encode_into(output)
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 		}
 		debug_assert!(common_depth < key_len);
 		if common_depth < key_len {
@@ -699,7 +719,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				.write(&[op.as_u8()])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			VarInt(to_write as u32)
+			let nb = VarInt(to_write as u32)
 				.encode_into(output)
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
@@ -707,7 +727,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 			let start_ix = common_depth / nibble_ops::NIBBLE_PER_BYTE;
 			if start_aligned {
 				let off = if aligned { 0 } else { 1 };
-				output.write(&key[start_ix..key.len() - off]);
+				let slice_to_write = &key[start_ix..key.len() - off];
+				output.write(slice_to_write);
 				if !aligned {
 					output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
 				}
@@ -724,11 +745,15 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 			}
 		}
 		put_value::<L>(value.as_slice(), output)?;
+		if size_limit.map(|l| (start_written - output.written()) >= l).unwrap_or(false) {
+			unimplemented!("TODO child indexes and pop from crumb");
+			return Ok(false);
+		}
 
 		prev_key = key;
 		prev_key_len = key_len;
 	}
-	Ok(())
+	Ok(true)
 }
 
 // Limiting size to u32 (could also just use a terminal character).
@@ -759,7 +784,7 @@ impl VarInt {
 		*/
 	}
 
-	fn encode_into(&self, out: &mut impl std::io::Write) -> core::result::Result<(), ()> {
+	fn encode_into(&self, out: &mut impl CountedWrite) -> core::result::Result<(), ()> {
 		let mut to_encode = self.0;
 		for _ in 0..self.encoded_len() - 1 {
 			out.write(&[0b1000_0000 | to_encode as u8]).map_err(|_| ())?;
@@ -807,5 +832,49 @@ fn varint_encode_decode() {
 		assert_eq!(buf.buffer.len(), VarInt(i).encoded_len());
 		assert_eq!(Ok((VarInt(i), buf.buffer.len())), VarInt::decode(&buf.buffer));
 		buf.buffer.clear();
+	}
+}
+
+pub trait CountedWrite: std::io::Write {
+	// size written in write.
+	// Warning depending on implementation this
+	// is not starting at same size, so should
+	// always be used to compare with an initial size.
+	fn written(&self) -> usize;
+}
+
+pub struct Counted<T: std::io::Write> {
+	pub inner: T,
+	pub written: usize,
+}
+
+impl<T: std::io::Write> From<T> for Counted<T> {
+	fn from(inner: T) -> Self {
+		Self { inner, written: 0 }
+	}
+}
+
+// TODO a specific trait. and this for std only
+impl<T: std::io::Write> std::io::Write for Counted<T> {
+	fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+		let written = self.inner.write(buf)?;
+		self.written += written;
+		Ok(written)
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		self.inner.flush()
+	}
+}
+
+impl<T: std::io::Write> CountedWrite for Counted<T> {
+	fn written(&self) -> usize {
+		self.written
+	}
+}
+
+impl CountedWrite for Vec<u8> {
+	fn written(&self) -> usize {
+		self.len()
 	}
 }

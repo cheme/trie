@@ -214,7 +214,7 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	let mut output = Vec::new();
 	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
 	let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
-	trie_db::range_proof(iter, &mut output).unwrap();
+	trie_db::range_proof(iter, &mut output, None, None).unwrap();
 	println!("proof: {:?}", output);
 
 	(root, output)
