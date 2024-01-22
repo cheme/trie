@@ -480,7 +480,7 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 	}
 
 	/// Iterator next method, but with callbacks.
-	pub fn next_with_callback<O>(
+	pub(crate) fn next_with_callback<O: crate::iterator::CountedWrite>(
 		&mut self,
 		cb: crate::iterator::IterCallback<L, O>,
 	) -> Option<<Self as Iterator>::Item> {

@@ -347,10 +347,10 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	/// Fetches the next raw item.
 	//
 	/// Must be called with the same `db` as when the iterator was created.
-	pub(crate) fn next_raw_item<O>(
+	pub(crate) fn next_raw_item<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
-		cb: Option<&mut IterCallback<L, O>>,
+		mut cb: Option<&mut IterCallback<L, O>>,
 	) -> Option<
 		Result<
 			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
@@ -382,7 +382,12 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
 					}
-					self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
+					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
+					if let Some(cb) = cb.as_mut() {
+						if let Err(e) = cb.on_pop(crumb) {
+							return Some(Err(e));
+						}
+					}
 					self.trail.last_mut()?.increment();
 				},
 				(Status::At, Node::Extension(partial, child)) => {
@@ -448,11 +453,11 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		self.next_inline::<()>(db, None)
+		self.next_inline::<NoWrite>(db, None)
 	}
 
 	/// Same as `next_item` but with callback.
-	pub fn next_item_with_callback<O>(
+	pub(crate) fn next_item_with_callback<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
 		cb: IterCallback<L, O>,
@@ -461,7 +466,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	}
 
 	#[inline]
-	fn next_inline<O>(
+	fn next_inline<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
 		mut cb: Option<IterCallback<L, O>>,
@@ -516,7 +521,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(&mut self, db: &TrieDB<L>) -> Option<TrieKeyItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item::<()>(db, None) {
+		while let Some(raw_item) = self.next_raw_item::<NoWrite>(db, None) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -620,7 +625,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 	>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		self.raw_iter.next_raw_item::<()>(self.db, None).map(|result| {
+		self.raw_iter.next_raw_item::<NoWrite>(self.db, None).map(|result| {
 			result.map(|(nibble, hash, node)| (nibble.clone(), hash.cloned(), node.clone()))
 		})
 	}
@@ -793,10 +798,10 @@ pub(crate) struct IterCallback<'a, L, O> {
 }
 
 impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
-	fn on_pop(
+	pub(crate) fn on_pop(
 		&mut self,
 		crumb: Crumb<L::Hash, L::Location>,
-	) -> Result<bool, TrieHash<L>, CError<L>> {
+	) -> Result<(), TrieHash<L>, CError<L>> {
 		unimplemented!()
 	}
 }
@@ -1014,5 +1019,24 @@ impl<T: std::io::Write> CountedWrite for Counted<T> {
 impl CountedWrite for Vec<u8> {
 	fn written(&self) -> usize {
 		self.len()
+	}
+}
+
+#[derive(Clone, Copy)]
+pub struct NoWrite;
+
+impl std::io::Write for NoWrite {
+	fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+		Err(std::io::ErrorKind::Unsupported.into())
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		Ok(())
+	}
+}
+
+impl CountedWrite for NoWrite {
+	fn written(&self) -> usize {
+		0
 	}
 }
