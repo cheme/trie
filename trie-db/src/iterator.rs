@@ -15,7 +15,7 @@
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
-	node::{Node, NodeHandle, NodeOwned, NodePlan, OwnedNode, Value, ValuePlan},
+	node::{Node, NodeHandle, NodeHandlePlan, NodeOwned, NodePlan, OwnedNode, Value, ValuePlan},
 	triedb::TrieDB,
 	ProcessEncodedNode, TrieError, TrieItem, TrieKeyItem,
 };
@@ -360,6 +360,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	> {
 		loop {
 			let crumb = self.trail.last_mut()?;
+			// TODO this call to node is costly and not needed in most case.
 			let node = crumb.node.node();
 
 			match (crumb.status, node) {
@@ -369,22 +370,22 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 					crumb.increment();
 					return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
 				},
-				(Status::Exiting, node) => {
+				(Status::Exiting, _) => {
 					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
 					if let Some(cb) = cb.as_mut() {
-						if let Err(e) = cb.on_pop(crumb, &self.key_nibbles) {
+						if let Err(e) = cb.on_pop(&crumb, &self.key_nibbles) {
 							return Some(Err(e));
 						}
 					}
-					match node {
-						Node::Empty | Node::Leaf { .. } => {},
-						Node::Extension(partial, ..) => {
+					match crumb.node.node_plan() {
+						NodePlan::Empty | NodePlan::Leaf { .. } => {},
+						NodePlan::Extension { partial, .. } => {
 							self.key_nibbles.drop_lasts(partial.len());
 						},
-						Node::Branch { .. } => {
+						NodePlan::Branch { .. } => {
 							self.key_nibbles.pop();
 						},
-						Node::NibbledBranch(partial, ..) => {
+						NodePlan::NibbledBranch { partial, .. } => {
 							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
 					}
@@ -694,21 +695,24 @@ pub fn encode_hashes<'a, I, I2, L, O>(
 	output: &mut O,
 	mut iter_defined: I,
 	mut iter_possible: I2,
-	header_bitmap_len: usize,
-	header_init: fn(u8) -> u8,
+	header_bitmap_len: usize,  // TODO from trait
+	header_init: fn(u8) -> u8, // TODO from trait
 ) -> Result<(), TrieHash<L>, CError<L>>
 where
 	O: CountedWrite,
 	L: TrieLayout + 'a,
-	I: Iterator<Item = &'a TrieHash<L>>,
-	I2: Iterator<Item = Option<&'a TrieHash<L>>>,
+	I: Iterator<Item = &'a [u8]>,
+	I2: Iterator<Item = Option<&'a [u8]>>,
 {
-	let mut nexts: [Option<&TrieHash<L>>; 8] = [None; 8];
+	let mut nexts: [Option<&[u8]>; 8] = [None; 8];
 	let mut header_written = false;
+	let mut i = 0;
+	let mut i_init = 0;
+	let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 	loop {
-		let mut i = 0;
 		let mut bitmap = Bitmap1::default();
-		let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
+		let i_init = i;
+		i = 0;
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
 				bitmap.set(i);
@@ -718,6 +722,9 @@ where
 			if i == bound {
 				break;
 			}
+		}
+		if i == 0 {
+			break
 		}
 		if !header_written {
 			header_written = true;
@@ -801,18 +808,20 @@ pub(crate) struct IterCallback<'a, L, O> {
 impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 	pub(crate) fn on_pop(
 		&mut self,
-		crumb: Crumb<L::Hash, L::Location>,
+		crumb: &Crumb<L::Hash, L::Location>,
 		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
 		if crumb.hash.is_none() {
 			// inline got nothing to add
 			return Ok(());
 		}
+		// exclusive
 		let range_bef = if let Some(key) = self.start_key.as_ref() {
 			unimplemented!();
 		} else {
 			0
 		};
+		// inclusive
 		let range_aft = {
 			// TODO from crumb index
 			unimplemented!()
@@ -821,33 +830,64 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		unimplemented!("TODO write all inline children contents");
 
 		// if key is less than start key, we attach the value hash if there is one.
-		let mut value_node = if let Some(start) = self.start_key.as_ref() {
+		let mut value_node = None;
+		if let Some(start) = self.start_key.as_ref() {
+			// Values before start needed.
+			// Other values from exiting (pop are already part of the proof (we range over all
+			// them).
 			if key_nibbles.inner() <= start {
-				unimplemented!("TODO set value node to its hash value if a hash value");
-			} else {
-				None
+				match crumb.node.node_plan().value_plan() {
+					Some(ValuePlan::Node(hash_range)) => {
+						value_node = Some(Some(&crumb.node.data()[hash_range.clone()]));
+					},
+					// inline value added to proof always.
+					Some(ValuePlan::Inline(..)) => (),
+					None => {
+						value_node = Some(None);
+					},
+				}
 			}
-		} else {
-			None
-		};
+		}
+
+		// TODO iterate on all inline that are posteq range_aft
 
 		let mut i = 0;
-		let iter_possible = core::iter::from_fn(|| {
-			if let Some(value_hash) = value_node.take() {
-				return Some(value_hash);
+		let iter_possible = core::iter::from_fn(|| loop {
+			if i == nibble_ops::NIBBLE_LENGTH {
+				if let Some(value_hash) = value_node.take() {
+					return Some(value_hash);
+				}
+				return None;
 			}
-			loop {
+			if i == range_bef {
+				i = range_aft;
 				if i == nibble_ops::NIBBLE_LENGTH {
-					return None;
+					continue;
 				}
-				if i == range_bef {
-					i = range_aft;
-				}
-				i += 1;
-				return Some(children[i - 1])
+			}
+			i += 1;
+			match crumb.node.node_plan() {
+				NodePlan::NibbledBranch { children, .. } | NodePlan::Branch { children, .. } =>
+					match &children[i - 1] {
+						Some(NodeHandlePlan::Hash(hash_range)) => {
+							return Some(Some(&crumb.node.data()[hash_range.clone()]));
+						},
+						Some(NodeHandlePlan::Inline(hash_range)) => {
+							// already itered.
+							continue;
+						},
+						None => return Some(None),
+					},
+				_ => (),
 			}
 		});
+
+		encode_hashes::<_, _, L, _>(self.output, core::iter::empty(), iter_possible, 0, hash_header_no_bitmap)?;
 	}
+}
+
+fn hash_header_no_bitmap(_: u8) -> u8 {
+	ProofOp::Hashes.as_u8()
 }
 
 // TODO chunk it TODO Write like trait out of std.
@@ -872,8 +912,10 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 	if let Some(start) = exclusive_start {
 		iter.seek(start)?;
+		unimplemented!("TODO bellow");
 		// TODO for crumb write all inline value as there will be no hash to replace them.
 		// and initiate prev_key.
+		// Maybe add a seek on push callback (we need nibble vec).
 	}
 
 	let mut prev_key = Vec::new();
