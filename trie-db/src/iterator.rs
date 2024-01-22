@@ -370,6 +370,12 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 					return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
 				},
 				(Status::Exiting, node) => {
+					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
+					if let Some(cb) = cb.as_mut() {
+						if let Err(e) = cb.on_pop(crumb, &self.key_nibbles) {
+							return Some(Err(e));
+						}
+					}
 					match node {
 						Node::Empty | Node::Leaf { .. } => {},
 						Node::Extension(partial, ..) => {
@@ -381,12 +387,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 						Node::NibbledBranch(partial, ..) => {
 							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
-					}
-					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
-					if let Some(cb) = cb.as_mut() {
-						if let Err(e) = cb.on_pop(crumb) {
-							return Some(Err(e));
-						}
 					}
 					self.trail.last_mut()?.increment();
 				},
@@ -794,6 +794,7 @@ fn put_value<L: TrieLayout>(
 // Call on pop, passed as parameter.
 pub(crate) struct IterCallback<'a, L, O> {
 	output: &'a mut O,
+	start_key: Option<&'a [u8]>,
 	_ph: core::marker::PhantomData<L>,
 }
 
@@ -801,8 +802,51 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 	pub(crate) fn on_pop(
 		&mut self,
 		crumb: Crumb<L::Hash, L::Location>,
+		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
-		unimplemented!()
+		if crumb.hash.is_none() {
+			// inline got nothing to add
+			return Ok(());
+		}
+		let range_bef = if let Some(key) = self.start_key.as_ref() {
+			unimplemented!();
+		} else {
+			0
+		};
+		let range_aft = {
+			// TODO from crumb index
+			unimplemented!()
+		};
+		debug_assert!(range_aft >= range_bef);
+		unimplemented!("TODO write all inline children contents");
+
+		// if key is less than start key, we attach the value hash if there is one.
+		let mut value_node = if let Some(start) = self.start_key.as_ref() {
+			if key_nibbles.inner() <= start {
+				unimplemented!("TODO set value node to its hash value if a hash value");
+			} else {
+				None
+			}
+		} else {
+			None
+		};
+
+		let mut i = 0;
+		let iter_possible = core::iter::from_fn(|| {
+			if let Some(value_hash) = value_node.take() {
+				return Some(value_hash);
+			}
+			loop {
+				if i == nibble_ops::NIBBLE_LENGTH {
+					return None;
+				}
+				if i == range_bef {
+					i = range_aft;
+				}
+				i += 1;
+				return Some(children[i - 1])
+			}
+		});
 	}
 }
 
@@ -828,13 +872,19 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 	if let Some(start) = exclusive_start {
 		iter.seek(start)?;
+		// TODO for crumb write all inline value as there will be no hash to replace them.
+		// and initiate prev_key.
 	}
 
 	let mut prev_key = Vec::new();
 	let mut prev_key_len = 0;
-	while let Some(n) =
-		{ iter.next_with_callback(IterCallback { output, _ph: Default::default() }) }
-	{
+	while let Some(n) = {
+		iter.next_with_callback(IterCallback {
+			output,
+			start_key: exclusive_start,
+			_ph: Default::default(),
+		})
+	} {
 		let (key, value) = n?;
 		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
 		// Note that this is largely suboptimal: could be rewritten to use directly node iterator,
@@ -899,7 +949,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	Ok(true)
 }
 
-// Limiting size to u32 (could also just use a terminal character).
 #[derive(Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub struct VarInt(u32);
