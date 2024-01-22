@@ -615,12 +615,23 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 
 // TODO rename Partial per key
 pub enum ProofOp {
-	Partial,     // slice next, with size as number of nibbles
-	Value,       // value next
-	DropPartial, // followed by depth
+	Partial,     // slice next, with size as number of nibbles. Attached could be size.
+	Value,       // value next. Attached could be size.
+	DropPartial, // followed by depth. Attached could be size.
 	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
 	              * defined hash then defined amongst them, then 8 next and repeat
-	              * for possible. */
+	              * for possible. Attached could be bitmap. */
+}
+
+pub trait ProofOpHeadCodec {
+	/// return range of value that can be attached to this op.
+	/// for bitmap it return bitmap len.
+	fn attached_range(op: ProofOp) -> u8;
+
+	/// op can have some data attached (depending on encoding).
+	fn encode_op(op: ProofOp, attached: u8) -> u8;
+
+	fn decode_op(encoded: u8) -> (ProofOp, u8);
 }
 
 #[derive(Default, Clone)]
@@ -656,8 +667,10 @@ impl Bitmap1 {
 
 pub fn encode_hashes<'a, I, I2, L, O>(
 	output: &mut O,
-	iter_defined: I,
+	mut iter_defined: I,
 	mut iter_possible: I2,
+	header_bitmap_len: usize,
+	header_init: fn(u8) -> u8,
 ) -> Result<(), TrieHash<L>, CError<L>>
 where
 	O: CountedWrite,
@@ -666,30 +679,45 @@ where
 	I2: Iterator<Item = Option<&'a TrieHash<L>>>,
 {
 	let mut nexts: [Option<&TrieHash<L>>; 8] = [None; 8];
-	// Note this first iter is empty for trie
-	for h in iter_defined {
-		output
-			.write(h.as_ref())
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	}
+	let mut header_written = false;
 	loop {
 		let mut i = 0;
 		let mut bitmap = Bitmap1::default();
+		let bound = if !header_written && header_bitmap_len > 0 {
+			header_bitmap_len
+		} else {
+			8
+		};
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
 				bitmap.set(i);
 			}
 			nexts[i] = h;
 			i += 1;
-			if i == 8 {
+			if i == bound {
 				break;
 			}
 		}
-		output
-			.write(&[bitmap.0])
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		if !header_written {
+			header_written = true;
+			let header = header_init(bitmap.0);
+			output
+				.write(&[header])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			// Note this first iter is empty for trie
+			while let Some(h) = iter_defined.next() {
+				output
+					.write(h.as_ref())
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+		} else {
+			output
+				.write(&[bitmap.0])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		}
 		for _ in 0..i {
 			if let Some(h) = nexts[i] {
 				output
