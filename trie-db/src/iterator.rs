@@ -618,8 +618,88 @@ pub enum ProofOp {
 	Partial,     // slice next, with size as number of nibbles
 	Value,       // value next
 	DropPartial, // followed by depth
-	ChildrenHash, // unknown children bitmap (0, 1, 2 or 3 byte length) and numbers of hashes next, last index is value
-				  // hash if possible (can touch a 17 hash for branch full on query to hash value only).
+	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
+	              * defined hash then defined amongst them, then 8 next and repeat
+	              * for possible. */
+}
+
+#[derive(Default, Clone)]
+// TODO const N expected len??
+pub struct Bitmap1(u8);
+
+impl Bitmap1 {
+	pub fn check(expected_len: usize) -> bool {
+		debug_assert!(expected_len > 0);
+		debug_assert!(expected_len < 9);
+		(0xff >> expected_len) == 0
+	}
+
+	pub fn get(self, i: usize) -> bool {
+		debug_assert!(i < 8);
+		self.0 & (0b0000_0001 << i) != 0
+	}
+
+	// TODO useless??
+	pub fn encode<I: Iterator<Item = bool>>(&mut self, has_children: I) {
+		for (i, v) in has_children.enumerate() {
+			if v {
+				self.set(i);
+			}
+		}
+	}
+
+	pub fn set(&mut self, i: usize) {
+		debug_assert!(i < 8);
+		self.0 |= 0b0000_0001 << i;
+	}
+}
+
+pub fn encode_hashes<'a, I, I2, L, O>(
+	output: &mut O,
+	iter_defined: I,
+	mut iter_possible: I2,
+) -> Result<(), TrieHash<L>, CError<L>>
+where
+	O: CountedWrite,
+	L: TrieLayout + 'a,
+	I: Iterator<Item = &'a TrieHash<L>>,
+	I2: Iterator<Item = Option<&'a TrieHash<L>>>,
+{
+	let mut nexts: [Option<&TrieHash<L>>; 8] = [None; 8];
+	// Note this first iter is empty for trie
+	for h in iter_defined {
+		output
+			.write(h.as_ref())
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+	}
+	loop {
+		let mut i = 0;
+		let mut bitmap = Bitmap1::default();
+		while let Some(h) = iter_possible.next() {
+			if h.is_some() {
+				bitmap.set(i);
+			}
+			nexts[i] = h;
+			i += 1;
+			if i == 8 {
+				break;
+			}
+		}
+		output
+			.write(&[bitmap.0])
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		for _ in 0..i {
+			if let Some(h) = nexts[i] {
+				output
+					.write(h.as_ref())
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			}
+		}
+	}
+	Ok(())
 }
 
 impl ProofOp {
@@ -628,7 +708,7 @@ impl ProofOp {
 			ProofOp::Partial => 0,
 			ProofOp::Value => 1,
 			ProofOp::DropPartial => 2,
-			ProofOp::ChildrenHash => 3,
+			ProofOp::Hashes => 3,
 		}
 	}
 	pub fn from_u8(encoded: u8) -> Option<Self> {
@@ -636,7 +716,7 @@ impl ProofOp {
 			0 => ProofOp::Partial,
 			1 => ProofOp::Value,
 			2 => ProofOp::DropPartial,
-			3 => ProofOp::ChildrenHash,
+			3 => ProofOp::Hashes,
 			_ => return None,
 		})
 	}
@@ -667,8 +747,8 @@ fn put_value<L: TrieLayout>(
 /// Proof will there for contains seek information for this key. The proof
 /// itself may contain value that where already returned by previous proof.
 /// `size_limit` is a minimal limit, after being reach
-/// child sibling will be added (up to NB_CHILDREN - 1 * stack node depth and stack node depth drop key info).
-/// Also limit is only applyied after a first new value is written.
+/// child sibling will be added (up to NB_CHILDREN - 1 * stack node depth and stack node depth drop
+/// key info). Also limit is only applyied after a first new value is written.
 /// Inline value contain in the proof are also added as they got no additional
 /// size cost.
 ///
@@ -700,7 +780,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-			let nb = VarInt((prev_key_len - common_depth) as u32).encode_into(output)
+			let nb = VarInt((prev_key_len - common_depth) as u32)
+				.encode_into(output)
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 		}
