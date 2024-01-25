@@ -372,21 +372,21 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::Exiting, _) => {
 					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
+					match crumb.node.node_plan() {
+						NodePlan::Empty | NodePlan::Leaf { .. } | NodePlan::Branch { .. } => {},
+						NodePlan::Extension { partial, .. } | NodePlan::NibbledBranch { partial, .. } => {
+							self.key_nibbles.drop_lasts(partial.len());
+						},
+					}
 					if let Some(cb) = cb.as_mut() {
 						if let Err(e) = cb.on_pop(&crumb, &self.key_nibbles) {
 							return Some(Err(e));
 						}
 					}
 					match crumb.node.node_plan() {
-						NodePlan::Empty | NodePlan::Leaf { .. } => {},
-						NodePlan::Extension { partial, .. } => {
-							self.key_nibbles.drop_lasts(partial.len());
-						},
-						NodePlan::Branch { .. } => {
+						NodePlan::Empty | NodePlan::Leaf { .. } | NodePlan::Extension { .. } => {},
+						NodePlan::NibbledBranch { .. } | NodePlan::Branch { .. } => {
 							self.key_nibbles.pop();
-						},
-						NodePlan::NibbledBranch { partial, .. } => {
-							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
 					}
 					self.trail.last_mut()?.increment();
@@ -454,7 +454,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		self.next_inline::<NoWrite>(db, None)
+		self.next_inner::<NoWrite>(db, None)
 	}
 
 	/// Same as `next_item` but with callback.
@@ -463,11 +463,11 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 		db: &TrieDB<L>,
 		cb: IterCallback<L, O>,
 	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		self.next_inline(db, Some(cb))
+		self.next_inner(db, Some(cb))
 	}
 
 	#[inline]
-	fn next_inline<O: CountedWrite>(
+	fn next_inner<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
 		mut cb: Option<IterCallback<L, O>>,
@@ -827,7 +827,7 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 			unimplemented!()
 		};
 		debug_assert!(range_aft >= range_bef);
-		unimplemented!("TODO write all inline children contents");
+		unimplemented!("TODO write all inline children contents, but not range bef as it is already done");
 
 		// if key is less than start key, we attach the value hash if there is one.
 		let mut value_node = None;
@@ -1060,12 +1060,12 @@ impl VarInt {
 
 #[test]
 fn varint_encode_decode() {
-	let mut buf = crate::query_plan::InMemoryRecorder::default();
+	let mut buf = Vec::new();
 	for i in 0..u16::MAX as u32 + 1 {
 		VarInt(i).encode_into(&mut buf);
-		assert_eq!(buf.buffer.len(), VarInt(i).encoded_len());
-		assert_eq!(Ok((VarInt(i), buf.buffer.len())), VarInt::decode(&buf.buffer));
-		buf.buffer.clear();
+		assert_eq!(buf.len(), VarInt(i).encoded_len());
+		assert_eq!(Ok((VarInt(i), buf.len())), VarInt::decode(&buf));
+		buf.clear();
 	}
 }
 
