@@ -647,7 +647,7 @@ pub enum ProofOp {
 	DropPartial, // followed by depth. Attached could be size.
 	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
 	              * defined hash then defined amongst them, then 8 next and repeat
-	              * for possible. Attached could be bitmap. */
+	              * for possible. Attached could be bitmap.
 	              * When structure allows either inline or hash, we add a bit in the bitmap
 	              * to indicate if inline or single value hash: the first one */
 }
@@ -701,7 +701,6 @@ pub struct BitmapAccesses<'a> {
 	unaccessed_value: bool,
 	unaccessed_ranges: &'a [Range<usize>],
 }
-
 // TODO memoize/precalculate results for all.
 impl<'a> BitmapAccesses<'a> {
 	// note 1 is no map and we got None in bit index functions
@@ -755,6 +754,44 @@ impl<'a> BitmapAccesses<'a> {
 			.then(|| self.bit_index_children(ix).map(|i| i + 1))
 			.flatten()
 	}
+}
+
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Default)]
+pub struct BitmapAccesses2 {
+	value_index: Option<u8>,
+	children_index: [Option<u8>; nibble_ops::NIBBLE_LENGTH],
+}
+
+pub fn get_bitmap_accesses<
+	const POSSIBLE_INLINE_VALUE: bool,
+	const POSSIBLE_INLINE_CHILDREN: bool,
+>(
+	unaccessed_value: bool,
+	unaccessed_ranges: &[Range<usize>],
+) -> (BitmapAccesses2, BitmapAccesses2) {
+	let mut presence = BitmapAccesses2::default();
+	let mut is_inline = BitmapAccesses2::default();
+	let mut index: u8 = 0;
+	if unaccessed_value {
+		presence.value_index = Some(index);
+		index += 1;
+		if POSSIBLE_INLINE_VALUE {
+			is_inline.value_index = Some(index);
+			index += 1;
+		}
+	}
+	for range	in unaccessed_ranges {
+		for i in range.start..range.end {
+			presence.children_index[i] = Some(index);
+			index += 1;
+			if POSSIBLE_INLINE_CHILDREN {
+				is_inline.children_index[i] = Some(index);
+				index += 1;
+			}
+		}
+	}
+	(presence, is_inline)
 }
 
 pub fn encode_hashes<'a, I, I2, L, O>(
@@ -1074,7 +1111,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	Ok(true)
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(PartialEq, Eq)]
 #[repr(transparent)]
 pub struct VarInt(u32);
 
