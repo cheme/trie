@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use core::ops::Range;
+
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
@@ -646,10 +648,8 @@ pub enum ProofOp {
 	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
 	              * defined hash then defined amongst them, then 8 next and repeat
 	              * for possible. Attached could be bitmap. */
-	VarHashes,    // same as hashes but the content is var size encoded before.
-								// Used for inline node when content is not included.
-								// Note that we could do without it by putting inline content, but it can
-								// be hard to check if here because inlined or not.
+	              * When structure allows either inline or hash, we add a bit in the bitmap
+	              * to indicate if inline or single value hash: the first one */
 }
 
 pub trait ProofOpHeadCodec {
@@ -692,6 +692,68 @@ impl Bitmap1 {
 	pub fn set(&mut self, i: usize) {
 		debug_assert!(i < 8);
 		self.0 |= 0b0000_0001 << i;
+	}
+}
+
+pub struct BitmapAccesses<'a> {
+	possible_inline_value: bool,    // TODO should be constant
+	possible_inline_children: bool, // TODO should be constant
+	unaccessed_value: bool,
+	unaccessed_ranges: &'a [Range<usize>],
+}
+
+// TODO memoize/precalculate results for all.
+impl<'a> BitmapAccesses<'a> {
+	// note 1 is no map and we got None in bit index functions
+	fn nb_bits(&self) -> usize {
+		let mut count = self.value_offset();
+		for range in self.unaccessed_ranges {
+			count += range.len() * if self.possible_inline_children { 2 } else { 1 };
+		}
+		count
+	}
+	fn value_offset(&self) -> usize {
+		if self.unaccessed_value {
+			if self.possible_inline_value {
+				2
+			} else {
+				1
+			}
+		} else {
+			0
+		}
+	}
+	fn bit_index_value(&self) -> Option<usize> {
+		self.unaccessed_value.then(|| 0)
+	}
+	fn bit_index_value_type(&self) -> Option<usize> {
+		(self.unaccessed_value && self.possible_inline_value).then(|| 1)
+	}
+	fn index_children(&self, ix: u8) -> Option<usize> {
+		let mut found = false;
+		let mut offset = 0;
+		let ix = ix as usize;
+		for range in self.unaccessed_ranges {
+			if ix < range.start {
+				break;
+			}
+			if ix >= range.start && ix < range.end {
+				found = true;
+				offset += ix - range.start;
+				break;
+			}
+			offset += range.len();
+		}
+		found.then(|| offset)
+	}
+	fn bit_index_children(&self, ix: u8) -> Option<usize> {
+		self.index_children(ix)
+			.map(|i| self.value_offset() + if self.possible_inline_children { i * 2 } else { i })
+	}
+	fn bit_index_children_type(&self, ix: u8) -> Option<usize> {
+		self.possible_inline_children
+			.then(|| self.bit_index_children(ix).map(|i| i + 1))
+			.flatten()
 	}
 }
 
@@ -769,7 +831,6 @@ impl ProofOp {
 			ProofOp::Value => 1,
 			ProofOp::DropPartial => 2,
 			ProofOp::Hashes => 3,
-			ProofOp::VarHashes => 4,
 		}
 	}
 	pub fn from_u8(encoded: u8) -> Option<Self> {
@@ -778,7 +839,6 @@ impl ProofOp {
 			1 => ProofOp::Value,
 			2 => ProofOp::DropPartial,
 			3 => ProofOp::Hashes,
-			4 => ProofOp::VarHashes,
 			_ => return None,
 		})
 	}
@@ -817,9 +877,10 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		crumb: &Crumb<L::Hash, L::Location>,
 		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
-
-
-		if !matches!(crumb.node.node_plan(), NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. }) {
+		if !matches!(
+			crumb.node.node_plan(),
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. }
+		) {
 			return Ok(()); // also note that when using on leaf the key_nibbles do not contain partial.
 		}
 		if crumb.hash.is_none() {
@@ -829,14 +890,15 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 
 		// on branch the key nibbles is not popped yet and contains the index of last accessed node.
 		let depth_current_ix = key_nibbles.len();
-		let current_ix = (depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
+		let current_ix =
+			(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
 
 		// exclusive
 		let mut range_bef = 0;
 		if let Some(key) = self.start_key.as_ref() {
 			if depth_current_ix > 0 {
-				// TODO this check is inneficiant: should be done only for first depth bellow or eq tmp, with
-				// tmp starting at key_len and switch to this on success.
+				// TODO this check is inneficiant: should be done only for first depth bellow or eq
+				// tmp, with tmp starting at key_len and switch to this on success.
 
 				let common = crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
 				let at = key_nibbles.len() - 1;
@@ -861,8 +923,7 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 					Some(ValuePlan::Node(hash_range)) => {
 						value_node = Some(Some(&crumb.node.data()[hash_range.clone()]));
 					},
-					Some(ValuePlan::Inline(inline_range)) => {
-					},
+					Some(ValuePlan::Inline(inline_range)) => {},
 					None => {
 						value_node = Some(None);
 					},
@@ -901,7 +962,13 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 			}
 		});
 
-		encode_hashes::<_, _, L, _>(self.output, core::iter::empty(), iter_possible, 0, hash_header_no_bitmap)?;
+		encode_hashes::<_, _, L, _>(
+			self.output,
+			core::iter::empty(),
+			iter_possible,
+			0,
+			hash_header_no_bitmap,
+		)?;
 		Ok(())
 	}
 }

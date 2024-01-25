@@ -679,10 +679,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 			ProofOp::Hashes => {
 				unreachable!("TODO after start and stop impl");
 			},
-			ProofOp::VarHashes => {
-				// likely put hash reference inline with no check (reading make no sense here).
-				unreachable!("TODO after start and stop impl");
-			},
 		}
 	}
 }
