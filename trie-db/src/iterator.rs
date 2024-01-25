@@ -826,24 +826,28 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 			// inline got nothing to add
 			return Ok(());
 		}
+
+		// on branch the key nibbles is not popped yet and contains the index of last accessed node.
+		let depth_current_ix = key_nibbles.len();
+		let current_ix = (depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
+
 		// exclusive
 		let mut range_bef = 0;
 		if let Some(key) = self.start_key.as_ref() {
-			// on branch the key nibbles is not popped yet and contains the index of last accessed node.
-			let depth_current_ix = key_nibbles.len();
 			if depth_current_ix > 0 {
 				// TODO this check is inneficiant: should be done only for first depth bellow or eq tmp, with
 				// tmp starting at key_len and switch to this on success.
-				if NibbleSlice::new(key).starts_with_vec(&key_nibbles) {
-					range_bef = key_nibbles.at(depth_current_ix - 1) as usize;
+
+				let common = crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
+				let at = key_nibbles.len() - 1;
+				// can be sup as we may have compare agains byte padded inner).
+				if common >= at {
+					range_bef = NibbleSlice::new(key).at(at) as usize;
 				}
 			}
 		}
 		// inclusive
-		let range_aft = {
-			// TODO from crumb index
-			unimplemented!()
-		};
+		let range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH);
 		debug_assert!(range_aft >= range_bef);
 
 		// if key is less than start key, we attach the value hash if there is one.
@@ -857,16 +861,14 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 					Some(ValuePlan::Node(hash_range)) => {
 						value_node = Some(Some(&crumb.node.data()[hash_range.clone()]));
 					},
-					// inline value added to proof always.
-					Some(ValuePlan::Inline(..)) => (),
+					Some(ValuePlan::Inline(inline_range)) => {
+					},
 					None => {
 						value_node = Some(None);
 					},
 				}
 			}
 		}
-
-		// TODO iterate on all inline that are posteq range_aft
 
 		let mut i = 0;
 		let iter_possible = core::iter::from_fn(|| loop {
@@ -900,6 +902,7 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		});
 
 		encode_hashes::<_, _, L, _>(self.output, core::iter::empty(), iter_possible, 0, hash_header_no_bitmap)?;
+		Ok(())
 	}
 }
 
