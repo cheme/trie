@@ -781,7 +781,7 @@ pub fn get_bitmap_accesses<
 			index += 1;
 		}
 	}
-	for range	in unaccessed_ranges {
+	for range in unaccessed_ranges {
 		for i in range.start..range.end {
 			presence.children_index[i] = Some(index);
 			index += 1;
@@ -810,12 +810,10 @@ where
 	let mut nexts: [Option<&[u8]>; 8] = [None; 8];
 	let mut header_written = false;
 	let mut i = 0;
-	let mut i_init = 0;
-	let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 	loop {
+		let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 		let mut bitmap = Bitmap1::default();
-		let i_init = i;
-		i = 0;
+		let mut i = 0;
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
 				bitmap.set(i);
@@ -849,8 +847,8 @@ where
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 		}
-		for _ in 0..i {
-			if let Some(h) = nexts[i] {
+		for j in 0..i {
+			if let Some(h) = nexts[j] {
 				output
 					.write(h.as_ref())
 					// TODO right error (when doing no_std writer / reader
