@@ -372,21 +372,21 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::Exiting, _) => {
 					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
-					match crumb.node.node_plan() {
-						NodePlan::Empty | NodePlan::Leaf { .. } | NodePlan::Branch { .. } => {},
-						NodePlan::Extension { partial, .. } | NodePlan::NibbledBranch { partial, .. } => {
-							self.key_nibbles.drop_lasts(partial.len());
-						},
-					}
 					if let Some(cb) = cb.as_mut() {
 						if let Err(e) = cb.on_pop(&crumb, &self.key_nibbles) {
 							return Some(Err(e));
 						}
 					}
 					match crumb.node.node_plan() {
-						NodePlan::Empty | NodePlan::Leaf { .. } | NodePlan::Extension { .. } => {},
-						NodePlan::NibbledBranch { .. } | NodePlan::Branch { .. } => {
+						NodePlan::Empty | NodePlan::Leaf { .. } => {},
+						NodePlan::Extension { partial, .. } => {
+							self.key_nibbles.drop_lasts(partial.len());
+						},
+						NodePlan::Branch { .. } => {
 							self.key_nibbles.pop();
+						},
+						NodePlan::NibbledBranch { partial, .. } => {
+							self.key_nibbles.drop_lasts(partial.len() + 1);
 						},
 					}
 					self.trail.last_mut()?.increment();
@@ -646,6 +646,10 @@ pub enum ProofOp {
 	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
 	              * defined hash then defined amongst them, then 8 next and repeat
 	              * for possible. Attached could be bitmap. */
+	VarHashes,    // same as hashes but the content is var size encoded before.
+								// Used for inline node when content is not included.
+								// Note that we could do without it by putting inline content, but it can
+								// be hard to check if here because inlined or not.
 }
 
 pub trait ProofOpHeadCodec {
@@ -765,6 +769,7 @@ impl ProofOp {
 			ProofOp::Value => 1,
 			ProofOp::DropPartial => 2,
 			ProofOp::Hashes => 3,
+			ProofOp::VarHashes => 4,
 		}
 	}
 	pub fn from_u8(encoded: u8) -> Option<Self> {
@@ -773,6 +778,7 @@ impl ProofOp {
 			1 => ProofOp::Value,
 			2 => ProofOp::DropPartial,
 			3 => ProofOp::Hashes,
+			4 => ProofOp::VarHashes,
 			_ => return None,
 		})
 	}
@@ -811,23 +817,34 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		crumb: &Crumb<L::Hash, L::Location>,
 		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
+
+
+		if !matches!(crumb.node.node_plan(), NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. }) {
+			return Ok(()); // also note that when using on leaf the key_nibbles do not contain partial.
+		}
 		if crumb.hash.is_none() {
 			// inline got nothing to add
 			return Ok(());
 		}
 		// exclusive
-		let range_bef = if let Some(key) = self.start_key.as_ref() {
-			unimplemented!();
-		} else {
-			0
-		};
+		let mut range_bef = 0;
+		if let Some(key) = self.start_key.as_ref() {
+			// on branch the key nibbles is not popped yet and contains the index of last accessed node.
+			let depth_current_ix = key_nibbles.len();
+			if depth_current_ix > 0 {
+				// TODO this check is inneficiant: should be done only for first depth bellow or eq tmp, with
+				// tmp starting at key_len and switch to this on success.
+				if NibbleSlice::new(key).starts_with_vec(&key_nibbles) {
+					range_bef = key_nibbles.at(depth_current_ix - 1) as usize;
+				}
+			}
+		}
 		// inclusive
 		let range_aft = {
 			// TODO from crumb index
 			unimplemented!()
 		};
 		debug_assert!(range_aft >= range_bef);
-		unimplemented!("TODO write all inline children contents, but not range bef as it is already done");
 
 		// if key is less than start key, we attach the value hash if there is one.
 		let mut value_node = None;
@@ -912,10 +929,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 	if let Some(start) = exclusive_start {
 		iter.seek(start)?;
-		unimplemented!("TODO bellow");
-		// TODO for crumb write all inline value as there will be no hash to replace them.
-		// and initiate prev_key.
-		// Maybe add a seek on push callback (we need nibble vec).
 	}
 
 	let mut prev_key = Vec::new();
