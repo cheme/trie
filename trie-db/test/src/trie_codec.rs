@@ -241,7 +241,7 @@ fn trie_full_state<T: TrieLayout>() {
 	let cb_root = {
 		//ProcessEncodedNode<TrieHash<L>
 		let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-		trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb).unwrap();
+		trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb, None).unwrap();
 		cb.root.unwrap()
 	};
 	{
