@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{nibble_ops, BackingByteVec, NibbleSlice},
+	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
@@ -620,6 +620,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
 	let mut seeking = start_key.is_some();
+	let mut last_drop: Option<u8> = None;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
 			match e.kind() {
@@ -634,6 +635,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
 		match proof_op {
 			ProofOp::Partial => {
+				last_drop = None;
 				let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				if size == 0 {
 					return Err(());
@@ -672,6 +674,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 			},
 			ProofOp::Value => {
+				last_drop = None;
 				if seeking {
 					// first op should be start_key
 					// TODO if we make seek implied, this cannot be first
@@ -704,6 +707,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					return Err(());
 				}
 				let to = key.len() - to_drop;
+				last_drop = Some(key.at(to + 1));
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
 			ProofOp::Hashes => {
@@ -713,9 +717,11 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					// hash are expected before pop only.
 					return Err(());
 				}
+				// TODO ensure after a value, or a drop.
+				// Or after seek as seek is over a value that is not include we will have its hash.
+
 				// we expect hash of value only for node in the seeking path
 				// (otherwhise range did cover it).
-
 
 				// TODO note that we can keep a max height length that decrease to root to
 				// directly know value was accessed.
@@ -726,13 +732,19 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 
 				let unaccessed_value = common == key.len();
-				let mut unaccessed_range = [0..0, 0..0];
-				let mut nb_unaccessed_range = 0;
+				// exclusive
+				let mut unaccessed_range_bef = 0;
 				if common == key.len() {
 					let start_nibble = NibbleSlice::new(start_key);
 					if start_nibble.len() > common {
-						unaccessed_range[nb_unaccessed_range] = 0..start_nibble.at(common) + 1;
-						nb_unaccessed_range += 1;
+						unaccessed_range_bef = start_nibble.at(common);
+					}
+				}
+				// inclusive
+				let mut unaccessed_range_aft = nibble_ops::NIBBLE_LENGTH as u8;
+				if common == key.len() {
+					if let Some(at) = last_drop.take() {
+						unaccessed_range_aft = at + 1;
 					}
 				}
 				unreachable!("TODO after start and stop impl");
