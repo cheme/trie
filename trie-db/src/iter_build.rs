@@ -713,7 +713,30 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					// hash are expected before pop only.
 					return Err(());
 				}
-				//let expect_value =
+				// we expect hash of value only for node in the seeking path
+				// (otherwhise range did cover it).
+
+
+				// TODO note that we can keep a max height length that decrease to root to
+				// directly know value was accessed.
+
+				let start_key = start_key.as_ref().expect("seeking only with start_key");
+				let common = crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
+				let common = core::cmp::min(common, key.len());
+				let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
+
+				let unaccessed_value = common == key.len();
+				let unaccessed_range = [0..0, 0..0];
+				let mut nb_unaccessed_range = 0;
+				let mut start_ix = 0;
+				if common == key.len() {
+					let start_nibble = NibbleSlice::new(start_key);
+					if start_nibble.len() > common {
+						start_ix = start_nibble.at(common);
+						unaccessed_range[nb_unaccessed_range] = 0..start_ix + 1;
+						nb_unaccessed_range += 1;
+					}
+				}
 				unreachable!("TODO after start and stop impl");
 			},
 		}
