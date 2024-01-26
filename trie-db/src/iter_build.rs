@@ -726,14 +726,12 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 
 				let unaccessed_value = common == key.len();
-				let unaccessed_range = [0..0, 0..0];
+				let mut unaccessed_range = [0..0, 0..0];
 				let mut nb_unaccessed_range = 0;
-				let mut start_ix = 0;
 				if common == key.len() {
 					let start_nibble = NibbleSlice::new(start_key);
 					if start_nibble.len() > common {
-						start_ix = start_nibble.at(common);
-						unaccessed_range[nb_unaccessed_range] = 0..start_ix + 1;
+						unaccessed_range[nb_unaccessed_range] = 0..start_nibble.at(common) + 1;
 						nb_unaccessed_range += 1;
 					}
 				}
