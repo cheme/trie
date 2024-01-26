@@ -982,11 +982,18 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		crumb: &Crumb<L::Hash, L::Location>,
 		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
-		if !matches!(
-			crumb.node.node_plan(),
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. }
-		) {
-			return Ok(()); // also note that when using on leaf the key_nibbles do not contain partial.
+		match crumb.node.node_plan() {
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => (),
+			NodePlan::Leaf{ value, partial, .. } => {
+				 // note that key_nibbles do not contain partial.
+				 unimplemented!("TODO if value of first seek attach the hash or inline value");
+				 // TODO switch first/siwtch flag
+				 // TODO does key_nibbles start with seek
+				 // TODO partial as nibbleslice with offset of seek
+//						(slice.starts_with(&partial))
+//						then add hash or inline of value
+			},
+			_ => return Ok(()),
 		}
 		if crumb.hash.is_none() {
 			// inline got nothing to add
