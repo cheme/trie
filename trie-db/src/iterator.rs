@@ -695,6 +695,7 @@ impl Bitmap1 {
 	}
 }
 
+/*
 pub struct BitmapAccesses<'a> {
 	possible_inline_value: bool,    // TODO should be constant
 	possible_inline_children: bool, // TODO should be constant
@@ -769,6 +770,8 @@ pub fn get_bitmap_accesses<
 >(
 	unaccessed_value: bool,
 	unaccessed_ranges: &[Range<usize>],
+	value_present: bool,
+	children_present: &[bool],
 ) -> (BitmapAccesses2, BitmapAccesses2) {
 	let mut presence = BitmapAccesses2::default();
 	let mut is_inline = BitmapAccesses2::default();
@@ -793,38 +796,97 @@ pub fn get_bitmap_accesses<
 	}
 	(presence, is_inline)
 }
+*/
+
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone, Copy)]
+pub enum OpHash<'a> {
+	Fix(&'a [u8]),
+	Var(&'a [u8]),
+	None,
+}
+
+impl<'a> OpHash<'a> {
+	pub fn is_some(&self) -> bool {
+		!matches!(self, OpHash::None)
+	}
+	pub fn is_var(&self) -> bool {
+		matches!(self, OpHash::Var(..))
+	}
+	// TODO rem?
+	pub fn content(&self) -> &[u8] {
+		match self {
+			OpHash::Fix(s) | OpHash::Var(s) => s,
+			OpHash::None => &[],
+		}
+	}
+}
 
 pub fn encode_hashes<'a, I, I2, L, O>(
 	output: &mut O,
 	mut iter_defined: I,
 	mut iter_possible: I2,
-	header_bitmap_len: usize,  // TODO from trait
-	header_init: fn(u8) -> u8, // TODO from trait
+	header_bitmap_len: usize, // TODO from trait
+	header_init: fn(u8) -> u8, /* TODO from trait
+	                           *	#[cfg(debug_assert)]
+	                           *	hashes_indexes: (BitmapAccesses2, BitmapAccesses2), */
 ) -> Result<(), TrieHash<L>, CError<L>>
 where
 	O: CountedWrite,
 	L: TrieLayout + 'a,
-	I: Iterator<Item = &'a [u8]>,
-	I2: Iterator<Item = Option<&'a [u8]>>,
+	I: Iterator<Item = OpHash<'a>>,
+	I2: Iterator<Item = OpHash<'a>>,
 {
-	let mut nexts: [Option<&[u8]>; 8] = [None; 8];
+	let mut nexts: [OpHash; 8] = [OpHash::None; 8];
 	let mut header_written = false;
-	let mut i = 0;
+	let mut i_hash = 0;
+	let mut i_bitmap = 0;
+	let mut hash_len = 0;
+	let mut bitmap_len = 0;
+	// if bit in previous bitmap (presence to true and type expected next).
+	let mut prev_bit: Option<OpHash> = None;
+
 	loop {
+		bitmap_len += i_bitmap;
+		hash_len += i_hash;
+		i_bitmap = 0;
+		i_hash = 0;
 		let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 		let mut bitmap = Bitmap1::default();
 		let mut i = 0;
+		if let Some(h) = prev_bit.take() {
+			debug_assert!(h.is_some());
+			if h.is_var() {
+				bitmap.set(i_bitmap);
+			}
+			i_bitmap += 1;
+			if h.is_some() {
+				nexts[i_hash] = h;
+				i_hash += 1;
+			}
+		}
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
-				bitmap.set(i);
+				bitmap.set(i_bitmap);
 			}
-			nexts[i] = h;
-			i += 1;
-			if i == bound {
+			i_bitmap += 1;
+			if i_bitmap == bound {
+				prev_bit = Some(h);
+				break;
+			}
+			if h.is_var() {
+				bitmap.set(i_bitmap);
+			}
+			i_bitmap += 1;
+			if h.is_some() {
+				nexts[i_hash] = h;
+				i_hash += 1;
+			}
+			if i_bitmap == bound {
 				break;
 			}
 		}
-		if i == 0 {
+		if i_bitmap == 0 && header_written {
 			break
 		}
 		if !header_written {
@@ -834,28 +896,36 @@ where
 				.write(&[header])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			// Note this first iter is empty for trie
-			while let Some(h) = iter_defined.next() {
-				output
-					.write(h.as_ref())
-					// TODO right error (when doing no_std writer / reader
-					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			}
 		} else {
 			output
 				.write(&[bitmap.0])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 		}
-		for j in 0..i {
-			if let Some(h) = nexts[j] {
-				output
-					.write(h.as_ref())
-					// TODO right error (when doing no_std writer / reader
-					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		for j in 0..i_hash {
+			match nexts[j] {
+				OpHash::Fix(s) => {
+					output
+						.write(s)
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+				},
+				OpHash::Var(s) => {
+					VarInt(s.len() as u32)
+						.encode_into(output)
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+					output
+						.write(s)
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+				},
+				OpHash::None => unreachable!(),
 			}
 		}
 	}
+	bitmap_len += i_bitmap;
+	hash_len += i_hash;
 	Ok(())
 }
 
@@ -929,7 +999,7 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 			(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
 
 		// exclusive
-		let mut range_bef = 0;
+		let mut range_bef = None;
 		if let Some(key) = self.start_key.as_ref() {
 			if depth_current_ix > 0 {
 				// TODO this check is inneficiant: should be done only for first depth bellow or eq
@@ -939,61 +1009,53 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 				let at = key_nibbles.len() - 1;
 				// can be sup as we may have compare agains byte padded inner).
 				if common >= at {
-					range_bef = NibbleSlice::new(key).at(at) as usize;
+					range_bef = Some(NibbleSlice::new(key).at(at) as usize);
 				}
 			}
 		}
 		// inclusive
 		let range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH);
-		debug_assert!(range_aft >= range_bef);
+		debug_assert!(range_aft >= range_bef.unwrap_or(0));
 
 		// if key is less than start key, we attach the value hash if there is one.
 		let mut value_node = None;
-		if let Some(start) = self.start_key.as_ref() {
+		if range_bef.is_some() {
 			// Values before start needed.
 			// Other values from exiting (pop are already part of the proof (we range over all
 			// them).
-			if key_nibbles.inner() <= start {
-				match crumb.node.node_plan().value_plan() {
-					Some(ValuePlan::Node(hash_range)) => {
-						value_node = Some(Some(&crumb.node.data()[hash_range.clone()]));
-					},
-					Some(ValuePlan::Inline(inline_range)) => {},
-					None => {
-						value_node = Some(None);
-					},
-				}
-			}
+			value_node = Some(match crumb.node.node_plan().value_plan() {
+				Some(ValuePlan::Node(hash_range)) =>
+					OpHash::Fix(&crumb.node.data()[hash_range.clone()]),
+				Some(ValuePlan::Inline(inline_range)) =>
+					OpHash::Fix(&crumb.node.data()[inline_range.clone()]),
+				None => OpHash::None,
+			});
 		}
 
 		let mut i = 0;
 		let iter_possible = core::iter::from_fn(|| loop {
-			if i == nibble_ops::NIBBLE_LENGTH {
-				if let Some(value_hash) = value_node.take() {
-					return Some(value_hash);
-				}
-				return None;
+			// value first.
+			if let Some(value_hash) = value_node.take() {
+				return Some(value_hash);
 			}
-			if i == range_bef {
+			if i == range_bef.unwrap_or(0) {
 				i = range_aft;
-				if i == nibble_ops::NIBBLE_LENGTH {
-					continue;
-				}
+			}
+			if i == nibble_ops::NIBBLE_LENGTH {
+				return None;
 			}
 			i += 1;
 			match crumb.node.node_plan() {
 				NodePlan::NibbledBranch { children, .. } | NodePlan::Branch { children, .. } =>
-					match &children[i - 1] {
-						Some(NodeHandlePlan::Hash(hash_range)) => {
-							return Some(Some(&crumb.node.data()[hash_range.clone()]));
-						},
-						Some(NodeHandlePlan::Inline(hash_range)) => {
-							// already itered.
-							continue;
-						},
-						None => return Some(None),
-					},
-				_ => (),
+					return Some(match &children[i - 1] {
+						Some(NodeHandlePlan::Hash(hash_range)) =>
+							OpHash::Fix(&crumb.node.data()[hash_range.clone()]),
+
+						Some(NodeHandlePlan::Inline(inline_range)) =>
+							OpHash::Var(&crumb.node.data()[inline_range.clone()]),
+						None => OpHash::None,
+					}),
+				_ => unreachable!(),
 			}
 		});
 
