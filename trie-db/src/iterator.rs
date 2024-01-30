@@ -973,6 +973,7 @@ fn put_value<L: TrieLayout>(
 pub(crate) struct IterCallback<'a, L, O> {
 	output: &'a mut O,
 	start_key: Option<&'a [u8]>,
+	first: bool,
 	_ph: core::marker::PhantomData<L>,
 }
 
@@ -982,51 +983,68 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		crumb: &Crumb<L::Hash, L::Location>,
 		key_nibbles: &NibbleVec,
 	) -> Result<(), TrieHash<L>, CError<L>> {
-		match crumb.node.node_plan() {
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => (),
-			NodePlan::Leaf{ value, partial, .. } => {
-				 // note that key_nibbles do not contain partial.
-				 unimplemented!("TODO if value of first seek attach the hash or inline value");
-				 // TODO switch first/siwtch flag
-				 // TODO does key_nibbles start with seek
-				 // TODO partial as nibbleslice with offset of seek
-//						(slice.starts_with(&partial))
-//						then add hash or inline of value
-			},
-			_ => return Ok(()),
-		}
 		if crumb.hash.is_none() {
 			// inline got nothing to add
 			return Ok(());
 		}
 
-		// on branch the key nibbles is not popped yet and contains the index of last accessed node.
-		let depth_current_ix = key_nibbles.len();
-		let current_ix =
-			(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
+		let mut value_only = false;
+		match crumb.node.node_plan() {
+			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => (),
+			NodePlan::Leaf { value, partial, .. } => {
+				// note that key_nibbles do not contain partial.
+				if self.first {
+					if let Some(start_key) = self.start_key {
+						let mut start_key_nibbles = NibbleSlice::new(start_key);
+						if start_key_nibbles.starts_with_vec(key_nibbles) {
+							start_key_nibbles.advance(key_nibbles.len());
+							if start_key_nibbles == partial.build(crumb.node.data()) {
+								value_only = true;
+							}
+						}
+					}
+				}
+				if !value_only {
+					return Ok(());
+				}
+			},
+			_ => return Ok(()),
+		}
+		self.first = false;
 
 		// exclusive
 		let mut range_bef = None;
-		if let Some(key) = self.start_key.as_ref() {
-			if depth_current_ix > 0 {
-				// TODO this check is inneficiant: should be done only for first depth bellow or eq
-				// tmp, with tmp starting at key_len and switch to this on success.
+		// inclusive
+		let mut range_aft = nibble_ops::NIBBLE_LENGTH;
 
-				let common = crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
-				let at = key_nibbles.len() - 1;
-				// can be sup as we may have compare agains byte padded inner).
-				if common >= at {
-					range_bef = Some(NibbleSlice::new(key).at(at) as usize);
+		if !value_only {
+			// on branch the key nibbles is not popped yet and contains the index of last accessed
+			// node.
+			let depth_current_ix = key_nibbles.len();
+			let current_ix =
+				(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
+
+			if let Some(key) = self.start_key.as_ref() {
+				if depth_current_ix > 0 {
+					// TODO this check is inneficiant: should be done only for first depth bellow or
+					// eq tmp, with tmp starting at key_len and switch to this on success.
+
+					let common = crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
+					let at = key_nibbles.len() - 1;
+					// can be sup as we may have compare agains byte padded inner).
+					if common >= at {
+						range_bef = Some(NibbleSlice::new(key).at(at) as usize);
+					}
 				}
 			}
+			// inclusive
+			range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH);
 		}
-		// inclusive
-		let range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH);
 		debug_assert!(range_aft >= range_bef.unwrap_or(0));
 
 		// if key is less than start key, we attach the value hash if there is one.
 		let mut value_node = None;
-		if range_bef.is_some() {
+		if range_bef.is_some() || value_only {
 			// Values before start needed.
 			// Other values from exiting (pop are already part of the proof (we range over all
 			// them).
@@ -1034,7 +1052,7 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 				Some(ValuePlan::Node(hash_range)) =>
 					OpHash::Fix(&crumb.node.data()[hash_range.clone()]),
 				Some(ValuePlan::Inline(inline_range)) =>
-					OpHash::Fix(&crumb.node.data()[inline_range.clone()]),
+					OpHash::Var(&crumb.node.data()[inline_range.clone()]),
 				None => OpHash::None,
 			});
 		}
@@ -1111,6 +1129,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		iter.next_with_callback(IterCallback {
 			output,
 			start_key: exclusive_start,
+			first: true,
 			_ph: Default::default(),
 		})
 	} {

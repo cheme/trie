@@ -718,8 +718,8 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					return Err(());
 				}
 				// TODO ensure after a value, or a drop.
-				// Or after seek as seek is over a value that is not include we will have its hash if
-				// immediately pop.
+				// Or after seek as seek is over a value that is not include we will have its hash
+				// if immediately pop.
 
 				// we expect hash of value only for node in the seeking path
 				// (otherwhise range did cover it).
