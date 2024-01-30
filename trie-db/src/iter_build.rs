@@ -621,6 +621,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	let mut buff = [0u8; BUFF_LEN];
 	let mut seeking = start_key.is_some();
 	let mut last_drop: Option<u8> = None;
+	let mut prev_are_hashes = false;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
 			match e.kind() {
@@ -633,6 +634,13 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 			return Err(());
 		}; // TODO right erro from trie crate
 		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
+		if prev_are_hashes {
+			if !matches!(proof_op, ProofOp::DropPartial) {
+				// TODO better error
+				return Err(());
+			}
+			prev_are_hashes = false;
+		}
 		match proof_op {
 			ProofOp::Partial => {
 				last_drop = None;
@@ -711,12 +719,18 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
 			ProofOp::Hashes => {
+
+				// hash are either nodes from seeking or nodes after suspending.
+				// Hashes must be followed by a drop of key.
+
 				// TODO if we make seek implied this is valid start (if no hashes attached)
 				// if we are in a branch an no next child or if we are in a leaf.
 				if seeking {
 					// hash are expected before pop only.
 					return Err(());
 				}
+
+				prev_are_hashes = true;
 				// TODO ensure after a value, or a drop.
 				// Or after seek as seek is over a value that is not include we will have its hash
 				// if immediately pop.
@@ -727,26 +741,29 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				// TODO note that we can keep a max height length that decrease to root to
 				// directly know value was accessed.
 
-				let start_key = start_key.as_ref().expect("seeking only with start_key");
-				let common = crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
-				let common = core::cmp::min(common, key.len());
-				let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
-
-				let unaccessed_value = common == key.len();
+				let mut unaccessed_value = false;
 				// exclusive
 				let mut unaccessed_range_bef = 0;
-				if common == key.len() {
-					let start_nibble = NibbleSlice::new(start_key);
-					if start_nibble.len() > common {
-						unaccessed_range_bef = start_nibble.at(common);
+				if let Some(start_key) = start_key.as_ref() {
+					let common = crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
+					let common = core::cmp::min(common, key.len());
+					let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
+					unaccessed_value = common == key.len();
+
+					if common == key.len() {
+						let start_nibble = NibbleSlice::new(start_key);
+						if start_nibble.len() > common {
+							unaccessed_range_bef = start_nibble.at(common);
+						}
 					}
 				}
 				// inclusive
 				let mut unaccessed_range_aft = nibble_ops::NIBBLE_LENGTH as u8;
-				if common == key.len() {
-					if let Some(at) = last_drop.take() {
-						unaccessed_range_aft = at + 1;
-					}
+				if let Some(at) = last_drop.take() {
+					unaccessed_range_aft = at + 1;
+				} else {
+					// can be first leaf after a seek: TODO proper check
+					unreachable!("hash not after a drop");
 				}
 				unreachable!("TODO after start and stop impl");
 			},
