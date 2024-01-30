@@ -845,6 +845,7 @@ where
 	let mut bitmap_len = 0;
 	// if bit in previous bitmap (presence to true and type expected next).
 	let mut prev_bit: Option<OpHash> = None;
+	let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new();
 
 	loop {
 		bitmap_len += i_bitmap;
@@ -862,6 +863,12 @@ where
 			i_bitmap += 1;
 			if h.is_some() {
 				nexts[i_hash] = h;
+				if i_hash == 0 {
+					output
+						.write(buff_bef_first.as_slice())
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+				}
 				i_hash += 1;
 			}
 		}
@@ -880,6 +887,12 @@ where
 			i_bitmap += 1;
 			if h.is_some() {
 				nexts[i_hash] = h;
+				if i_hash == 0 {
+					output
+						.write(buff_bef_first.as_slice())
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+				}
 				i_hash += 1;
 			}
 			if i_bitmap == bound {
@@ -892,15 +905,23 @@ where
 		if !header_written {
 			header_written = true;
 			let header = header_init(bitmap.0);
-			output
-				.write(&[header])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			if i_hash > 0 {
+				output
+					.write(&[header])
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			} else {
+				buff_bef_first.push(header);
+			}
 		} else {
-			output
-				.write(&[bitmap.0])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			if i_hash > 0 {
+				output
+					.write(&[bitmap.0])
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			} else {
+				buff_bef_first.push(bitmap.0);
+			}
 		}
 		for j in 0..i_hash {
 			match nexts[j] {

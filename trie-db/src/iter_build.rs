@@ -719,7 +719,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
 			ProofOp::Hashes => {
-
 				// hash are either nodes from seeking or nodes after suspending.
 				// Hashes must be followed by a drop of key.
 
