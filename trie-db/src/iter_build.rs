@@ -610,7 +610,6 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
 	input: &mut impl std::io::Read,
 	callback: &mut F,
-	start_key: Option<&[u8]>,
 ) -> Result<(), ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
@@ -619,7 +618,8 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
-	let mut seeking = start_key.is_some();
+	let mut first = true;
+	let mut start_key: Option<Vec<u8>> = None;
 	let mut last_drop: Option<u8> = None;
 	let mut prev_are_hashes = false;
 	loop {
@@ -667,28 +667,12 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					nibble_vec.drop_lasts(nibble_vec.len() - size);
 				}
 				key.append(&nibble_vec);
-				if seeking {
-					let start_key = start_key.as_ref().expect("seeking only with start_key");
-					let common = crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
-					let common = core::cmp::min(common, key.len());
-					let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
-					if common < start_key_len {
-						// seeking should be done in a single key append.
-						// TODO should we just assume this append (till start key)?
-						// if we did this will be a valid start: going in branch child.
-						return Err(());
-					}
-					seeking = false;
+				if first {
+					start_key = Some(key.inner().to_vec());
 				}
 			},
 			ProofOp::Value => {
 				last_drop = None;
-				if seeking {
-					// first op should be start_key
-					// TODO if we make seek implied, this cannot be first
-					// as start_key is exclusive.
-					return Err(());
-				}
 				let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				let mut value = DBValue::with_capacity(nb_byte);
 				while nb_byte > 0 {
@@ -701,7 +685,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				depth_queue.set_cache_value(key.len(), Some(value));
 			},
 			ProofOp::DropPartial => {
-				if seeking {
+				if first {
 					// first op should be start_key
 					// TODO if we make seek implied this is not a valid start:
 					// we restart/stop on a existing non inline value key, so
@@ -709,7 +693,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					// more from a branch.
 					return Err(());
 				}
-				seeking = false;
 				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				if to_drop > key.len() {
 					return Err(());
@@ -724,8 +707,8 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 
 				// TODO if we make seek implied this is valid start (if no hashes attached)
 				// if we are in a branch an no next child or if we are in a leaf.
-				if seeking {
-					// hash are expected before pop only.
+				if first {
+					// hash are expected after pop only.
 					return Err(());
 				}
 
@@ -767,5 +750,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				unreachable!("TODO after start and stop impl");
 			},
 		}
+		first = false;
 	}
 }

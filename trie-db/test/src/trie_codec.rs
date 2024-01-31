@@ -194,7 +194,8 @@ fn encoding_node_owned_and_decoding_node_works() {
 
 fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	entries: Vec<(&'static [u8], &'static [u8])>,
-) -> (<L::Hash as Hasher>::Out, Vec<u8>) {
+	size_limit: Option<usize>,
+) -> (<L::Hash as Hasher>::Out, Vec<Vec<u8>>) {
 	// Populate DB with full trie from entries.
 	let (db, root) = {
 		let mut db = DB::default();
@@ -213,41 +214,65 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 
 	let mut output = Vec::new();
 	let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
-	let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
-	trie_db::range_proof(iter, &mut output, None, None).unwrap();
-	println!("proof: {:?}", output);
+	let mut start: Option<Vec<u8>> = None;
+	loop {
+		let mut proof = Vec::new();
+		let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
+		start =
+			trie_db::range_proof(iter, &mut proof, start.as_ref().map(Vec::as_slice), size_limit)
+				.unwrap();
+		println!("proof: {:?}", output);
+		output.push(proof);
+		if start.is_none() {
+			break;
+		}
+	}
 
 	(root, output)
 }
 
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	let (root, proof) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(vec![
-		// "alfa" is at a hash-referenced leaf node.
-		(b"alfa", &[0; 32]),
-		// "bravo" is at an inline leaf node.
-		(b"bravo", b"bravo"),
-		// "do" is at a hash-referenced branch node.
-		(b"do", b"verb"),
-		// "dog" is at an inline leaf node.
-		(b"dog", b"puppy"),
-		// "doge" is at a hash-referenced leaf node.
-		(b"doge", &[0; 32]),
-		// extension node "o" (plus nibble) to next branch.
-		(b"horse", b"stallion"),
-		(b"house", b"building"),
-	]);
+	trie_full_state_limitted::<T>(None);
+	trie_full_state_limitted::<T>(Some(1));
+	trie_full_state_limitted::<T>(Some(200));
+}
+fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
+	let (root, proofs) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(
+		vec![
+			// "alfa" is at a hash-referenced leaf node.
+			(b"alfa", &[0; 32]),
+			// "bravo" is at an inline leaf node.
+			(b"bravo", b"bravo"),
+			// "do" is at a hash-referenced branch node.
+			(b"do", b"verb"),
+			// "dog" is at an inline leaf node.
+			(b"dog", b"puppy"),
+			// "doge" is at a hash-referenced leaf node.
+			(b"doge", &[0; 32]),
+			// extension node "o" (plus nibble) to next branch.
+			(b"horse", b"stallion"),
+			(b"house", b"building"),
+		],
+		size_limit,
+	);
 	let (mut memdb, _) = MemoryDB::<T>::default_with_root();
-	let cb_root = {
-		//ProcessEncodedNode<TrieHash<L>
-		let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-		trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb, None).unwrap();
-		cb.root.unwrap()
-	};
+	for proof in proofs {
+		let cb_root = {
+			//ProcessEncodedNode<TrieHash<L>
+			let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
+			trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb).unwrap();
+			cb.root.unwrap()
+		};
+		assert_eq!(cb_root, root);
+	}
 	{
-		let mut trie = <TrieDBBuilder<T>>::new(&memdb, &cb_root).build();
+		let mut trie = <TrieDBBuilder<T>>::new(&memdb, &root).build();
 		println!("Proved: {:?}", trie);
-	};
-
-	assert_eq!(cb_root, root);
+		// check trie is complete by iterating on all values.
+		let iter = trie_db::TrieDBIterator::new(&trie).unwrap();
+		for i in iter {
+			assert!(i.is_ok());
+		}
+	}
 }

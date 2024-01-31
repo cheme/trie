@@ -1130,13 +1130,14 @@ fn hash_header_no_bitmap(_: u8) -> u8 {
 /// Inline value contain in the proof are also added as they got no additional
 /// size cost.
 ///
-/// Return true if the proof reach end of trie.
+/// Return `None` if the proof reach the end of the state, or the key to the last value in proof
+/// (next range proof should restart from this key).
 pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	mut iter: crate::triedb::TrieDBIterator<'a, 'cache, L>,
 	output: &mut impl CountedWrite,
 	exclusive_start: Option<&[u8]>,
 	size_limit: Option<usize>,
-) -> Result<bool, TrieHash<L>, CError<L>> {
+) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
 	let start_written = output.written();
 	// TODO when exiting a node: write children and value hash if needed.
 
@@ -1209,13 +1210,13 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		put_value::<L>(value.as_slice(), output)?;
 		if size_limit.map(|l| (start_written - output.written()) >= l).unwrap_or(false) {
 			unimplemented!("TODO child indexes and pop from crumb, start needed hash from index from start key, after needed from crumb");
-			return Ok(false);
+			return Ok(Some(key));
 		}
 
 		prev_key = key;
 		prev_key_len = key_len;
 	}
-	Ok(true)
+	Ok(None)
 }
 
 #[cfg_attr(feature = "std", derive(Debug))]
