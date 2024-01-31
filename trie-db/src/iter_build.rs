@@ -610,6 +610,7 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
 	input: &mut impl std::io::Read,
 	callback: &mut F,
+	known_start_key: Option<&[u8]>,
 ) -> Result<(), ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
@@ -668,7 +669,18 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 				key.append(&nibble_vec);
 				if first {
-					start_key = Some(key.inner().to_vec());
+					if let Some(start_key) = known_start_key {
+						let common =
+							crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
+						let common = core::cmp::min(common, key.len());
+						let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
+						if common < start_key_len {
+							// seeking should be done in a single key append.
+							// TODO should we just assume this append (till start key)?
+							// if we did this will be a valid start: going in branch child.
+							return Err(());
+						}
+					}
 				}
 			},
 			ProofOp::Value => {
