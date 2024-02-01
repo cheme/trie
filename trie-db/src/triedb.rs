@@ -474,15 +474,15 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 		Self { db, raw_iter }
 	}
 
-	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
-		self.raw_iter
+	/// Convert the iterator to a raw iterator and db.
+	pub fn into_raw(self) -> (TrieDBRawIterator<L>, &'a TrieDB<'a, 'cache, L>) {
+		(self.raw_iter, self.db)
 	}
 
 	/// Iterator next method, but with callbacks.
 	pub(crate) fn next_with_callback<O: crate::iterator::CountedWrite>(
 		&mut self,
-		cb: crate::iterator::IterCallback<L, O>,
+		cb: &mut crate::iterator::IterCallback<L, O>,
 	) -> Option<<Self as Iterator>::Item> {
 		self.raw_iter.next_item_with_callback(self.db, cb)
 	}
@@ -525,9 +525,9 @@ impl<'a, 'cache, L: TrieLayout> TrieDBKeyIterator<'a, 'cache, L> {
 		Self { db, raw_iter }
 	}
 
-	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
-		self.raw_iter
+	/// Convert the iterator to a raw iterator and db.
+	pub fn into_raw(self) -> (TrieDBRawIterator<L>, &'a TrieDB<'a, 'cache, L>) {
+		(self.raw_iter, self.db)
 	}
 }
 

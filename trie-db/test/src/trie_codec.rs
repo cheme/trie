@@ -233,9 +233,9 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	trie_full_state_limitted::<T>(None);
 	trie_full_state_limitted::<T>(Some(1));
 	trie_full_state_limitted::<T>(Some(200));
+	trie_full_state_limitted::<T>(None);
 }
 fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
 	let (root, proofs) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(

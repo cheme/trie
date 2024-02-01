@@ -352,7 +352,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	pub(crate) fn next_raw_item<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
-		mut cb: Option<&mut IterCallback<L, O>>,
+		mut cb: Option<&mut &mut IterCallback<L, O>>,
 	) -> Option<
 		Result<
 			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
@@ -463,7 +463,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	pub(crate) fn next_item_with_callback<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
-		cb: IterCallback<L, O>,
+		cb: &mut IterCallback<L, O>,
 	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
 		self.next_inner(db, Some(cb))
 	}
@@ -472,7 +472,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	fn next_inner<O: CountedWrite>(
 		&mut self,
 		db: &TrieDB<L>,
-		mut cb: Option<IterCallback<L, O>>,
+		mut cb: Option<&mut IterCallback<L, O>>,
 	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
 		while let Some(raw_item) = self.next_raw_item::<O>(db, cb.as_mut()) {
 			let (prefix, _, node) = match raw_item {
@@ -577,9 +577,9 @@ impl<'a, 'cache, L: TrieLayout> TrieDBNodeIterator<'a, 'cache, L> {
 		Self { db, raw_iter }
 	}
 
-	/// Convert the iterator to a raw iterator.
-	pub fn into_raw(self) -> TrieDBRawIterator<L> {
-		self.raw_iter
+	/// Convert the iterator to a raw iterator and db.
+	pub fn into_raw(self) -> (TrieDBRawIterator<L>, &'a TrieDB<'a, 'cache, L>) {
+		(self.raw_iter, self.db)
 	}
 
 	/// Fetch value by hash at a current node height
@@ -1147,14 +1147,9 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 	let mut prev_key = Vec::new();
 	let mut prev_key_len = 0;
-	while let Some(n) = {
-		iter.next_with_callback(IterCallback {
-			output,
-			start_key: exclusive_start,
-			first: true,
-			_ph: Default::default(),
-		})
-	} {
+	let mut callback =
+		IterCallback { output, start_key: exclusive_start, first: true, _ph: Default::default() };
+	while let Some(n) = { iter.next_with_callback(&mut callback) } {
 		let (key, value) = n?;
 		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
 		// Note that this is largely suboptimal: could be rewritten to use directly node iterator,
@@ -1163,13 +1158,14 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 		if common_depth < prev_key_len {
 			let op = ProofOp::DropPartial;
-			output
+			callback
+				.output
 				.write(&[op.as_u8()])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
 			let nb = VarInt((prev_key_len - common_depth) as u32)
-				.encode_into(output)
+				.encode_into(callback.output)
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 		}
@@ -1178,12 +1174,13 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 			let to_write = key_len - common_depth;
 			let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
 			let op = ProofOp::Partial;
-			output
+			callback
+				.output
 				.write(&[op.as_u8()])
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 			let nb = VarInt(to_write as u32)
-				.encode_into(output)
+				.encode_into(callback.output)
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 			let start_aligned = common_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
@@ -1191,25 +1188,34 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 			if start_aligned {
 				let off = if aligned { 0 } else { 1 };
 				let slice_to_write = &key[start_ix..key.len() - off];
-				output.write(slice_to_write);
+				callback.output.write(slice_to_write);
 				if !aligned {
-					output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+					callback.output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
 				}
 			} else {
 				for i in start_ix..key.len() - 1 {
 					let mut b = key[i] << 4;
 					b |= key[i + 1] >> 4;
-					output.write(&[b]);
+					callback.output.write(&[b]);
 				}
 				if !aligned {
 					let b = key[key.len() - 1] << 4;
-					output.write(&[b]);
+					callback.output.write(&[b]);
 				}
 			}
 		}
-		put_value::<L>(value.as_slice(), output)?;
-		if size_limit.map(|l| (start_written - output.written()) >= l).unwrap_or(false) {
-			unimplemented!("TODO child indexes and pop from crumb, start needed hash from index from start key, after needed from crumb");
+		put_value::<L>(value.as_slice(), callback.output)?;
+		if size_limit
+			.map(|l| (callback.output.written() - start_written) >= l)
+			.unwrap_or(false)
+		{
+			let (mut raw, db) = iter.into_raw();
+			for c in raw.trail.iter_mut() {
+				c.status = Status::Exiting;
+			}
+			while let Some(r) = raw.next_item_with_callback(db, &mut callback) {
+				let _ = r?;
+			}
 			return Ok(Some(key));
 		}
 
