@@ -994,8 +994,11 @@ fn put_value<L: TrieLayout>(
 pub(crate) struct IterCallback<'a, L, O> {
 	output: &'a mut O,
 	start_key: Option<&'a [u8]>,
-	first: bool,
 	start_range_height: usize,
+	first: bool,
+	write_aft: bool,
+	not_first_branch_aft: bool,
+	aft_written: bool,
 	_ph: core::marker::PhantomData<L>,
 }
 
@@ -1003,7 +1006,16 @@ impl<'a, L, O> IterCallback<'a, L, O> {
 	pub fn new(output: &'a mut O, start_key: Option<&'a [u8]>) -> Self {
 		let start_range_height =
 			start_key.map(|s| s.len() * nibble_ops::NIBBLE_PER_BYTE).unwrap_or(0);
-		Self { output, start_key, first: true, start_range_height, _ph: Default::default() }
+		Self {
+			output,
+			start_key,
+			first: true,
+			start_range_height,
+			aft_written: false,
+			not_first_branch_aft: false,
+			write_aft: false,
+			_ph: Default::default(),
+		}
 	}
 }
 
@@ -1015,6 +1027,10 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 	) -> Result<(), TrieHash<L>, CError<L>> {
 		if crumb.hash.is_none() {
 			// inline got nothing to add
+			if self.write_aft {
+				self.not_first_branch_aft = true;
+			}
+			self.first = false;
 			return Ok(());
 		}
 
@@ -1047,7 +1063,12 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		// inclusive
 		let mut range_aft = nibble_ops::NIBBLE_LENGTH;
 
-		if !value_only {
+		if value_only {
+			self.start_range_height = key_nibbles.len();
+		} else if self.write_aft && !self.not_first_branch_aft {
+			// stop on a branch with value.
+			range_aft = 0;
+		} else {
 			// on branch the key nibbles is not popped yet and contains the index of last accessed
 			// node.
 			let depth_current_ix = key_nibbles.len();
@@ -1075,10 +1096,16 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 				}
 			}
 			// inclusive
-			range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH);
+			if self.write_aft {
+				range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH)
+			};
 		}
-		debug_assert!(range_aft >= range_bef.unwrap_or(0));
 
+		if self.write_aft {
+			self.not_first_branch_aft = true;
+		}
+
+		debug_assert!(range_aft >= range_bef.unwrap_or(0));
 		// if key is less than start key, we attach the value hash if there is one.
 		let mut value_node = None;
 		if range_bef.is_some() || value_only {
@@ -1095,6 +1122,8 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 		}
 
 		let mut i = 0;
+		let write_aft = self.write_aft;
+		let aft_written = &mut self.aft_written;
 		let iter_possible = core::iter::from_fn(|| loop {
 			// value first.
 			if let Some(value_hash) = value_node.take() {
@@ -1110,11 +1139,21 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 			match crumb.node.node_plan() {
 				NodePlan::NibbledBranch { children, .. } | NodePlan::Branch { children, .. } =>
 					return Some(match &children[i - 1] {
-						Some(NodeHandlePlan::Hash(hash_range)) =>
-							OpHash::Fix(&crumb.node.data()[hash_range.clone()]),
-
-						Some(NodeHandlePlan::Inline(inline_range)) =>
-							OpHash::Var(&crumb.node.data()[inline_range.clone()]),
+						Some(NodeHandlePlan::Hash(hash_range)) => {
+							if write_aft && i > range_aft {
+								*aft_written = true;
+							}
+							OpHash::Fix(&crumb.node.data()[hash_range.clone()])
+						},
+						Some(NodeHandlePlan::Inline(inline_range)) => {
+							// can result in proof containing all remaining values, but
+							// still returning proofs, but makes things easier at the
+							// cost of this very corner case.
+							if write_aft && i > range_aft {
+								*aft_written = true;
+							}
+							OpHash::Var(&crumb.node.data()[inline_range.clone()])
+						},
 						None => OpHash::None,
 					}),
 				_ => unreachable!(),
@@ -1240,8 +1279,12 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				for c in raw.trail.iter_mut() {
 					c.status = Status::Exiting;
 				}
+				callback.write_aft = true;
 				while let Some(r) = raw.next_item_with_callback(db, &mut callback) {
 					let _ = r?;
+				}
+				if !callback.aft_written {
+					return Ok(None);
 				}
 				return Ok(Some(key));
 			}
