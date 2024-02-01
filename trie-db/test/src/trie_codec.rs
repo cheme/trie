@@ -221,7 +221,7 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 		start =
 			trie_db::range_proof(iter, &mut proof, start.as_ref().map(Vec::as_slice), size_limit)
 				.unwrap();
-		println!("proof: {:?}", output);
+		println!("proof: {:?}", proof);
 		output.push(proof);
 		if start.is_none() {
 			break;

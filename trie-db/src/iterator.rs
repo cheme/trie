@@ -995,7 +995,16 @@ pub(crate) struct IterCallback<'a, L, O> {
 	output: &'a mut O,
 	start_key: Option<&'a [u8]>,
 	first: bool,
+	start_range_height: usize,
 	_ph: core::marker::PhantomData<L>,
+}
+
+impl<'a, L, O> IterCallback<'a, L, O> {
+	pub fn new(output: &'a mut O, start_key: Option<&'a [u8]>) -> Self {
+		let start_range_height =
+			start_key.map(|s| s.len() * nibble_ops::NIBBLE_PER_BYTE).unwrap_or(0);
+		Self { output, start_key, first: true, start_range_height, _ph: Default::default() }
+	}
 }
 
 impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
@@ -1046,16 +1055,16 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 				(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
 
 			if let Some(key) = self.start_key.as_ref() {
-				if depth_current_ix > 0 {
-					// TODO this check is inneficiant: should be done only for first depth bellow or
-					// eq tmp, with tmp starting at key_len and switch to this on success.
-
-					let common = crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
+				if depth_current_ix > 0 && (depth_current_ix - 1) <= self.start_range_height {
 					let at = key_nibbles.len() - 1;
-					// can be sup as we may have compare agains byte padded inner).
-					if common >= at {
-						range_bef = Some(NibbleSlice::new(key).at(at) as usize);
-					}
+					debug_assert!({
+						let common =
+							crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
+						// can be sup as we may have compare agains byte padded inner).
+						common >= at
+					});
+					range_bef = Some(NibbleSlice::new(key).at(at) as usize);
+					self.start_range_height = depth_current_ix - 1;
 				}
 			}
 			// inclusive
@@ -1141,14 +1150,14 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	let start_written = output.written();
 	// TODO when exiting a node: write children and value hash if needed.
 
+	let mut prev_key = Vec::new();
+	let mut prev_key_len = 0;
+	let mut callback = IterCallback::new(output, exclusive_start);
+
 	if let Some(start) = exclusive_start {
 		iter.seek(start)?;
 	}
 
-	let mut prev_key = Vec::new();
-	let mut prev_key_len = 0;
-	let mut callback =
-		IterCallback { output, start_key: exclusive_start, first: true, _ph: Default::default() };
 	while let Some(n) = { iter.next_with_callback(&mut callback) } {
 		let (key, value) = n?;
 		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
@@ -1204,19 +1213,31 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				}
 			}
 		}
-		put_value::<L>(value.as_slice(), callback.output)?;
-		if size_limit
-			.map(|l| (callback.output.written() - start_written) >= l)
-			.unwrap_or(false)
-		{
-			let (mut raw, db) = iter.into_raw();
-			for c in raw.trail.iter_mut() {
-				c.status = Status::Exiting;
+
+		let mut skip_value = false;
+		if callback.first {
+			if let Some(key_start) = exclusive_start {
+				if key == key_start {
+					skip_value = true;
+				}
 			}
-			while let Some(r) = raw.next_item_with_callback(db, &mut callback) {
-				let _ = r?;
+		}
+
+		if !skip_value {
+			put_value::<L>(value.as_slice(), callback.output)?;
+			if size_limit
+				.map(|l| (callback.output.written() - start_written) >= l)
+				.unwrap_or(false)
+			{
+				let (mut raw, db) = iter.into_raw();
+				for c in raw.trail.iter_mut() {
+					c.status = Status::Exiting;
+				}
+				while let Some(r) = raw.next_item_with_callback(db, &mut callback) {
+					let _ = r?;
+				}
+				return Ok(Some(key));
 			}
-			return Ok(Some(key));
 		}
 
 		prev_key = key;
