@@ -1063,8 +1063,15 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 						// can be sup as we may have compare agains byte padded inner).
 						common >= at
 					});
-					range_bef = Some(NibbleSlice::new(key).at(at) as usize);
-					self.start_range_height = depth_current_ix - 1;
+					let key_slice = NibbleSlice::new(key);
+					if at < key_slice.len() {
+						range_bef = Some(key_slice.at(at) as usize);
+					} else {
+						// only case in range is a seek into branch that got popped, in this case
+						// at == keyslice.len()
+						debug_assert!(at == key_slice.len());
+					}
+					self.start_range_height = at - 1;
 				}
 			}
 			// inclusive
