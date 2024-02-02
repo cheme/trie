@@ -614,15 +614,17 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 ) -> Result<(), ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
-	let mut last_value: Option<DBValue> = None;
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
 
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
-	let mut first = true;
+	let mut can_seek = true;
+	let mut seeking = false;
+	let mut exiting = false;
 	let mut start_key: Option<Vec<u8>> = None;
 	let mut last_drop: Option<u8> = None;
-	let mut prev_are_hashes = false;
+	let mut last_seek: Option<u8> = None;
+	let mut prev_op: Option<ProofOp> = None;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
 			match e.kind() {
@@ -635,15 +637,18 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 			return Err(());
 		}; // TODO right erro from trie crate
 		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
-		if prev_are_hashes {
-			if !matches!(proof_op, ProofOp::DropPartial) {
-				// TODO better error
-				return Err(());
-			}
-			prev_are_hashes = false;
-		}
 		match proof_op {
 			ProofOp::Partial => {
+				match prev_op {
+					Some(ProofOp::Partial) => {
+						// no two consecutive partial
+						return Err(())
+					},
+					_ => (),
+				}
+				if exiting {
+					return Err(());
+				}
 				last_drop = None;
 				let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				if size == 0 {
@@ -668,23 +673,52 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					nibble_vec.drop_lasts(nibble_vec.len() - size);
 				}
 				key.append(&nibble_vec);
-				if first {
+				if can_seek {
 					if let Some(start_key) = known_start_key {
 						let common =
 							crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
 						let common = core::cmp::min(common, key.len());
-						let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
-						if common < start_key_len {
-							// seeking should be done in a single key append.
-							// TODO should we just assume this append (till start key)?
-							// if we did this will be a valid start: going in branch child.
-							return Err(());
+						if common < key.len() {
+							let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
+							if common == start_key_len {
+								can_seek = false;
+							} else {
+								// not into seek
+								return Err(());
+							}
 						}
+					}
+				}
+				if let Some(ix) = last_seek.take() {
+					if nibble_vec.at(0) <= ix {
+						// trying to go in a range that was in hashes from seek.
+						return Err(());
 					}
 				}
 			},
 			ProofOp::Value => {
+				match prev_op {
+					Some(ProofOp::Value) => {
+						// no two value at same heigth
+						return Err(());
+					},
+					Some(ProofOp::Hashes) => {
+						// value is before hashes
+						return Err(());
+					},
+					Some(ProofOp::DropPartial) => {
+						// value already sent after a drop
+						return Err(());
+					},
+					_ => (),
+				}
+				if exiting {
+					return Err(());
+				}
 				last_drop = None;
+				last_seek = None;
+				can_seek = false;
+
 				let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				let mut value = DBValue::with_capacity(nb_byte);
 				while nb_byte > 0 {
@@ -697,15 +731,28 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				depth_queue.set_cache_value(key.len(), Some(value));
 			},
 			ProofOp::DropPartial => {
-				if first {
-					// first op should be start_key
-					// TODO if we make seek implied this is not a valid start:
-					// we restart/stop on a existing non inline value key, so
-					// we will have at least a value hash if dropping from a value node,
-					// more from a branch.
+				match prev_op {
+					Some(ProofOp::DropPartial) => {
+						// consecutive drop
+						return Err(());
+					},
+					Some(ProofOp::Partial) => {
+						// drop after a push, we should at least have hash or value
+						return Err(());
+					},
+					None => {
+						// drop from start doesn't work
+						return Err(());
+					},
+					_ => (),
+				}
+				can_seek = false;
+				last_seek = None;
+
+				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				if to_drop == 0 {
 					return Err(());
 				}
-				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				if to_drop > key.len() {
 					return Err(());
 				}
@@ -714,54 +761,60 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
 			ProofOp::Hashes => {
-				// hash are either nodes from seeking or nodes after suspending.
-				// Hashes must be followed by a drop of key.
+				// hash are either nodes from seeking: value and children
+				// up to seek key.
+				// Or nodes after suspending, starting after last accessed child.
+				match prev_op {
+					Some(ProofOp::Value) => {
+						exiting = true;
+					},
+					Some(ProofOp::Hashes) => {
+						// consecutive hashes
+						return Err(());
+					},
+					Some(ProofOp::DropPartial) => {
+						exiting = true;
+					},
+					Some(ProofOp::Partial) => {
+						if !can_seek {
+							return Err(());
+						}
+						seeking = true;
+					},
+					None => {
+						if !can_seek {
+							return Err(());
+						}
+						seeking = true;
+					},
+				}
 
-				// TODO if we make seek implied this is valid start (if no hashes attached)
-				// if we are in a branch an no next child or if we are in a leaf.
-				if first {
-					// hash are expected after pop only.
+				if !exiting && can_seek {
+					let mut range_bef_check = None;
+					if let Some(k) = known_start_key {
+						let start_nibble = NibbleSlice::new(k);
+
+						if start_nibble.len() <= key.len() {
+							// even eq should contain no hash
+							return Err(());
+						}
+						range_bef_check = Some(start_nibble.at(key.len()));
+					}
+					let mut higher_hash_ix = None;
+					unimplemented!("hashes val and bef");
+					last_seek = higher_hash_ix;
+				} else if exiting {
+					let mut unaccessed_range_aft = 0;
+					if let Some(at) = last_drop.take() {
+						unaccessed_range_aft = at + 1;
+					}
+					unimplemented!("hashes");
+				} else {
+					// should be unreachable, but error just in case.
 					return Err(());
 				}
-
-				prev_are_hashes = true;
-				// TODO ensure after a value, or a drop.
-				// Or after seek as seek is over a value that is not include we will have its hash
-				// if immediately pop.
-
-				// we expect hash of value only for node in the seeking path
-				// (otherwhise range did cover it).
-
-				// TODO note that we can keep a max height length that decrease to root to
-				// directly know value was accessed.
-
-				let mut unaccessed_value = false;
-				// exclusive
-				let mut unaccessed_range_bef = 0;
-				if let Some(start_key) = start_key.as_ref() {
-					let common = crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
-					let common = core::cmp::min(common, key.len());
-					let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
-					unaccessed_value = common == key.len();
-
-					if common == key.len() {
-						let start_nibble = NibbleSlice::new(start_key);
-						if start_nibble.len() > common {
-							unaccessed_range_bef = start_nibble.at(common);
-						}
-					}
-				}
-				// inclusive
-				let mut unaccessed_range_aft = nibble_ops::NIBBLE_LENGTH as u8;
-				if let Some(at) = last_drop.take() {
-					unaccessed_range_aft = at + 1;
-				} else {
-					// can be first leaf after a seek: TODO proper check
-					unreachable!("hash not after a drop");
-				}
-				unreachable!("TODO after start and stop impl");
 			},
 		}
-		first = false;
+		prev_op = Some(proof_op);
 	}
 }
