@@ -18,6 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
+	iterator::{no_bitmap_hash_header, Bitmap1},
 	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
@@ -619,11 +620,9 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
 	let mut can_seek = true;
-	let mut seeking = false;
 	let mut exiting = false;
 	let mut start_key: Option<Vec<u8>> = None;
 	let mut last_drop: Option<u8> = None;
-	let mut last_seek: Option<u8> = None;
 	let mut prev_op: Option<ProofOp> = None;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
@@ -639,6 +638,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
 		match proof_op {
 			ProofOp::Partial => {
+				// TODO check the partial is post prev partial!!
 				match prev_op {
 					Some(ProofOp::Partial) => {
 						// no two consecutive partial
@@ -689,12 +689,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 						}
 					}
 				}
-				if let Some(ix) = last_seek.take() {
-					if nibble_vec.at(0) <= ix {
-						// trying to go in a range that was in hashes from seek.
-						return Err(());
-					}
-				}
 			},
 			ProofOp::Value => {
 				match prev_op {
@@ -716,7 +710,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					return Err(());
 				}
 				last_drop = None;
-				last_seek = None;
 				can_seek = false;
 
 				let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
@@ -747,7 +740,6 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					_ => (),
 				}
 				can_seek = false;
-				last_seek = None;
 
 				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
 				if to_drop == 0 {
@@ -775,34 +767,86 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					Some(ProofOp::DropPartial) => {
 						exiting = true;
 					},
-					Some(ProofOp::Partial) => {
+					Some(ProofOp::Partial) =>
 						if !can_seek {
 							return Err(());
-						}
-						seeking = true;
-					},
-					None => {
+						},
+					None =>
 						if !can_seek {
 							return Err(());
-						}
-						seeking = true;
-					},
+						},
 				}
-
+				let nb_bitmap_hash = 0;
+				let mut i = 8;
+				let mut bitmap = Bitmap1(0);
+				if nb_bitmap_hash > 0 {
+					i = 8 - nb_bitmap_hash;
+					bitmap = Bitmap1(no_bitmap_hash_header(buff[0]));
+				}
 				if !exiting && can_seek {
-					let mut range_bef_check = None;
+					let mut range_bef = 0;
 					if let Some(k) = known_start_key {
 						let start_nibble = NibbleSlice::new(k);
 
-						if start_nibble.len() <= key.len() {
+						if start_nibble.len() > key.len() {
+							range_bef = start_nibble.at(key.len());
+						} else if start_nibble.len() == key.len() {
+							// only value hash
+						} else {
 							// even eq should contain no hash
 							return Err(());
 						}
-						range_bef_check = Some(start_nibble.at(key.len()));
 					}
-					let mut higher_hash_ix = None;
-					unimplemented!("hashes val and bef");
-					last_seek = higher_hash_ix;
+					let has_value = read_bitmap(&mut i, &mut bitmap, input)?;
+
+					if has_value {
+						if read_bitmap(&mut i, &mut bitmap, input)? {
+							// inline value
+							unimplemented!()
+						} else {
+							// hash value
+							unimplemented!()
+						}
+					}
+
+					let mut child_ix = 0;
+					let mut know_has_first_child = false;
+					loop {
+						let mut first_read = true;
+						while child_ix < range_bef {
+							let has_child = if know_has_first_child {
+								know_has_first_child = false;
+								true
+							} else if first_read {
+								first_read = false;
+								read_bitmap(&mut i, &mut bitmap, input)?
+							} else {
+								if let Some(has_child) = read_bitmap_no_fetch(&mut i, &bitmap) {
+									has_child
+								} else {
+									break;
+								}
+							};
+							if has_child {
+								if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
+									if is_inline {
+										// child inline
+										unimplemented!()
+									} else {
+										// child hash
+										unimplemented!()
+									}
+									child_ix += 1;
+								} else {
+									know_has_first_child = true;
+									break;
+								}
+							}
+						}
+						if child_ix == range_bef {
+							break
+						}
+					}
 				} else if exiting {
 					let mut unaccessed_range_aft = 0;
 					if let Some(at) = last_drop.take() {
@@ -817,4 +861,27 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 		}
 		prev_op = Some(proof_op);
 	}
+}
+fn read_bitmap(
+	i: &mut usize,
+	bitmap: &mut Bitmap1,
+	input: &mut impl std::io::Read,
+) -> Result<bool, ()> {
+	let mut buff = [0u8; 1];
+	if *i == 8 {
+		*i = 0;
+		input.read_exact(&mut buff[0..1]).map_err(|_| ())?;
+		*bitmap = Bitmap1(buff[0]);
+	}
+	let r = Ok(bitmap.get(*i));
+	*i += 1;
+	r
+}
+fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
+	if *i == 8 {
+		return None;
+	}
+	let r = Some(bitmap.get(*i));
+	*i += 1;
+	r
 }

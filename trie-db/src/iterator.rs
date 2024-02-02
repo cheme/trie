@@ -688,7 +688,7 @@ pub trait ProofOpHeadCodec {
 
 #[derive(Default, Clone)]
 // TODO const N expected len??
-pub struct Bitmap1(u8);
+pub struct Bitmap1(pub u8);
 
 impl Bitmap1 {
 	pub fn check(expected_len: usize) -> bool {
@@ -697,7 +697,7 @@ impl Bitmap1 {
 		(0xff >> expected_len) == 0
 	}
 
-	pub fn get(self, i: usize) -> bool {
+	pub fn get(&self, i: usize) -> bool {
 		debug_assert!(i < 8);
 		self.0 & (0b0000_0001 << i) != 0
 	}
@@ -1195,6 +1195,10 @@ impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
 
 fn hash_header_no_bitmap(_: u8) -> u8 {
 	ProofOp::Hashes.as_u8()
+}
+
+pub fn no_bitmap_hash_header(_: u8) -> u8 {
+	0
 }
 
 // TODO chunk it TODO Write like trait out of std.
