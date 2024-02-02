@@ -360,6 +360,21 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 			CError<L>,
 		>,
 	> {
+		self.next_raw_item_with_pop(db, cb, false)
+	}
+
+	pub(crate) fn next_raw_item_with_pop<O: CountedWrite>(
+		&mut self,
+		db: &TrieDB<L>,
+		mut cb: Option<&mut &mut IterCallback<L, O>>,
+		with_pop: bool,
+	) -> Option<
+		Result<
+			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
+			TrieHash<L>,
+			CError<L>,
+		>,
+	> {
 		loop {
 			let crumb = self.trail.last_mut()?;
 			// TODO this call to node is costly and not needed in most case.
@@ -392,6 +407,13 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 						},
 					}
 					self.trail.last_mut()?.increment();
+					if with_pop {
+						if let Some(crumb) = self.trail.last_mut() {
+							return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
+						} else {
+							return None;
+						}
+					}
 				},
 				(Status::At, Node::Extension(partial, child)) => {
 					self.key_nibbles.append_partial(partial.right());
@@ -1194,7 +1216,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	size_limit: Option<usize>,
 ) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
 	let start_written = output.written();
-	// TODO when exiting a node: write children and value hash if needed.
 
 	let mut prev_key = Vec::new();
 	let mut prev_key_len = 0;
@@ -1293,6 +1314,171 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		prev_key = key;
 		prev_key_len = key_len;
 	}
+	Ok(None)
+}
+
+/// `exclusive_start` is the last returned key from a previous proof.
+/// Proof will there for contains seek information for this key. The proof
+/// itself may contain value that where already returned by previous proof.
+/// `size_limit` is a minimal limit, after being reach
+/// child sibling will be added (up to NB_CHILDREN - 1 * stack node depth and stack node depth drop
+/// key info). Also limit is only applyied after a first new value is written.
+/// Inline value contain in the proof are also added as they got no additional
+/// size cost.
+///
+/// Return `None` if the proof reach the end of the state, or the key to the last value in proof
+/// (next range proof should restart from this key).
+pub fn range_proof2<'a, 'cache, L: TrieLayout>(
+	db: &'a TrieDB<'a, 'cache, L>,
+	mut iter: TrieDBRawIterator<L>,
+	output: &mut impl CountedWrite,
+	exclusive_start: Option<&[u8]>,
+	size_limit: Option<usize>,
+) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
+	let start_written = output.written();
+
+	let mut prev_key_depth = 0;
+	let mut prev_pref_depth = None;
+	let mut pop_from = None;
+	let mut seek_to_value = false;
+	let seek_height = if let Some(start) = exclusive_start {
+		seek_to_value = iter.seek(db, start)?;
+		Some(start.len() * nibble_ops::NIBBLE_PER_BYTE)
+	} else {
+		None
+	};
+
+	while let Some(n) = { iter.next_raw_item_with_pop::<NoWrite>(db, None, false) } {
+		let (prefix, hash, node) = n?;
+
+		let pref_len = prefix.len();
+
+		if prev_pref_depth.map(|p| pref_len <= p).unwrap_or(false) {
+			// a pop
+			if pop_from.is_none() {
+				pop_from = Some(prev_key_depth);
+			}
+			prev_pref_depth = Some(pref_len);
+			//continue;
+		}
+
+		let mut prefix = prefix.clone();
+		let is_inline = hash.is_some();
+		let mut has_value = false;
+		// TODO node.node_plan() instead
+		let value = match node.node() {
+			Node::Leaf(partial, value) => {
+				prefix.append_partial(partial.right());
+				Some(value)
+			},
+			Node::Branch(_, value) => value,
+			Node::NibbledBranch(partial, _, value) => {
+				prefix.append_partial(partial.right());
+				value
+			},
+			_ => None,
+		};
+
+		let key_len = prefix.len();
+		let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
+		// TODO avoid instanciating key here
+		let key = key_slice.to_vec();
+
+
+
+		let Some(value) = value else {
+			prev_pref_depth = Some(pref_len);
+			continue;
+		};
+
+		// a push
+
+		if let Some(pop_from) = pop_from.take() {
+			// write prev pop
+			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0);  // one for branch index
+			let to_pop = pop_from - prev_key_depth;
+
+			let op = ProofOp::DropPartial;
+			output
+				.write(&[op.as_u8()])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+			let nb = VarInt(to_pop as u32)
+				.encode_into(output)
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		}
+
+		if let Some(extra_nibble) = maybe_extra_nibble {
+			return Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble)))
+		}
+
+		// value push key content TODO make a function
+
+		let to_write = key_len - prev_key_depth;
+		let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
+		let op = ProofOp::Partial;
+		output
+			.write(&[op.as_u8()])
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		let nb = VarInt(to_write as u32)
+			.encode_into(output)
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		let start_aligned = prev_key_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
+		let start_ix = prev_key_depth / nibble_ops::NIBBLE_PER_BYTE;
+		if start_aligned {
+			let off = if aligned { 0 } else { 1 };
+			let slice_to_write = &key[start_ix..key.len() - off];
+			output.write(slice_to_write);
+			if !aligned {
+				output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+			}
+		} else {
+			for i in start_ix..key.len() - 1 {
+				let mut b = key[i] << 4;
+				b |= key[i + 1] >> 4;
+				output.write(&[b]);
+			}
+			if !aligned {
+				let b = key[key.len() - 1] << 4;
+				output.write(&[b]);
+			}
+		}
+		prev_key_depth = key_len;
+		prev_pref_depth = Some(pref_len);
+
+		if seek_to_value && exclusive_start.as_ref().map(|s| s == &key).unwrap_or(false) {
+			seek_to_value = false;
+			// skip first value
+			continue;
+		} else {
+			seek_to_value = false;
+
+			// TODO non vec value
+			let value = match value {
+				Value::Node(hash, location) => match TrieDBRawIterator::<L>::fetch_value(
+					db,
+					&hash,
+					(key_slice, None),
+					location,
+				) {
+					Ok(value) => value,
+					Err(err) => return Err(err),
+				},
+				Value::Inline(value) => value.to_vec(),
+			};
+			put_value::<L>(value.as_slice(), output)?;
+			if !is_inline &&
+				size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
+			{
+				unimplemented!("pop all");
+			}
+		}
+	}
+
 	Ok(None)
 }
 
