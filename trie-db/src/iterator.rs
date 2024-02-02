@@ -1410,6 +1410,8 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			let mut i = 0;
 			let iter_possible = core::iter::from_fn(|| loop {
 				// value first.
+				// TODO should be a known iter but we don't know if inline -> should avoid first bit
+				// of is present at least.
 				if let Some(value_hash) = value_node.take() {
 					return Some(value_hash);
 				}
@@ -1534,7 +1536,86 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			if !is_inline &&
 				size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
 			{
-				unimplemented!("pop all");
+				let mut depth_from = key_len;
+				let mut depth = key_len;
+				let mut first = true;
+				while let Some(Crumb { node, hash, .. }) = iter.trail.pop() {
+					let range_aft = if first {
+						first = false;
+						// key we stop at, if branch then add all children
+						0
+					} else {
+						depth -= 1; // branch index
+						prefix.at(depth) + 1
+					};
+					let mut has_hash = false;
+					match node.node_plan() {
+						NodePlan::Branch { children, .. } |
+						NodePlan::NibbledBranch { children, .. } =>
+							for i in (range_aft as usize)..nibble_ops::NIBBLE_LENGTH {
+								if children[i].is_some() {
+									has_hash = true;
+									break;
+								}
+							},
+						_ => (),
+					}
+					if has_hash && depth < depth_from {
+						let op = ProofOp::DropPartial;
+						output
+							.write(&[op.as_u8()])
+							// TODO right error (when doing no_std writer / reader
+							.map_err(|e| {
+								Box::new(TrieError::IncompleteDatabase(Default::default()))
+							})?;
+
+						let nb = VarInt((depth_from - depth) as u32)
+							.encode_into(output)
+							// TODO right error (when doing no_std writer / reader
+							.map_err(|e| {
+								Box::new(TrieError::IncompleteDatabase(Default::default()))
+							})?;
+						depth_from = depth;
+					}
+					if has_hash {
+						let data = node.data();
+						let mut i = range_aft as usize;
+						let iter_possible = core::iter::from_fn(|| loop {
+							if i == nibble_ops::NIBBLE_LENGTH {
+								return None;
+							}
+							i += 1;
+							match node.node_plan() {
+								NodePlan::NibbledBranch { children, .. } |
+								NodePlan::Branch { children, .. } =>
+									return Some(match &children[i - 1] {
+										Some(NodeHandlePlan::Hash(hash_range)) =>
+											OpHash::Fix(&data[hash_range.clone()]),
+										Some(NodeHandlePlan::Inline(inline_range)) =>
+											OpHash::Var(&data[inline_range.clone()]),
+										None => OpHash::None,
+									}),
+								_ => unreachable!(),
+							}
+						});
+
+						encode_hashes::<_, _, L, _>(
+							output,
+							core::iter::empty(),
+							iter_possible,
+							0,
+							hash_header_no_bitmap,
+						)?;
+					}
+					match node.node_plan() {
+						NodePlan::NibbledBranch { partial, .. } |
+						NodePlan::Leaf { partial, .. } => {
+							depth -= partial.len();
+						},
+						NodePlan::Branch { .. } => {},
+						_ => (),
+					}
+				}
 			}
 		}
 	}
