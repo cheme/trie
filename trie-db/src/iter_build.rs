@@ -723,14 +723,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				last_drop = None;
 				can_seek = false;
 
-				let mut nb_byte = VarInt::decode_from(input).map_err(|_| ())? as usize;
-				let mut value = DBValue::with_capacity(nb_byte);
-				while nb_byte > 0 {
-					let bound = core::cmp::min(nb_byte, BUFF_LEN);
-					input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
-					value.extend_from_slice(&buff[..bound]);
-					nb_byte -= bound;
-				}
+				let value = read_value::<BUFF_LEN>(input, &mut buff)?;
 				// not the most efficient as this is guaranted to be a push
 				depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 				last_key = Some(key.inner().to_vec());
@@ -795,8 +788,11 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					i = 8 - nb_bitmap_hash;
 					bitmap = Bitmap1(no_bitmap_hash_header(buff[0]));
 				}
+				let mut expect_value = false;
+				let mut range_bef = 0;
+				let mut range_aft = nibble_ops::NIBBLE_PER_BYTE as u8;
 				if exiting.is_none() && can_seek {
-					let mut range_bef = 0;
+					expect_value = true;
 					if let Some(k) = start_key {
 						let start_nibble = NibbleSlice::new(k);
 
@@ -809,67 +805,82 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 							return Err(());
 						}
 					}
+				} else if exiting.is_some() {
+					range_aft = 0;
+					if let Some(at) = last_drop.take() {
+						range_aft = at + 1;
+					}
+				} else {
+					// should be unreachable, but error just in case.
+					return Err(());
+				}
+
+				if expect_value {
 					let has_value = read_bitmap(&mut i, &mut bitmap, input)?;
 
 					if has_value {
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
-							unimplemented!();
-
-						//depth_queue.set_cache_value(key.len(), Some(value));
+							let value = read_value::<BUFF_LEN>(input, &mut buff)?;
+							depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 						} else {
 							// hash value
-							unimplemented!()
+							let hash = read_hash::<L>(input)?;
+							depth_queue.set_cache_value(key.len(), CacheValue::Hash(hash));
 						}
 					}
+				}
 
-					let mut child_ix = 0;
-					let mut know_has_first_child = false;
-					loop {
-						let mut first_read = true;
-						while child_ix < range_bef {
-							let has_child = if know_has_first_child {
-								know_has_first_child = false;
-								true
-							} else if first_read {
-								first_read = false;
-								read_bitmap(&mut i, &mut bitmap, input)?
-							} else {
-								if let Some(has_child) = read_bitmap_no_fetch(&mut i, &bitmap) {
-									has_child
-								} else {
-									break;
-								}
-							};
-							if has_child {
-								if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
-									if is_inline {
-										// child inline
-										unimplemented!()
-									} else {
-										// child hash
-										unimplemented!()
-									}
-									child_ix += 1;
-								} else {
-									know_has_first_child = true;
-									break;
-								}
+				let mut child_ix = 0;
+				let mut know_has_first_child = false;
+				loop {
+					let mut first_read = true;
+					while child_ix < nibble_ops::NIBBLE_LENGTH {
+						if child_ix == range_bef as usize {
+							child_ix = range_aft as usize;
+							if child_ix == nibble_ops::NIBBLE_LENGTH {
+								break;
 							}
 						}
-						if child_ix == range_bef {
-							break
+						let has_child = if know_has_first_child {
+							know_has_first_child = false;
+							true
+						} else if first_read {
+							first_read = false;
+							read_bitmap(&mut i, &mut bitmap, input)?
+						} else {
+							if let Some(has_child) = read_bitmap_no_fetch(&mut i, &bitmap) {
+								has_child
+							} else {
+								break;
+							}
+						};
+						if has_child {
+							if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
+								if is_inline {
+									// child inline
+									let (value, len) = read_value_hash::<L>(input)?;
+									depth_queue.set_node(
+										key.len(),
+										child_ix as usize,
+										Some(ChildReference::Inline(value, len)),
+									);
+								} else {
+									// child hash
+									let hash = read_hash::<L>(input)?;
+									depth_queue.set_node(
+										key.len(),
+										child_ix as usize,
+										Some(ChildReference::Hash(hash, ())),
+									);
+								}
+								child_ix += 1;
+							} else {
+								know_has_first_child = true;
+								break;
+							}
 						}
 					}
-				} else if exiting.is_some() {
-					let mut unaccessed_range_aft = 0;
-					if let Some(at) = last_drop.take() {
-						unaccessed_range_aft = at + 1;
-					}
-					unimplemented!("hashes");
-				} else {
-					// should be unreachable, but error just in case.
-					return Err(());
 				}
 			},
 		}
@@ -900,4 +911,43 @@ fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
 	let r = Some(bitmap.get(*i));
 	*i += 1;
 	r
+}
+
+fn read_value<const BUFF_LEN: usize>(
+	input: &mut impl std::io::Read,
+	buff: &mut [u8; BUFF_LEN],
+) -> Result<DBValue, ()> {
+	let mut nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
+
+	let mut value = DBValue::with_capacity(nb_byte);
+	while nb_byte > 0 {
+		let bound = core::cmp::min(nb_byte, BUFF_LEN);
+		input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+		value.extend_from_slice(&buff[..bound]);
+		nb_byte -= bound;
+	}
+
+	Ok(value)
+}
+
+fn read_hash<L: TrieLayout>(input: &mut impl std::io::Read) -> Result<TrieHash<L>, ()> {
+	let mut hash = TrieHash::<L>::default();
+	input.read_exact(&mut hash.as_mut()).map_err(|_| ())?;
+
+	Ok(hash)
+}
+
+fn read_value_hash<L: TrieLayout>(
+	input: &mut impl std::io::Read,
+) -> Result<(TrieHash<L>, usize), ()> {
+	let mut nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
+
+	let mut hash = TrieHash::<L>::default();
+	if nb_byte > hash.as_ref().len() {
+		return Err(());
+	}
+
+	input.read_exact(&mut hash.as_mut()[..nb_byte]).map_err(|_| ())?;
+
+	Ok((hash, nb_byte))
 }
