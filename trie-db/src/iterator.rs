@@ -1539,6 +1539,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 				let mut depth_from = key_len;
 				let mut depth = key_len;
 				let mut first = true;
+				let mut one_hash_written = false;
 				while let Some(Crumb { node, hash, .. }) = iter.trail.pop() {
 					let range_aft = if first {
 						first = false;
@@ -1560,6 +1561,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 							},
 						_ => (),
 					}
+					one_hash_written |= has_hash;
 					if has_hash && depth < depth_from {
 						let op = ProofOp::DropPartial;
 						output
@@ -1615,6 +1617,11 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 						NodePlan::Branch { .. } => {},
 						_ => (),
 					}
+				}
+				if one_hash_written {
+					return Ok(Some(key));
+				} else {
+					return Ok(None);
 				}
 			}
 		}
