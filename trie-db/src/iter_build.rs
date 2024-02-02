@@ -44,12 +44,18 @@ fn new_vec_slice_buffer<HO>() -> [CacheNode<HO>; 16] {
 
 type ArrayNode<T> = [CacheNode<TrieHash<T>>; 16];
 
+enum CacheValue<V, H> {
+	Value(V),
+	Hash(H),
+	None,
+}
+
 /// Struct containing iteration cache, can be at most the length of the lowest nibble.
 ///
 /// Note that it is not memory optimal (all depth are allocated even if some are empty due
 /// to node partial).
 /// Three field are used, a cache over the children, an optional associated value and the depth.
-struct CacheAccum<T: TrieLayout, V>(Vec<(ArrayNode<T>, Option<V>, usize)>);
+struct CacheAccum<T: TrieLayout, V>(Vec<(ArrayNode<T>, CacheValue<V, TrieHash<T>>, usize)>);
 
 /// Initially allocated cache depth.
 const INITIAL_DEPTH: usize = 10;
@@ -65,9 +71,9 @@ where
 	}
 
 	#[inline(always)]
-	fn set_cache_value(&mut self, depth: usize, value: Option<V>) {
+	fn set_cache_value(&mut self, depth: usize, value: CacheValue<V, TrieHash<T>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), CacheValue::None, depth));
 		}
 		let last = self.0.len() - 1;
 		debug_assert!(self.0[last].2 <= depth);
@@ -77,7 +83,7 @@ where
 	#[inline(always)]
 	fn set_node(&mut self, depth: usize, nibble_index: usize, node: CacheNode<TrieHash<T>>) {
 		if self.0.is_empty() || self.0[self.0.len() - 1].2 < depth {
-			self.0.push((new_vec_slice_buffer(), None, depth));
+			self.0.push((new_vec_slice_buffer(), CacheValue::None, depth));
 		}
 
 		let last = self.0.len() - 1;
@@ -150,16 +156,18 @@ where
 				unimplemented!("TODO an error");
 			};
 
-			let value = if let Some(value) = value.as_ref() {
-				Some(if let Some(value) = Value::new_inline(value.as_ref(), T::MAX_INLINE_VALUE) {
-					value
-				} else {
-					hashed =
-						callback.process_inner_hashed_value((key.inner(), None), value.as_ref());
-					Value::Node(hashed.as_ref(), ())
-				})
-			} else {
-				None
+			let value = match &value {
+				CacheValue::Value(value) => Some(
+					if let Some(value) = Value::new_inline(value.as_ref(), T::MAX_INLINE_VALUE) {
+						value
+					} else {
+						hashed = callback
+							.process_inner_hashed_value((key.inner(), None), value.as_ref());
+						Value::Node(hashed.as_ref(), ())
+					},
+				),
+				CacheValue::Hash(hash) => Some(Value::Node(hash.as_ref(), ())),
+				CacheValue::None => None,
 			};
 
 			let is_branch = children.iter().any(|c| c.is_some());
@@ -188,7 +196,7 @@ where
 				true
 			};
 			if insert {
-				self.0.push((new_vec_slice_buffer(), None, target_depth));
+				self.0.push((new_vec_slice_buffer(), CacheValue::None, target_depth));
 			}
 			let (parent_children, _, _) = self.0.last_mut().unwrap();
 			debug_assert!(parent_children[index].is_none());
@@ -278,17 +286,19 @@ where
 		let pr = NibbleSlice::new_offset(&key_branch, branch_d);
 
 		let hashed;
-		let value = if let Some(v) = v.as_ref() {
-			Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
-				value
-			} else {
-				let mut prefix = NibbleSlice::new_offset(&key_branch, 0);
-				prefix.advance(branch_d);
-				hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
-				Value::Node(hashed.as_ref(), ())
-			})
-		} else {
-			None
+
+		let value = match &v {
+			CacheValue::Value(v) =>
+				Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
+					value
+				} else {
+					let mut prefix = NibbleSlice::new_offset(&key_branch, 0);
+					prefix.advance(branch_d);
+					hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
+					Value::Node(hashed.as_ref(), ())
+				}),
+			CacheValue::Hash(hash) => Some(Value::Node(hash.as_ref(), ())),
+			CacheValue::None => None,
 		};
 
 		// encode branch
@@ -321,17 +331,18 @@ where
 		let nkeyix = nkey.unwrap_or((branch_d, 0));
 		let pr = NibbleSlice::new_offset(&key_branch, nkeyix.0);
 		let hashed;
-		let value = if let Some(v) = v.as_ref() {
-			Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
-				value
-			} else {
-				let mut prefix = NibbleSlice::new_offset(&key_branch, 0);
-				prefix.advance(branch_d);
-				hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
-				Value::Node(hashed.as_ref(), ())
-			})
-		} else {
-			None
+		let value = match &v {
+			CacheValue::Value(v) =>
+				Some(if let Some(value) = Value::new_inline(v.as_ref(), T::MAX_INLINE_VALUE) {
+					value
+				} else {
+					let mut prefix = NibbleSlice::new_offset(&key_branch, 0);
+					prefix.advance(branch_d);
+					hashed = callback.process_inner_hashed_value(prefix.left(), v.as_ref());
+					Value::Node(hashed.as_ref(), ())
+				}),
+			CacheValue::Hash(hash) => Some(Value::Node(hash.as_ref(), ())),
+			CacheValue::None => None,
 		};
 
 		let encoded = T::Codec::branch_node_nibbled(
@@ -373,7 +384,7 @@ where
 			if common_depth == previous_value.0.as_ref().len() * nibble_ops::NIBBLE_PER_BYTE {
 				// the new key include the previous one : branch value case
 				// just stored value at branch depth
-				depth_queue.set_cache_value(common_depth, Some(previous_value.1));
+				depth_queue.set_cache_value(common_depth, CacheValue::Value(previous_value.1));
 			} else if depth_item >= last_depth {
 				// put previous with next (common branch previous value can be flush)
 				depth_queue.flush_value(callback, depth_item, &previous_value);
@@ -721,7 +732,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					nb_byte -= bound;
 				}
 				// not the most efficient as this is guaranted to be a push
-				depth_queue.set_cache_value(key.len(), Some(value));
+				depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 				last_key = Some(key.inner().to_vec());
 			},
 			ProofOp::DropPartial => {
@@ -803,7 +814,9 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					if has_value {
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
-							unimplemented!()
+							unimplemented!();
+
+						//depth_queue.set_cache_value(key.len(), Some(value));
 						} else {
 							// hash value
 							unimplemented!()
@@ -863,6 +876,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 		prev_op = Some(proof_op);
 	}
 }
+
 fn read_bitmap(
 	i: &mut usize,
 	bitmap: &mut Bitmap1,
@@ -878,6 +892,7 @@ fn read_bitmap(
 	*i += 1;
 	r
 }
+
 fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
 	if *i == 8 {
 		return None;
