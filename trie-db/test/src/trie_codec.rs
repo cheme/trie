@@ -218,9 +218,14 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	loop {
 		let mut proof = Vec::new();
 		let iter = trie_db::TrieDBRawIterator::new(&trie).unwrap();
-		start =
-			trie_db::range_proof2(&trie, iter, &mut proof, start.as_ref().map(Vec::as_slice), size_limit)
-				.unwrap();
+		start = trie_db::range_proof2(
+			&trie,
+			iter,
+			&mut proof,
+			start.as_ref().map(Vec::as_slice),
+			size_limit,
+		)
+		.unwrap();
 		println!("proof: {:?}", proof);
 		output.push(proof);
 		if start.is_none() {

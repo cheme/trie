@@ -1341,12 +1341,105 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 	let mut prev_pref_depth = None;
 	let mut pop_from = None;
 	let mut seek_to_value = false;
-	let seek_height = if let Some(start) = exclusive_start {
-		seek_to_value = iter.seek(db, start)?;
-		Some(start.len() * nibble_ops::NIBBLE_PER_BYTE)
-	} else {
-		None
-	};
+	if let Some(start) = exclusive_start {
+		let _ = iter.seek(db, start)?;
+		let trail_key = NibbleSlice::new(start);
+		let mut node_depth = 0;
+		for Crumb { node, .. } in iter.trail.iter() {
+			let pref_depth = node_depth;
+			let mut is_branch = false;
+			let (range_bef, value) = match node.node_plan() {
+				NodePlan::Leaf { partial, value, .. } => {
+					node_depth += partial.len();
+					seek_to_value = true;
+					(0, Some(value))
+				},
+				NodePlan::Branch { value, .. } => {
+					is_branch = true;
+					(trail_key.at(node_depth), value.as_ref())
+				},
+				NodePlan::NibbledBranch { partial, value, .. } => {
+					is_branch = true;
+					node_depth += partial.len();
+					(trail_key.at(node_depth), value.as_ref())
+				},
+				_ => unimplemented!(),
+			};
+
+			if node_depth > trail_key.len() {
+				seek_to_value = false;
+				break;
+			}
+
+			let mut has_hash = false;
+			if value.is_some() {
+				has_hash = true;
+			}
+			prev_pref_depth = Some(pref_depth);
+
+			match node.node_plan() {
+				NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } =>
+					for i in 0..range_bef {
+						if children[i as usize].is_some() {
+							has_hash = true;
+							break;
+						}
+					},
+				_ => (),
+			}
+			if !has_hash {
+				if is_branch {
+					node_depth += 1;
+				}
+				continue;
+			}
+
+			push_partial_key::<L>(node_depth, prev_key_depth, start, output)?;
+			prev_key_depth = node_depth;
+			if is_branch {
+				node_depth += 1;
+			}
+
+			let data = node.data();
+			let mut value_node = Some(match value {
+				Some(ValuePlan::Node(hash_range)) => OpHash::Fix(&data[hash_range.clone()]),
+				Some(ValuePlan::Inline(inline_range)) => OpHash::Var(&data[inline_range.clone()]),
+				None => OpHash::None,
+			});
+
+			let mut i = 0;
+			let iter_possible = core::iter::from_fn(|| loop {
+				// value first.
+				if let Some(value_hash) = value_node.take() {
+					return Some(value_hash);
+				}
+				if i == range_bef {
+					return None;
+				}
+				i += 1;
+				match node.node_plan() {
+					NodePlan::NibbledBranch { children, .. } |
+					NodePlan::Branch { children, .. } =>
+						return Some(match &children[i as usize - 1] {
+							Some(NodeHandlePlan::Hash(hash_range)) =>
+								OpHash::Fix(&data[hash_range.clone()]),
+							Some(NodeHandlePlan::Inline(inline_range)) =>
+								OpHash::Var(&data[inline_range.clone()]),
+							None => OpHash::None,
+						}),
+					_ => unreachable!(),
+				}
+			});
+
+			encode_hashes::<_, _, L, _>(
+				output,
+				core::iter::empty(),
+				iter_possible,
+				0,
+				hash_header_no_bitmap,
+			)?;
+		}
+	}
 
 	while let Some(n) = { iter.next_raw_item_with_pop::<NoWrite>(db, None, false) } {
 		let (prefix, hash, node) = n?;
@@ -1364,7 +1457,6 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 
 		let mut prefix = prefix.clone();
 		let is_inline = hash.is_some();
-		let mut has_value = false;
 		// TODO node.node_plan() instead
 		let value = match node.node() {
 			Node::Leaf(partial, value) => {
@@ -1384,8 +1476,6 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		// TODO avoid instanciating key here
 		let key = key_slice.to_vec();
 
-
-
 		let Some(value) = value else {
 			prev_pref_depth = Some(pref_len);
 			continue;
@@ -1395,7 +1485,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 
 		if let Some(pop_from) = pop_from.take() {
 			// write prev pop
-			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0);  // one for branch index
+			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0); // one for branch index
 			let to_pop = pop_from - prev_key_depth;
 
 			let op = ProofOp::DropPartial;
@@ -1415,42 +1505,12 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		}
 
 		// value push key content TODO make a function
+		push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
 
-		let to_write = key_len - prev_key_depth;
-		let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
-		let op = ProofOp::Partial;
-		output
-			.write(&[op.as_u8()])
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-		let nb = VarInt(to_write as u32)
-			.encode_into(output)
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-		let start_aligned = prev_key_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
-		let start_ix = prev_key_depth / nibble_ops::NIBBLE_PER_BYTE;
-		if start_aligned {
-			let off = if aligned { 0 } else { 1 };
-			let slice_to_write = &key[start_ix..key.len() - off];
-			output.write(slice_to_write);
-			if !aligned {
-				output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
-			}
-		} else {
-			for i in start_ix..key.len() - 1 {
-				let mut b = key[i] << 4;
-				b |= key[i + 1] >> 4;
-				output.write(&[b]);
-			}
-			if !aligned {
-				let b = key[key.len() - 1] << 4;
-				output.write(&[b]);
-			}
-		}
 		prev_key_depth = key_len;
 		prev_pref_depth = Some(pref_len);
 
-		if seek_to_value && exclusive_start.as_ref().map(|s| s == &key).unwrap_or(false) {
+		if seek_to_value {
 			seek_to_value = false;
 			// skip first value
 			continue;
@@ -1480,6 +1540,46 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 	}
 
 	Ok(None)
+}
+
+fn push_partial_key<L: TrieLayout>(
+	from: usize,
+	to: usize,
+	key: &[u8],
+	output: &mut impl CountedWrite,
+) -> Result<(), TrieHash<L>, CError<L>> {
+	let to_write = from - to;
+	let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
+	let op = ProofOp::Partial;
+	output
+		.write(&[op.as_u8()])
+		// TODO right error (when doing no_std writer / reader
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+	let nb = VarInt(to_write as u32)
+		.encode_into(output)
+		// TODO right error (when doing no_std writer / reader
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+	let start_aligned = to % nibble_ops::NIBBLE_PER_BYTE == 0;
+	let start_ix = to / nibble_ops::NIBBLE_PER_BYTE;
+	if start_aligned {
+		let off = if aligned { 0 } else { 1 };
+		let slice_to_write = &key[start_ix..key.len() - off];
+		output.write(slice_to_write);
+		if !aligned {
+			output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+		}
+	} else {
+		for i in start_ix..key.len() - 1 {
+			let mut b = key[i] << 4;
+			b |= key[i + 1] >> 4;
+			output.write(&[b]);
+		}
+		if !aligned {
+			let b = key[key.len() - 1] << 4;
+			output.write(&[b]);
+		}
+	}
+	Ok(())
 }
 
 #[cfg_attr(feature = "std", derive(Debug))]
