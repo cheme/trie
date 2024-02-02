@@ -262,11 +262,17 @@ fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
 		size_limit,
 	);
 	let (mut memdb, _) = MemoryDB::<T>::default_with_root();
+	let mut start_key: Option<Vec<u8>> = None;
 	for proof in proofs {
 		let cb_root = {
 			//ProcessEncodedNode<TrieHash<L>
 			let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-			trie_db::visit_range_proof::<T, _>(&mut proof.as_slice(), &mut cb, None).unwrap();
+			start_key = trie_db::visit_range_proof::<T, _>(
+				&mut proof.as_slice(),
+				&mut cb,
+				start_key.as_ref().map(Vec::as_slice),
+			)
+			.unwrap();
 			cb.root.unwrap()
 		};
 		assert_eq!(cb_root, root);

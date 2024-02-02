@@ -611,8 +611,8 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
 	input: &mut impl std::io::Read,
 	callback: &mut F,
-	known_start_key: Option<&[u8]>,
-) -> Result<(), ()> {
+	start_key: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, ()> {
 	use crate::iterator::{ProofOp, VarInt};
 	let mut key = NibbleVec::new();
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
@@ -620,16 +620,16 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
 	let mut can_seek = true;
-	let mut exiting = false;
-	let mut start_key: Option<Vec<u8>> = None;
+	let mut exiting: Option<Vec<u8>> = None;
 	let mut last_drop: Option<u8> = None;
 	let mut prev_op: Option<ProofOp> = None;
+	let mut last_key: Option<Vec<u8>> = None;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
 			match e.kind() {
 				std::io::ErrorKind::UnexpectedEof => {
 					depth_queue.drop_to(&mut key, None, callback);
-					return Ok(());
+					return Ok(exiting);
 				}, // aka ccannot read
 				_ => (),
 			}
@@ -646,7 +646,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					},
 					_ => (),
 				}
-				if exiting {
+				if exiting.is_some() {
 					return Err(());
 				}
 				last_drop = None;
@@ -674,7 +674,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 				key.append(&nibble_vec);
 				if can_seek {
-					if let Some(start_key) = known_start_key {
+					if let Some(start_key) = start_key {
 						let common =
 							crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
 						let common = core::cmp::min(common, key.len());
@@ -706,7 +706,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					},
 					_ => (),
 				}
-				if exiting {
+				if exiting.is_some() {
 					return Err(());
 				}
 				last_drop = None;
@@ -722,6 +722,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 				// not the most efficient as this is guaranted to be a push
 				depth_queue.set_cache_value(key.len(), Some(value));
+				last_key = Some(key.inner().to_vec());
 			},
 			ProofOp::DropPartial => {
 				match prev_op {
@@ -757,15 +758,15 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				// up to seek key.
 				// Or nodes after suspending, starting after last accessed child.
 				match prev_op {
-					Some(ProofOp::Value) => {
-						exiting = true;
+					Some(ProofOp::Value) | Some(ProofOp::DropPartial) => {
+						if last_key.is_none() {
+							return Err(());
+						}
+						exiting = last_key.clone();
 					},
 					Some(ProofOp::Hashes) => {
 						// consecutive hashes
 						return Err(());
-					},
-					Some(ProofOp::DropPartial) => {
-						exiting = true;
 					},
 					Some(ProofOp::Partial) =>
 						if !can_seek {
@@ -783,9 +784,9 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					i = 8 - nb_bitmap_hash;
 					bitmap = Bitmap1(no_bitmap_hash_header(buff[0]));
 				}
-				if !exiting && can_seek {
+				if exiting.is_none() && can_seek {
 					let mut range_bef = 0;
-					if let Some(k) = known_start_key {
+					if let Some(k) = start_key {
 						let start_nibble = NibbleSlice::new(k);
 
 						if start_nibble.len() > key.len() {
@@ -847,7 +848,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 							break
 						}
 					}
-				} else if exiting {
+				} else if exiting.is_some() {
 					let mut unaccessed_range_aft = 0;
 					if let Some(at) = last_drop.take() {
 						unaccessed_range_aft = at + 1;
