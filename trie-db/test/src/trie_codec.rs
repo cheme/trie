@@ -208,7 +208,7 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 		(db, root)
 	};
 	{
-		let mut trie = <TrieDBBuilder<L>>::new(&db, &root).build();
+		let trie = <TrieDBBuilder<L>>::new(&db, &root).build();
 		println!("original: {:?}", trie);
 	};
 
@@ -278,7 +278,7 @@ fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
 		assert_eq!(cb_root, root);
 	}
 	{
-		let mut trie = <TrieDBBuilder<T>>::new(&memdb, &root).build();
+		let trie = <TrieDBBuilder<T>>::new(&memdb, &root).build();
 		println!("Proved: {:?}", trie);
 		// check trie is complete by iterating on all values.
 		let iter = trie_db::TrieDBIterator::new(&trie).unwrap();

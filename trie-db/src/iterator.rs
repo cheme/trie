@@ -1462,7 +1462,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		}
 
 		let mut prefix = prefix.clone();
-		let is_inline = hash.is_some();
+		let is_inline = hash.is_none();
 		// TODO node.node_plan() instead
 		let value = match node.node() {
 			Node::Leaf(partial, value) => {

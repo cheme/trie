@@ -155,6 +155,7 @@ where
 			let Some((children, value, _depth)) = self.0.pop() else {
 				unimplemented!("TODO an error");
 			};
+			debug_assert!(_depth == key.len());
 
 			let value = match &value {
 				CacheValue::Value(value) => Some(
@@ -630,7 +631,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 
 	const BUFF_LEN: usize = 32;
 	let mut buff = [0u8; BUFF_LEN];
-	let mut can_seek = true;
+	let mut can_seek = start_key.is_some();
 	let mut exiting: Option<Vec<u8>> = None;
 	let mut last_drop: Option<u8> = None;
 	let mut prev_op: Option<ProofOp> = None;
@@ -922,7 +923,7 @@ fn read_value<const BUFF_LEN: usize>(
 	let mut value = DBValue::with_capacity(nb_byte);
 	while nb_byte > 0 {
 		let bound = core::cmp::min(nb_byte, BUFF_LEN);
-		input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+		input.read_exact(&mut buff[..bound]).map_err(|_| ())?; // TODO we got our own bufs: use read
 		value.extend_from_slice(&buff[..bound]);
 		nb_byte -= bound;
 	}
