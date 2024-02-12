@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::range_proof::{CountedWrite, NoWrite, RangeProofCodec, Read, Write};
 use core::ops::Range;
-use crate::range_proof::{CountedWrite, Write, Read, NoWrite};
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
@@ -799,7 +799,7 @@ impl<'a> OpHash<'a> {
 	}
 }
 
-pub fn encode_hashes<'a, I, I2, L, O>(
+pub fn encode_hashes<'a, I, I2, L, O, C>(
 	output: &mut O,
 	mut iter_defined: I, // TODO remove or use
 	mut iter_possible: I2,
@@ -813,6 +813,7 @@ where
 	L: TrieLayout + 'a,
 	I: Iterator<Item = OpHash<'a>>,
 	I2: Iterator<Item = OpHash<'a>>,
+	C: RangeProofCodec,
 {
 	let mut nexts: [OpHash; 8] = [OpHash::None; 8];
 	let mut header_written = false;
@@ -902,8 +903,7 @@ where
 						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 				},
 				OpHash::Var(s) => {
-					VarInt(s.len() as u32)
-						.encode_into(output)
+					C::varint_encode_into(s.len() as u32, output)
 						// TODO right error (when doing no_std writer / reader
 						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 					output
@@ -938,7 +938,7 @@ impl ProofOp {
 	}
 }
 
-fn put_value<L: TrieLayout>(
+fn put_value<L: TrieLayout, C: RangeProofCodec>(
 	value: &[u8],
 	output: &mut impl CountedWrite,
 ) -> Result<(), TrieHash<L>, CError<L>> {
@@ -947,8 +947,7 @@ fn put_value<L: TrieLayout>(
 		.write(&[op.as_u8()])
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	VarInt(value.len() as u32)
-		.encode_into(output)
+	C::varint_encode_into(value.len() as u32, output)
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
@@ -977,7 +976,7 @@ pub fn no_bitmap_hash_header(_: u8) -> u8 {
 ///
 /// Return `None` if the proof reach the end of the state, or the key to the last value in proof
 /// (next range proof should restart from this key).
-pub fn range_proof<'a, 'cache, L: TrieLayout>(
+pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 	db: &'a TrieDB<'a, 'cache, L>,
 	mut iter: TrieDBRawIterator<L>,
 	output: &mut impl CountedWrite,
@@ -1059,7 +1058,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 			let bound = node_depth / nibble_ops::NIBBLE_PER_BYTE +
 				if (node_depth % nibble_ops::NIBBLE_PER_BYTE) == 0 { 0 } else { 1 };
-			push_partial_key::<L>(node_depth, cursor, &start[..bound], output)?;
+			push_partial_key::<L, C>(node_depth, cursor, &start[..bound], output)?;
 			cursor = node_depth;
 			if is_branch {
 				node_depth += 1;
@@ -1098,7 +1097,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				}
 			});
 
-			encode_hashes::<_, _, L, _>(
+			encode_hashes::<_, _, L, _, C>(
 				output,
 				core::iter::empty(),
 				iter_possible,
@@ -1131,8 +1130,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-			let nb = VarInt(to_pop as u32)
-				.encode_into(output)
+			let nb = C::varint_encode_into(to_pop as u32, output)
 				// TODO right error (when doing no_std writer / reader
 				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
@@ -1171,7 +1169,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		}
 
 		// value push key content TODO make a function
-		push_partial_key::<L>(key_len, cursor, &key, output)?;
+		push_partial_key::<L, C>(key_len, cursor, &key, output)?;
 		cursor = key_len;
 
 		// TODO non vec value
@@ -1183,7 +1181,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 				},
 			Value::Inline(value) => value.to_vec(),
 		};
-		put_value::<L>(value.as_slice(), output)?;
+		put_value::<L, C>(value.as_slice(), output)?;
 		if !is_inline &&
 			size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
 		{
@@ -1220,8 +1218,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 						// TODO right error (when doing no_std writer / reader
 						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-					let nb = VarInt((depth_from - depth) as u32)
-						.encode_into(output)
+					let nb = C::varint_encode_into((depth_from - depth) as u32, output)
 						// TODO right error (when doing no_std writer / reader
 						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 					depth_from = depth;
@@ -1248,7 +1245,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 						}
 					});
 
-					encode_hashes::<_, _, L, _>(
+					encode_hashes::<_, _, L, _, C>(
 						output,
 						core::iter::empty(),
 						iter_possible,
@@ -1276,7 +1273,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 	Ok(None)
 }
 
-fn push_partial_key<L: TrieLayout>(
+fn push_partial_key<L: TrieLayout, C: RangeProofCodec>(
 	to: usize,
 	from: usize,
 	key: &[u8],
@@ -1289,8 +1286,7 @@ fn push_partial_key<L: TrieLayout>(
 		.write(&[op.as_u8()])
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	let nb = VarInt(to_write as u32)
-		.encode_into(output)
+	let nb = C::varint_encode_into(to_write as u32, output)
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 	let start_aligned = from % nibble_ops::NIBBLE_PER_BYTE == 0;
@@ -1314,83 +1310,4 @@ fn push_partial_key<L: TrieLayout>(
 		}
 	}
 	Ok(())
-}
-
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(PartialEq, Eq)]
-#[repr(transparent)]
-pub struct VarInt(u32);
-
-impl VarInt {
-	fn encoded_len(&self) -> usize {
-		if self.0 == 0 {
-			return 1
-		}
-		let len = 32 - self.0.leading_zeros() as usize;
-		if len % 7 == 0 {
-			len / 7
-		} else {
-			len / 7 + 1
-		}
-		/*
-		match self.0 {
-			l if l < 2 ^ 7 => 1, // leading 0: 25
-			l if l < 2 ^ 14 => 2, // leading 0: 18
-
-			l if l < 2 ^ 21 => 3, // 11
-			l if l < 2 ^ 28 => 4, // 4
-			_ => 5,
-		}
-		*/
-	}
-
-	fn encode_into(&self, out: &mut impl CountedWrite) -> core::result::Result<(), ()> {
-		let mut to_encode = self.0;
-		for _ in 0..self.encoded_len() - 1 {
-			out.write(&[0b1000_0000 | to_encode as u8]).map_err(|_| ())?;
-			to_encode >>= 7;
-		}
-		out.write(&[to_encode as u8]).map_err(|_| ())?;
-		Ok(())
-	}
-
-	fn decode(encoded: &[u8]) -> core::result::Result<(Self, usize), ()> {
-		let mut value = 0u32;
-		for (i, byte) in encoded.iter().enumerate() {
-			let last = byte & 0b1000_0000 == 0;
-			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
-			if last {
-				return Ok((VarInt(value), i + 1))
-			}
-		}
-		Err(())
-	}
-
-	pub fn decode_from(input: &mut impl std::io::Read) -> core::result::Result<u32, ()> {
-		let mut value = 0u32;
-		let mut buff = [0u8];
-		let mut i = 0;
-		loop {
-			input.read_exact(&mut buff[..]).map_err(|_| ())?;
-			let byte = buff[0];
-			let last = byte & 0b1000_0000 == 0;
-			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
-			if last {
-				return Ok(value);
-			}
-			i += 1;
-		}
-		Err(())
-	}
-}
-
-#[test]
-fn varint_encode_decode() {
-	let mut buf = Vec::new();
-	for i in 0..u16::MAX as u32 + 1 {
-		VarInt(i).encode_into(&mut buf);
-		assert_eq!(buf.len(), VarInt(i).encoded_len());
-		assert_eq!(Ok((VarInt(i), buf.len())), VarInt::decode(&buf));
-		buf.clear();
-	}
 }

@@ -14,8 +14,6 @@
 
 #[cfg_attr(feature = "std", derive(Debug))]
 pub enum RangeProofError {
-
-
 	/// No content to read from.
 	EndOfStream,
 
@@ -31,9 +29,20 @@ type Result<T> = core::result::Result<T, RangeProofError>;
 
 /// Trait similar to std::io::Read, but that can run in no_std.
 pub trait Read {
-   fn read_exact(&mut self, buf: &mut [u8]) -> Result<()>;
+	fn read_exact(&mut self, buf: &mut [u8]) -> Result<()>;
 }
 
+impl<'a> Read for &'a [u8] {
+	fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+		let to_copy = buf.len();
+		if self.len() < to_copy {
+			return Err(RangeProofError::EndOfStream);
+		}
+		buf.copy_from_slice(&self[..to_copy]);
+		*self = &self[to_copy..];
+		Ok(())
+	}
+}
 
 /// Trait similar to std::io::Write, but that can run in no_std.
 pub trait Write {
@@ -115,7 +124,6 @@ impl CountedWrite for NoWrite {
 	}
 }
 
-
 #[cfg(feature = "std")]
 impl From<std::io::Error> for RangeProofError {
 	fn from(e: std::io::Error) -> Self {
@@ -130,6 +138,19 @@ impl From<std::io::Error> for RangeProofError {
 /// Tools for encoding range proof.
 /// Mainly single byte header for ops and size encoding.
 pub trait RangeProofCodec {
+	fn varint_encoded_len(len: u32) -> usize;
+
+	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()>;
+
+	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)>;
+
+	fn varint_decode_from(input: &mut impl Read) -> Result<u32>;
+}
+
+/// Test codec.
+pub struct VarIntSimple;
+
+impl RangeProofCodec for VarIntSimple {
 	fn varint_encoded_len(len: u32) -> usize {
 		if len == 0 {
 			return 1
@@ -179,5 +200,16 @@ pub trait RangeProofCodec {
 			i += 1;
 		}
 		Err(RangeProofError::EndOfStream)
+	}
+}
+
+#[test]
+fn varint_encode_decode() {
+	let mut buf = Vec::new();
+	for i in 0..u16::MAX as u32 + 1 {
+		VarIntSimple::varint_encode_into(i, &mut buf);
+		assert_eq!(buf.len(), VarIntSimple::varint_encoded_len(i));
+		assert_eq!((i, buf.len()), VarIntSimple::varint_decode(&buf).unwrap());
+		buf.clear();
 	}
 }

@@ -218,7 +218,7 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	loop {
 		let mut proof = Vec::new();
 		let iter = trie_db::TrieDBRawIterator::new(&trie).unwrap();
-		start = trie_db::range_proof(
+		start = trie_db::range_proof::<_, trie_db::range_proof::VarIntSimple>(
 			&trie,
 			iter,
 			&mut proof,
@@ -267,7 +267,7 @@ fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
 		let cb_root = {
 			//ProcessEncodedNode<TrieHash<L>
 			let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-			start_key = trie_db::visit_range_proof::<T, _>(
+			start_key = trie_db::visit_range_proof::<T, _, trie_db::range_proof::VarIntSimple>(
 				&mut proof.as_slice(),
 				&mut cb,
 				start_key.as_ref().map(Vec::as_slice),

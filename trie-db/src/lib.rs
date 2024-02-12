@@ -50,10 +50,10 @@ use node::NodeOwned;
 
 pub mod node;
 pub mod proof;
+pub mod range_proof;
 pub mod recorder;
 pub mod triedb;
 pub mod triedbmut;
-pub mod range_proof;
 
 mod iter_build;
 mod iterator;

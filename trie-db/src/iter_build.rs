@@ -22,6 +22,7 @@ use crate::{
 	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
+	range_proof::RangeProofCodec,
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
@@ -620,12 +621,18 @@ impl<T: TrieLayout> ProcessEncodedNode<TrieHash<T>> for TrieRootUnhashed<T> {
 	}
 }
 
-pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHash<L>>>(
-	input: &mut impl std::io::Read,
+pub fn visit_range_proof<
+	'a,
+	'cache,
+	L: TrieLayout,
+	F: ProcessEncodedNode<TrieHash<L>>,
+	C: RangeProofCodec,
+>(
+	input: &mut impl crate::range_proof::Read,
 	callback: &mut F,
 	start_key: Option<&[u8]>,
 ) -> Result<Option<Vec<u8>>, ()> {
-	use crate::iterator::{ProofOp, VarInt};
+	use crate::iterator::ProofOp;
 	let mut key = NibbleVec::new();
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
 
@@ -638,8 +645,8 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 	let mut last_key: Option<Vec<u8>> = None;
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
-			match e.kind() {
-				std::io::ErrorKind::UnexpectedEof => {
+			match &e {
+				crate::range_proof::RangeProofError::EndOfStream => {
 					depth_queue.drop_to(&mut key, None, callback);
 					return Ok(exiting);
 				}, // aka ccannot read
@@ -662,7 +669,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					return Err(());
 				}
 				last_drop = None;
-				let size = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				let size = C::varint_decode_from(input).map_err(|_| ())? as usize;
 				if size == 0 {
 					return Err(());
 				}
@@ -725,7 +732,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				last_drop = None;
 				can_seek = false;
 
-				let value = read_value::<BUFF_LEN>(input, &mut buff)?;
+				let value = read_value::<BUFF_LEN, C>(input, &mut buff)?;
 				// not the most efficient as this is guaranted to be a push
 				depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 				last_key = Some(key.inner().to_vec());
@@ -748,7 +755,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 				can_seek = false;
 
-				let to_drop = VarInt::decode_from(input).map_err(|_| ())? as usize;
+				let to_drop = C::varint_decode_from(input).map_err(|_| ())? as usize;
 				if to_drop == 0 {
 					return Err(());
 				}
@@ -823,7 +830,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					if has_value {
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
-							let value = read_value::<BUFF_LEN>(input, &mut buff)?;
+							let value = read_value::<BUFF_LEN, C>(input, &mut buff)?;
 							depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 						} else {
 							// hash value
@@ -861,7 +868,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 							if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
 								if is_inline {
 									// child inline
-									let (value, len) = read_value_hash::<L>(input)?;
+									let (value, len) = read_value_hash::<L, C>(input)?;
 									depth_queue.set_node(
 										key.len(),
 										child_ix as usize,
@@ -899,7 +906,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 fn read_bitmap(
 	i: &mut usize,
 	bitmap: &mut Bitmap1,
-	input: &mut impl std::io::Read,
+	input: &mut impl crate::range_proof::Read,
 ) -> Result<bool, ()> {
 	let mut buff = [0u8; 1];
 	if *i == 8 {
@@ -921,11 +928,11 @@ fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
 	r
 }
 
-fn read_value<const BUFF_LEN: usize>(
-	input: &mut impl std::io::Read,
+fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
+	input: &mut impl crate::range_proof::Read,
 	buff: &mut [u8; BUFF_LEN],
 ) -> Result<DBValue, ()> {
-	let mut nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
+	let mut nb_byte = C::varint_decode_from(input).map_err(|_| ())? as usize;
 
 	let mut value = DBValue::with_capacity(nb_byte);
 	while nb_byte > 0 {
@@ -938,17 +945,17 @@ fn read_value<const BUFF_LEN: usize>(
 	Ok(value)
 }
 
-fn read_hash<L: TrieLayout>(input: &mut impl std::io::Read) -> Result<TrieHash<L>, ()> {
+fn read_hash<L: TrieLayout>(input: &mut impl crate::range_proof::Read) -> Result<TrieHash<L>, ()> {
 	let mut hash = TrieHash::<L>::default();
 	input.read_exact(&mut hash.as_mut()).map_err(|_| ())?;
 
 	Ok(hash)
 }
 
-fn read_value_hash<L: TrieLayout>(
-	input: &mut impl std::io::Read,
+fn read_value_hash<L: TrieLayout, C: RangeProofCodec>(
+	input: &mut impl crate::range_proof::Read,
 ) -> Result<(TrieHash<L>, usize), ()> {
-	let nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
+	let nb_byte = C::varint_decode_from(input).map_err(|_| ())? as usize;
 
 	let mut hash = TrieHash::<L>::default();
 	if nb_byte > hash.as_ref().len() {
