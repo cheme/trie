@@ -1192,7 +1192,6 @@ pub fn no_bitmap_hash_header(_: u8) -> u8 {
 	0
 }
 
-// TODO chunk it TODO Write like trait out of std.
 /// `exclusive_start` is the last returned key from a previous proof.
 /// Proof will there for contains seek information for this key. The proof
 /// itself may contain value that where already returned by previous proof.
@@ -1205,125 +1204,6 @@ pub fn no_bitmap_hash_header(_: u8) -> u8 {
 /// Return `None` if the proof reach the end of the state, or the key to the last value in proof
 /// (next range proof should restart from this key).
 pub fn range_proof<'a, 'cache, L: TrieLayout>(
-	mut iter: crate::triedb::TrieDBIterator<'a, 'cache, L>,
-	output: &mut impl CountedWrite,
-	exclusive_start: Option<&[u8]>,
-	size_limit: Option<usize>,
-) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
-	let start_written = output.written();
-
-	let mut prev_key = Vec::new();
-	let mut prev_key_len = 0;
-	let mut callback = IterCallback::new(output, exclusive_start);
-
-	if let Some(start) = exclusive_start {
-		iter.seek(start)?;
-	}
-
-	while let Some(n) = { iter.next_with_callback(&mut callback) } {
-		let (key, value) = n?;
-		let key_len = key.len() * nibble_ops::NIBBLE_PER_BYTE;
-		// Note that this is largely suboptimal: could be rewritten to use directly node iterator,
-		// but this makes code simple (no need to manage branch skipping).
-		let common_depth = nibble_ops::biggest_depth(&prev_key[..], &key[..]);
-
-		if common_depth < prev_key_len {
-			let op = ProofOp::DropPartial;
-			callback
-				.output
-				.write(&[op.as_u8()])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-
-			let nb = VarInt((prev_key_len - common_depth) as u32)
-				.encode_into(callback.output)
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-		}
-		debug_assert!(common_depth < key_len);
-		if common_depth < key_len {
-			let to_write = key_len - common_depth;
-			let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
-			let op = ProofOp::Partial;
-			callback
-				.output
-				.write(&[op.as_u8()])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			let nb = VarInt(to_write as u32)
-				.encode_into(callback.output)
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			let start_aligned = common_depth % nibble_ops::NIBBLE_PER_BYTE == 0;
-			let start_ix = common_depth / nibble_ops::NIBBLE_PER_BYTE;
-			if start_aligned {
-				let off = if aligned { 0 } else { 1 };
-				let slice_to_write = &key[start_ix..key.len() - off];
-				callback.output.write(slice_to_write);
-				if !aligned {
-					callback.output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
-				}
-			} else {
-				for i in start_ix..key.len() - 1 {
-					let mut b = key[i] << 4;
-					b |= key[i + 1] >> 4;
-					callback.output.write(&[b]);
-				}
-				if !aligned {
-					let b = key[key.len() - 1] << 4;
-					callback.output.write(&[b]);
-				}
-			}
-		}
-
-		let mut skip_value = false;
-		if callback.first {
-			if let Some(key_start) = exclusive_start {
-				if key == key_start {
-					skip_value = true;
-				}
-			}
-		}
-
-		if !skip_value {
-			put_value::<L>(value.as_slice(), callback.output)?;
-			if size_limit
-				.map(|l| (callback.output.written() - start_written) >= l)
-				.unwrap_or(false)
-			{
-				let (mut raw, db) = iter.into_raw();
-				for c in raw.trail.iter_mut() {
-					c.status = Status::Exiting;
-				}
-				callback.write_aft = true;
-				while let Some(r) = raw.next_item_with_callback(db, &mut callback) {
-					let _ = r?;
-				}
-				if !callback.aft_written {
-					return Ok(None);
-				}
-				return Ok(Some(key));
-			}
-		}
-
-		prev_key = key;
-		prev_key_len = key_len;
-	}
-	Ok(None)
-}
-
-/// `exclusive_start` is the last returned key from a previous proof.
-/// Proof will there for contains seek information for this key. The proof
-/// itself may contain value that where already returned by previous proof.
-/// `size_limit` is a minimal limit, after being reach
-/// child sibling will be added (up to NB_CHILDREN - 1 * stack node depth and stack node depth drop
-/// key info). Also limit is only applyied after a first new value is written.
-/// Inline value contain in the proof are also added as they got no additional
-/// size cost.
-///
-/// Return `None` if the proof reach the end of the state, or the key to the last value in proof
-/// (next range proof should restart from this key).
-pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 	db: &'a TrieDB<'a, 'cache, L>,
 	mut iter: TrieDBRawIterator<L>,
 	output: &mut impl CountedWrite,
@@ -1333,14 +1213,12 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 	let start_written = output.written();
 
 	let mut prev_key_depth = 0; // TODO rename as written cursor depth
-	let mut prev_pref_depth = None;
 	let mut seek_to_value = false;
 	if let Some(start) = exclusive_start {
 		let _ = iter.seek(db, start)?;
 		let trail_key = NibbleSlice::new(start);
 		let mut node_depth = 0;
 		for Crumb { node, .. } in iter.trail.iter() {
-			prev_pref_depth = Some(node_depth);
 			let mut is_branch = false;
 			let (range_bef, value) = match node.node_plan() {
 				NodePlan::Leaf { partial, value, .. } => {
@@ -1466,9 +1344,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 
 		let pref_len = prefix.len();
 
-		if prev_pref_depth.map(|p| pref_len <= p).unwrap_or(false) {
-			// TODO assert not < (should be eq only)
-			// a pop
+		if pref_len < prev_key_depth {
 			// write prev pop
 			let pop_from = prev_key_depth;
 			prev_key_depth = pref_len - 1; // one for branch index
@@ -1487,7 +1363,6 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 
 			//continue;
 		}
-		prev_pref_depth = Some(pref_len);
 
 		let mut prefix = prefix.clone();
 		let is_inline = hash.is_none();
