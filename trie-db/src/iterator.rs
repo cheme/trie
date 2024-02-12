@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{CountedWrite, NoWrite, RangeProofCodec, Read, Write, Bitmap1};
+use crate::range_proof::{Bitmap1, CountedWrite, NoWrite, RangeProofCodec, Read, Write, ProofOp};
 use core::ops::Range;
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
@@ -611,36 +611,6 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 	}
 }
 
-//--
-// warp sync : bunch of partial and val + left hand hash child + right hand hash child
-// random proof: can put hash child anywhere: need index
-// p -> p -> p
-//
-
-// TODO rename Partial per key
-pub enum ProofOp {
-	Partial,     // slice next, with size as number of nibbles. Attached could be size.
-	Value,       // value next. Attached could be size.
-	DropPartial, // followed by depth. Attached could be size.
-	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
-	              * defined hash then defined amongst them, then 8 next and repeat
-	              * for possible. Attached could be bitmap.
-	              * When structure allows either inline or hash, we add a bit in the bitmap
-	              * to indicate if inline or single value hash: the first one */
-}
-
-pub trait ProofOpHeadCodec {
-	/// return range of value that can be attached to this op.
-	/// for bitmap it return bitmap len.
-	fn attached_range(op: ProofOp) -> u8;
-
-	/// op can have some data attached (depending on encoding).
-	fn encode_op(op: ProofOp, attached: u8) -> u8;
-
-	/// Return op and range attached.
-	fn decode_op(encoded: u8) -> (ProofOp, u8);
-}
-
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, Copy)]
 pub enum OpHash<'a> {
@@ -694,15 +664,17 @@ where
 		i_hash = 0;
 		let mut bitmap = Bitmap1::default();
 
-		let header_bitmap_len = C::header_hash_bitmap_size() as usize;
-		let bound = if !header_written && header_bitmap_len > 0 {
-			header_bitmap_len
-		} else {
-			if !header_written {
+		let header_bitmap_len = C::op_attached_range(ProofOp::Hashes);
+		let bound = if !header_written {
+			if let Some(l) = header_bitmap_len {
+				l as usize
+			} else {
 				header_written = true;
-				let header = C::header_hash_with_bitmap(bitmap.clone());
+				let header = C::encode_op(ProofOp::Hashes, None);
 				buff_bef_first.push(header);
+				8
 			}
+		} else {
 			8
 		};
 
@@ -747,7 +719,7 @@ where
 
 		if !header_written {
 			header_written = true;
-			let header = C::header_hash_with_bitmap(bitmap);
+			let header = C::encode_op(ProofOp::Hashes, Some(bitmap.0));
 			buff_bef_first.push(header);
 		} else {
 			buff_bef_first.push(bitmap.0);
@@ -779,26 +751,6 @@ where
 		}
 	}
 	Ok(())
-}
-
-impl ProofOp {
-	pub fn as_u8(&self) -> u8 {
-		match self {
-			ProofOp::Partial => 0,
-			ProofOp::Value => 1,
-			ProofOp::DropPartial => 2,
-			ProofOp::Hashes => 3,
-		}
-	}
-	pub fn from_u8(encoded: u8) -> Option<Self> {
-		Some(match encoded {
-			0 => ProofOp::Partial,
-			1 => ProofOp::Value,
-			2 => ProofOp::DropPartial,
-			3 => ProofOp::Hashes,
-			_ => return None,
-		})
-	}
 }
 
 fn put_value<L: TrieLayout, C: RangeProofCodec>(
@@ -952,11 +904,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				}
 			});
 
-			encode_hashes::<_, _, L, _, C>(
-				output,
-				core::iter::empty(),
-				iter_possible,
-			)?;
+			encode_hashes::<_, _, L, _, C>(output, core::iter::empty(), iter_possible)?;
 		}
 	}
 
@@ -1098,11 +1046,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 						}
 					});
 
-					encode_hashes::<_, _, L, _, C>(
-						output,
-						core::iter::empty(),
-						iter_possible,
-					)?;
+					encode_hashes::<_, _, L, _, C>(output, core::iter::empty(), iter_possible)?;
 				}
 				match node.node_plan() {
 					NodePlan::NibbledBranch { partial, .. } | NodePlan::Leaf { partial, .. } => {

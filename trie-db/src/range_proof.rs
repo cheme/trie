@@ -135,6 +135,18 @@ impl From<std::io::Error> for RangeProofError {
 	}
 }
 
+// TODO rename Partial per key
+pub enum ProofOp {
+	Partial,     // slice next, with size as number of nibbles. Attached could be size.
+	Value,       // value next. Attached could be size.
+	DropPartial, // followed by depth. Attached could be size.
+	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
+	              * defined hash then defined amongst them, then 8 next and repeat
+	              * for possible. Attached could be bitmap.
+	              * When structure allows either inline or hash, we add a bit in the bitmap
+	              * to indicate if inline or single value hash: the first one */
+}
+
 /// Tools for encoding range proof.
 /// Mainly single byte header for ops and size encoding.
 pub trait RangeProofCodec {
@@ -145,12 +157,16 @@ pub trait RangeProofCodec {
 	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)>;
 
 	fn varint_decode_from(input: &mut impl Read) -> Result<u32>;
-	// number of bit from hashes bitmap that can be include in header.
-	fn header_hash_bitmap_size() -> u8;
-	// header with bitmap.
-	fn header_hash_with_bitmap(bitmap: Bitmap1) -> u8;
-	// get bitmap with header_hash_bitmap_size first bit from header.
-	fn header_hash_bitmap_from(header: u8) -> Bitmap1;
+	/// return range of value that can be attached to this op.
+	/// for bitmap it returns bitmap len.
+	/// for others it attached a max size (if max then it got sub from varint next).
+	fn op_attached_range(op: ProofOp) -> Option<u8>;
+
+	/// op can have some data attached (depending on encoding).
+	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8;
+
+	/// Return op and range attached.
+	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)>;
 }
 
 /// Test codec.
@@ -208,16 +224,31 @@ impl RangeProofCodec for VarIntSimple {
 		Err(RangeProofError::EndOfStream)
 	}
 
-	fn header_hash_with_bitmap(_: Bitmap1) -> u8 {
-		crate::iterator::ProofOp::Hashes.as_u8()
+	fn op_attached_range(_: ProofOp) -> Option<u8> {
+		None
 	}
 
-	fn header_hash_bitmap_size() -> u8 {
-		0
+	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8 {
+		debug_assert!(attached.is_none());
+		match op {
+			ProofOp::Partial => 0,
+			ProofOp::Value => 1,
+			ProofOp::DropPartial => 2,
+			ProofOp::Hashes => 3,
+		}
 	}
 
-	fn header_hash_bitmap_from(_: u8) -> Bitmap1 {
-		unreachable!("hash bitmap size 0 should be checked");
+	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)> {
+		Some((
+			match encoded {
+				0 => ProofOp::Partial,
+				1 => ProofOp::Value,
+				2 => ProofOp::DropPartial,
+				3 => ProofOp::Hashes,
+				_ => return None,
+			},
+			None,
+		))
 	}
 }
 
@@ -250,7 +281,6 @@ impl Bitmap1 {
 		self.0 |= 0b0000_0001 << i;
 	}
 }
-
 
 #[test]
 fn varint_encode_decode() {

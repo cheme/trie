@@ -18,11 +18,10 @@
 //! See `trie_visit` function.
 
 use crate::{
-	range_proof::{Bitmap1},
 	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
-	range_proof::RangeProofCodec,
+	range_proof::{Bitmap1, RangeProofCodec, ProofOp},
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
@@ -632,7 +631,6 @@ pub fn visit_range_proof<
 	callback: &mut F,
 	start_key: Option<&[u8]>,
 ) -> Result<Option<Vec<u8>>, ()> {
-	use crate::iterator::ProofOp;
 	let mut key = NibbleVec::new();
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
 
@@ -654,9 +652,10 @@ pub fn visit_range_proof<
 			}
 			return Err(());
 		}; // TODO right erro from trie crate
-		let proof_op = ProofOp::from_u8(buff[0]).ok_or(())?;
+		let (proof_op, attached) = C::decode_op(buff[0]).ok_or(())?;
 		match proof_op {
 			ProofOp::Partial => {
+				unimplemented!("manage attached");
 				// TODO check the partial is post prev partial!!
 				match prev_op {
 					Some(ProofOp::Partial) => {
@@ -711,6 +710,7 @@ pub fn visit_range_proof<
 				}
 			},
 			ProofOp::Value => {
+				unimplemented!("manage attached");
 				match prev_op {
 					Some(ProofOp::Value) => {
 						// no two value at same heigth
@@ -738,6 +738,7 @@ pub fn visit_range_proof<
 				last_key = Some(key.inner().to_vec());
 			},
 			ProofOp::DropPartial => {
+				unimplemented!("manage attached");
 				match prev_op {
 					Some(ProofOp::DropPartial) => {
 						// consecutive drop
@@ -790,12 +791,12 @@ pub fn visit_range_proof<
 							return Err(());
 						},
 				}
-				let nb_bitmap_hash = C::header_hash_bitmap_size();
 				let mut i = 8; // trigger a header read.
 				let mut bitmap = Bitmap1(0);
-				if nb_bitmap_hash > 0 {
+				if let Some(att) = attached {
+					let nb_bitmap_hash = C::op_attached_range(ProofOp::Hashes).expect("has attached");
 					i = 8 - (nb_bitmap_hash as usize);
-					bitmap = C::header_hash_bitmap_from(buff[0]);
+					bitmap = Bitmap1(att);
 				}
 				let mut expect_value = false;
 				let mut range_bef = 0;
