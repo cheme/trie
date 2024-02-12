@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use core::ops::Range;
+use crate::range_proof::{CountedWrite, Write, Read, NoWrite};
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
@@ -1618,68 +1619,5 @@ fn varint_encode_decode() {
 		assert_eq!(buf.len(), VarInt(i).encoded_len());
 		assert_eq!(Ok((VarInt(i), buf.len())), VarInt::decode(&buf));
 		buf.clear();
-	}
-}
-
-pub trait CountedWrite: std::io::Write {
-	// size written in write.
-	// Warning depending on implementation this
-	// is not starting at same size, so should
-	// always be used to compare with an initial size.
-	fn written(&self) -> usize;
-}
-
-pub struct Counted<T: std::io::Write> {
-	pub inner: T,
-	pub written: usize,
-}
-
-impl<T: std::io::Write> From<T> for Counted<T> {
-	fn from(inner: T) -> Self {
-		Self { inner, written: 0 }
-	}
-}
-
-// TODO a specific trait. and this for std only
-impl<T: std::io::Write> std::io::Write for Counted<T> {
-	fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-		let written = self.inner.write(buf)?;
-		self.written += written;
-		Ok(written)
-	}
-
-	fn flush(&mut self) -> std::io::Result<()> {
-		self.inner.flush()
-	}
-}
-
-impl<T: std::io::Write> CountedWrite for Counted<T> {
-	fn written(&self) -> usize {
-		self.written
-	}
-}
-
-impl CountedWrite for Vec<u8> {
-	fn written(&self) -> usize {
-		self.len()
-	}
-}
-
-#[derive(Clone, Copy)]
-pub struct NoWrite;
-
-impl std::io::Write for NoWrite {
-	fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-		Err(std::io::ErrorKind::Unsupported.into())
-	}
-
-	fn flush(&mut self) -> std::io::Result<()> {
-		Ok(())
-	}
-}
-
-impl CountedWrite for NoWrite {
-	fn written(&self) -> usize {
-		0
 	}
 }
