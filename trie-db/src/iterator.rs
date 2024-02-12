@@ -846,7 +846,7 @@ impl<'a> OpHash<'a> {
 
 pub fn encode_hashes<'a, I, I2, L, O>(
 	output: &mut O,
-	mut iter_defined: I,
+	mut iter_defined: I, // TODO remove or use
 	mut iter_possible: I2,
 	header_bitmap_len: usize, // TODO from trait
 	header_init: fn(u8) -> u8, /* TODO from trait
@@ -874,9 +874,19 @@ where
 		hash_len += i_hash;
 		i_bitmap = 0;
 		i_hash = 0;
-		let bound = if !header_written && header_bitmap_len > 0 { header_bitmap_len } else { 8 };
 		let mut bitmap = Bitmap1::default();
-		let mut i = 0;
+
+		let bound = if !header_written && header_bitmap_len > 0 {
+			header_bitmap_len
+		} else {
+			if !header_written {
+				header_written = true;
+				let header = header_init(bitmap.0);
+				buff_bef_first.push(header);
+			}
+			8
+		};
+
 		if let Some(h) = prev_bit.take() {
 			debug_assert!(h.is_some());
 			if h.is_var() {
@@ -885,66 +895,49 @@ where
 			i_bitmap += 1;
 			if h.is_some() {
 				nexts[i_hash] = h;
-				if i_hash == 0 {
-					output
-						.write(buff_bef_first.as_slice())
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-				}
 				i_hash += 1;
 			}
 		}
+
 		while let Some(h) = iter_possible.next() {
 			if h.is_some() {
 				bitmap.set(i_bitmap);
-			}
-			i_bitmap += 1;
-			if i_bitmap == bound {
-				prev_bit = Some(h);
-				break;
-			}
-			if h.is_var() {
-				bitmap.set(i_bitmap);
+				i_bitmap += 1;
+				if i_bitmap == bound {
+					prev_bit = Some(h);
+					break;
+				}
+				if h.is_var() {
+					bitmap.set(i_bitmap);
+				}
 			}
 			i_bitmap += 1;
 			if h.is_some() {
 				nexts[i_hash] = h;
-				if i_hash == 0 {
-					output
-						.write(buff_bef_first.as_slice())
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-				}
 				i_hash += 1;
 			}
 			if i_bitmap == bound {
 				break;
 			}
 		}
-		if i_bitmap == 0 && header_written {
+
+		if i_bitmap == 0 {
+			debug_assert!(header_written && i_hash == 0);
 			break
 		}
+
 		if !header_written {
 			header_written = true;
 			let header = header_init(bitmap.0);
-			if i_hash > 0 {
-				output
-					.write(&[header])
-					// TODO right error (when doing no_std writer / reader
-					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			} else {
-				buff_bef_first.push(header);
-			}
+			buff_bef_first.push(header);
 		} else {
-			if i_hash > 0 {
-				output
-					.write(&[bitmap.0])
-					// TODO right error (when doing no_std writer / reader
-					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-			} else {
-				buff_bef_first.push(bitmap.0);
-			}
+			buff_bef_first.push(bitmap.0);
 		}
+		output
+			.write(&buff_bef_first)
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		buff_bef_first.clear();
 		for j in 0..i_hash {
 			match nexts[j] {
 				OpHash::Fix(s) => {
@@ -1341,9 +1334,8 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 ) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
 	let start_written = output.written();
 
-	let mut prev_key_depth = 0;
+	let mut prev_key_depth = 0; // TODO rename as written cursor depth
 	let mut prev_pref_depth = None;
-	let mut pop_from = None;
 	let mut seek_to_value = false;
 	if let Some(start) = exclusive_start {
 		let _ = iter.seek(db, start)?;
@@ -1355,7 +1347,6 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			let (range_bef, value) = match node.node_plan() {
 				NodePlan::Leaf { partial, value, .. } => {
 					node_depth += partial.len();
-					seek_to_value = true;
 					(0, Some(value))
 				},
 				NodePlan::Branch { value, .. } => {
@@ -1365,14 +1356,29 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 				NodePlan::NibbledBranch { partial, value, .. } => {
 					is_branch = true;
 					node_depth += partial.len();
-					(trail_key.at(node_depth), value.as_ref())
+					(
+						if node_depth >= trail_key.len() {
+							// seek dest: nothing already read, no hash
+							0
+						} else {
+							trail_key.at(node_depth)
+						},
+						value.as_ref(),
+					)
 				},
 				_ => unimplemented!(),
 			};
 
 			if node_depth > trail_key.len() {
+				// should be unreachable if stop at value: maybe just error in this case
 				seek_to_value = false;
 				break;
+			} else if node_depth == trail_key.len() {
+				if value.is_none() {
+					// TODO proper error not starting at a value.
+					return Err(Box::new(TrieError::IncompleteDatabase(Default::default())));
+				}
+				seek_to_value = true;
 			}
 
 			let mut has_hash = false;
@@ -1380,15 +1386,18 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 				has_hash = true;
 			}
 
-			match node.node_plan() {
-				NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } =>
-					for i in 0..range_bef {
-						if children[i as usize].is_some() {
-							has_hash = true;
-							break;
-						}
-					},
-				_ => (),
+			if !has_hash {
+				match node.node_plan() {
+					NodePlan::Branch { children, .. } |
+					NodePlan::NibbledBranch { children, .. } =>
+						for i in 0..range_bef {
+							if children[i as usize].is_some() {
+								has_hash = true;
+								break;
+							}
+						},
+					_ => (),
+				}
 			}
 			if !has_hash {
 				if is_branch {
@@ -1458,13 +1467,27 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		let pref_len = prefix.len();
 
 		if prev_pref_depth.map(|p| pref_len <= p).unwrap_or(false) {
+			// TODO assert not < (should be eq only)
 			// a pop
-			if pop_from.is_none() {
-				pop_from = Some(prev_key_depth);
-			}
-			prev_pref_depth = Some(pref_len);
+			// write prev pop
+			let pop_from = prev_key_depth;
+			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0); // one for branch index
+			let to_pop = pop_from - (pref_len - 1);
+
+			let op = ProofOp::DropPartial;
+			output
+				.write(&[op.as_u8()])
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+			let nb = VarInt(to_pop as u32)
+				.encode_into(output)
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
 			//continue;
 		}
+		prev_pref_depth = Some(pref_len);
 
 		let mut prefix = prefix.clone();
 		let is_inline = hash.is_none();
@@ -1488,144 +1511,116 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		let key = key_slice.to_vec();
 
 		let Some(value) = value else {
-			prev_pref_depth = Some(pref_len);
 			continue;
 		};
 
 		// a push
 
-		if let Some(pop_from) = pop_from.take() {
-			// write prev pop
-			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0); // one for branch index
-			let to_pop = pop_from - prev_key_depth;
-
-			let op = ProofOp::DropPartial;
-			output
-				.write(&[op.as_u8()])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-
-			let nb = VarInt(to_pop as u32)
-				.encode_into(output)
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-		}
-
 		if let Some(extra_nibble) = maybe_extra_nibble {
 			return Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble)))
 		}
 
-			// value push key content TODO make a function
-			push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
+		// value push key content TODO make a function
+		push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
+		prev_key_depth = key_len;
 
-			prev_pref_depth = Some(pref_len);
-
-			// TODO non vec value
-			let value = match value {
-				Value::Node(hash, location) => match TrieDBRawIterator::<L>::fetch_value(
-					db,
-					&hash,
-					(key_slice, None),
-					location,
-				) {
+		// TODO non vec value
+		let value = match value {
+			Value::Node(hash, location) =>
+				match TrieDBRawIterator::<L>::fetch_value(db, &hash, (key_slice, None), location) {
 					Ok(value) => value,
 					Err(err) => return Err(err),
 				},
-				Value::Inline(value) => value.to_vec(),
-			};
-			put_value::<L>(value.as_slice(), output)?;
-			prev_key_depth = key_len;
-			if !is_inline &&
-				size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
-			{
-				let mut depth_from = key_len;
-				let mut depth = key_len;
-				let mut first = true;
-				let mut one_hash_written = false;
-				while let Some(Crumb { node, hash, .. }) = iter.trail.pop() {
-					let range_aft = if first {
-						first = false;
-						// key we stop at, if branch then add all children
-						0
-					} else {
-						depth -= 1; // branch index
-						prefix.at(depth) + 1
-					};
-					let mut has_hash = false;
-					match node.node_plan() {
-						NodePlan::Branch { children, .. } |
-						NodePlan::NibbledBranch { children, .. } =>
-							for i in (range_aft as usize)..nibble_ops::NIBBLE_LENGTH {
-								if children[i].is_some() {
-									has_hash = true;
-									break;
-								}
-							},
-						_ => (),
-					}
-					one_hash_written |= has_hash;
-					if has_hash && depth < depth_from {
-						let op = ProofOp::DropPartial;
-						output
-							.write(&[op.as_u8()])
-							// TODO right error (when doing no_std writer / reader
-							.map_err(|e| {
-								Box::new(TrieError::IncompleteDatabase(Default::default()))
-							})?;
-
-						let nb = VarInt((depth_from - depth) as u32)
-							.encode_into(output)
-							// TODO right error (when doing no_std writer / reader
-							.map_err(|e| {
-								Box::new(TrieError::IncompleteDatabase(Default::default()))
-							})?;
-						depth_from = depth;
-					}
-					if has_hash {
-						let data = node.data();
-						let mut i = range_aft as usize;
-						let iter_possible = core::iter::from_fn(|| loop {
-							if i == nibble_ops::NIBBLE_LENGTH {
-								return None;
-							}
-							i += 1;
-							match node.node_plan() {
-								NodePlan::NibbledBranch { children, .. } |
-								NodePlan::Branch { children, .. } =>
-									return Some(match &children[i - 1] {
-										Some(NodeHandlePlan::Hash(hash_range)) =>
-											OpHash::Fix(&data[hash_range.clone()]),
-										Some(NodeHandlePlan::Inline(inline_range)) =>
-											OpHash::Var(&data[inline_range.clone()]),
-										None => OpHash::None,
-									}),
-								_ => unreachable!(),
-							}
-						});
-
-						encode_hashes::<_, _, L, _>(
-							output,
-							core::iter::empty(),
-							iter_possible,
-							0,
-							hash_header_no_bitmap,
-						)?;
-					}
-					match node.node_plan() {
-						NodePlan::NibbledBranch { partial, .. } |
-						NodePlan::Leaf { partial, .. } => {
-							depth -= partial.len();
-						},
-						NodePlan::Branch { .. } => {},
-						_ => (),
-					}
-				}
-				if one_hash_written {
-					return Ok(Some(key)); // Note this is suboptimal as we can restart at last branch with not aft siblings, but makes things easier (always align, simple rule)
+			Value::Inline(value) => value.to_vec(),
+		};
+		put_value::<L>(value.as_slice(), output)?;
+		if !is_inline &&
+			size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
+		{
+			let mut depth_from = key_len;
+			let mut depth = key_len;
+			let mut first = true;
+			let mut one_hash_written = false;
+			while let Some(Crumb { node, hash, .. }) = iter.trail.pop() {
+				let range_aft = if first {
+					first = false;
+					// key we stop at, if branch then add all children
+					0
 				} else {
-					return Ok(None);
+					depth -= 1; // branch index
+					prefix.at(depth) + 1
+				};
+				let mut has_hash = false;
+				match node.node_plan() {
+					NodePlan::Branch { children, .. } |
+					NodePlan::NibbledBranch { children, .. } =>
+						for i in (range_aft as usize)..nibble_ops::NIBBLE_LENGTH {
+							if children[i].is_some() {
+								has_hash = true;
+								break;
+							}
+						},
+					_ => (),
+				}
+				one_hash_written |= has_hash;
+				if has_hash && depth < depth_from {
+					let op = ProofOp::DropPartial;
+					output
+						.write(&[op.as_u8()])
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+
+					let nb = VarInt((depth_from - depth) as u32)
+						.encode_into(output)
+						// TODO right error (when doing no_std writer / reader
+						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+					depth_from = depth;
+				}
+				if has_hash {
+					let data = node.data();
+					let mut i = range_aft as usize;
+					let iter_possible = core::iter::from_fn(|| loop {
+						if i == nibble_ops::NIBBLE_LENGTH {
+							return None;
+						}
+						i += 1;
+						match node.node_plan() {
+							NodePlan::NibbledBranch { children, .. } |
+							NodePlan::Branch { children, .. } =>
+								return Some(match &children[i - 1] {
+									Some(NodeHandlePlan::Hash(hash_range)) =>
+										OpHash::Fix(&data[hash_range.clone()]),
+									Some(NodeHandlePlan::Inline(inline_range)) =>
+										OpHash::Var(&data[inline_range.clone()]),
+									None => OpHash::None,
+								}),
+							_ => unreachable!(),
+						}
+					});
+
+					encode_hashes::<_, _, L, _>(
+						output,
+						core::iter::empty(),
+						iter_possible,
+						0,
+						hash_header_no_bitmap,
+					)?;
+				}
+				match node.node_plan() {
+					NodePlan::NibbledBranch { partial, .. } | NodePlan::Leaf { partial, .. } => {
+						depth -= partial.len();
+					},
+					NodePlan::Branch { .. } => {},
+					_ => (),
 				}
 			}
+			if one_hash_written {
+				return Ok(Some(key)); // Note this is suboptimal as we can restart at last branch with not aft
+				      // siblings, but makes things easier (always align, simple rule)
+			} else {
+				return Ok(None);
+			}
+		}
 	}
 
 	Ok(None)

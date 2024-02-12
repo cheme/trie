@@ -755,7 +755,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 					return Err(());
 				}
 				let to = key.len() - to_drop;
-				last_drop = Some(key.at(to + 1));
+				last_drop = Some(key.at(to));
 				depth_queue.drop_to(&mut key, Some(to), callback);
 			},
 			ProofOp::Hashes => {
@@ -783,7 +783,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 						},
 				}
 				let nb_bitmap_hash = 0;
-				let mut i = 8;
+				let mut i = 8; // trigger a header read.
 				let mut bitmap = Bitmap1(0);
 				if nb_bitmap_hash > 0 {
 					i = 8 - nb_bitmap_hash;
@@ -941,7 +941,7 @@ fn read_hash<L: TrieLayout>(input: &mut impl std::io::Read) -> Result<TrieHash<L
 fn read_value_hash<L: TrieLayout>(
 	input: &mut impl std::io::Read,
 ) -> Result<(TrieHash<L>, usize), ()> {
-	let mut nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
+	let nb_byte = crate::iterator::VarInt::decode_from(input).map_err(|_| ())? as usize;
 
 	let mut hash = TrieHash::<L>::default();
 	if nb_byte > hash.as_ref().len() {
