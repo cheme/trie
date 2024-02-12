@@ -1350,7 +1350,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 		let trail_key = NibbleSlice::new(start);
 		let mut node_depth = 0;
 		for Crumb { node, .. } in iter.trail.iter() {
-			let pref_depth = node_depth;
+			prev_pref_depth = Some(node_depth);
 			let mut is_branch = false;
 			let (range_bef, value) = match node.node_plan() {
 				NodePlan::Leaf { partial, value, .. } => {
@@ -1379,7 +1379,6 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			if value.is_some() {
 				has_hash = true;
 			}
-			prev_pref_depth = Some(pref_depth);
 
 			match node.node_plan() {
 				NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } =>
@@ -1450,6 +1449,12 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 	while let Some(n) = { iter.next_raw_item_with_pop::<NoWrite>(db, None, false) } {
 		let (prefix, hash, node) = n?;
 
+		if seek_to_value {
+			seek_to_value = false;
+			// skip first value
+			continue;
+		}
+
 		let pref_len = prefix.len();
 
 		if prev_pref_depth.map(|p| pref_len <= p).unwrap_or(false) {
@@ -1510,18 +1515,10 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			return Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble)))
 		}
 
-		// value push key content TODO make a function
-		push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
+			// value push key content TODO make a function
+			push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
 
-		prev_key_depth = key_len;
-		prev_pref_depth = Some(pref_len);
-
-		if seek_to_value {
-			seek_to_value = false;
-			// skip first value
-			continue;
-		} else {
-			seek_to_value = false;
+			prev_pref_depth = Some(pref_len);
 
 			// TODO non vec value
 			let value = match value {
@@ -1537,6 +1534,7 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 				Value::Inline(value) => value.to_vec(),
 			};
 			put_value::<L>(value.as_slice(), output)?;
+			prev_key_depth = key_len;
 			if !is_inline &&
 				size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
 			{
@@ -1623,12 +1621,11 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 					}
 				}
 				if one_hash_written {
-					return Ok(Some(key));
+					return Ok(Some(key)); // Note this is suboptimal as we can restart at last branch with not aft siblings, but makes things easier (always align, simple rule)
 				} else {
 					return Ok(None);
 				}
 			}
-		}
 	}
 
 	Ok(None)
