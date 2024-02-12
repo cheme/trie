@@ -145,6 +145,12 @@ pub trait RangeProofCodec {
 	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)>;
 
 	fn varint_decode_from(input: &mut impl Read) -> Result<u32>;
+	// number of bit from hashes bitmap that can be include in header.
+	fn header_hash_bitmap_size() -> u8;
+	// header with bitmap.
+	fn header_hash_with_bitmap(bitmap: Bitmap1) -> u8;
+	// get bitmap with header_hash_bitmap_size first bit from header.
+	fn header_hash_bitmap_from(header: u8) -> Bitmap1;
 }
 
 /// Test codec.
@@ -201,7 +207,50 @@ impl RangeProofCodec for VarIntSimple {
 		}
 		Err(RangeProofError::EndOfStream)
 	}
+
+	fn header_hash_with_bitmap(_: Bitmap1) -> u8 {
+		crate::iterator::ProofOp::Hashes.as_u8()
+	}
+
+	fn header_hash_bitmap_size() -> u8 {
+		0
+	}
+
+	fn header_hash_bitmap_from(_: u8) -> Bitmap1 {
+		unreachable!("hash bitmap size 0 should be checked");
+	}
 }
+
+#[derive(Default, Clone)]
+pub struct Bitmap1(pub u8);
+
+impl Bitmap1 {
+	pub fn check(expected_len: usize) -> bool {
+		debug_assert!(expected_len > 0);
+		debug_assert!(expected_len < 9);
+		(0xff >> expected_len) == 0
+	}
+
+	pub fn get(&self, i: usize) -> bool {
+		debug_assert!(i < 8);
+		self.0 & (0b0000_0001 << i) != 0
+	}
+
+	// TODO useless??
+	pub fn encode<I: Iterator<Item = bool>>(&mut self, has_children: I) {
+		for (i, v) in has_children.enumerate() {
+			if v {
+				self.set(i);
+			}
+		}
+	}
+
+	pub fn set(&mut self, i: usize) {
+		debug_assert!(i < 8);
+		self.0 |= 0b0000_0001 << i;
+	}
+}
+
 
 #[test]
 fn varint_encode_decode() {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{CountedWrite, NoWrite, RangeProofCodec, Read, Write};
+use crate::range_proof::{CountedWrite, NoWrite, RangeProofCodec, Read, Write, Bitmap1};
 use core::ops::Range;
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
@@ -641,140 +641,6 @@ pub trait ProofOpHeadCodec {
 	fn decode_op(encoded: u8) -> (ProofOp, u8);
 }
 
-#[derive(Default, Clone)]
-// TODO const N expected len??
-pub struct Bitmap1(pub u8);
-
-impl Bitmap1 {
-	pub fn check(expected_len: usize) -> bool {
-		debug_assert!(expected_len > 0);
-		debug_assert!(expected_len < 9);
-		(0xff >> expected_len) == 0
-	}
-
-	pub fn get(&self, i: usize) -> bool {
-		debug_assert!(i < 8);
-		self.0 & (0b0000_0001 << i) != 0
-	}
-
-	// TODO useless??
-	pub fn encode<I: Iterator<Item = bool>>(&mut self, has_children: I) {
-		for (i, v) in has_children.enumerate() {
-			if v {
-				self.set(i);
-			}
-		}
-	}
-
-	pub fn set(&mut self, i: usize) {
-		debug_assert!(i < 8);
-		self.0 |= 0b0000_0001 << i;
-	}
-}
-
-/*
-pub struct BitmapAccesses<'a> {
-	possible_inline_value: bool,    // TODO should be constant
-	possible_inline_children: bool, // TODO should be constant
-	unaccessed_value: bool,
-	unaccessed_ranges: &'a [Range<usize>],
-}
-// TODO memoize/precalculate results for all.
-impl<'a> BitmapAccesses<'a> {
-	// note 1 is no map and we got None in bit index functions
-	fn nb_bits(&self) -> usize {
-		let mut count = self.value_offset();
-		for range in self.unaccessed_ranges {
-			count += range.len() * if self.possible_inline_children { 2 } else { 1 };
-		}
-		count
-	}
-	fn value_offset(&self) -> usize {
-		if self.unaccessed_value {
-			if self.possible_inline_value {
-				2
-			} else {
-				1
-			}
-		} else {
-			0
-		}
-	}
-	fn bit_index_value(&self) -> Option<usize> {
-		self.unaccessed_value.then(|| 0)
-	}
-	fn bit_index_value_type(&self) -> Option<usize> {
-		(self.unaccessed_value && self.possible_inline_value).then(|| 1)
-	}
-	fn index_children(&self, ix: u8) -> Option<usize> {
-		let mut found = false;
-		let mut offset = 0;
-		let ix = ix as usize;
-		for range in self.unaccessed_ranges {
-			if ix < range.start {
-				break;
-			}
-			if ix >= range.start && ix < range.end {
-				found = true;
-				offset += ix - range.start;
-				break;
-			}
-			offset += range.len();
-		}
-		found.then(|| offset)
-	}
-	fn bit_index_children(&self, ix: u8) -> Option<usize> {
-		self.index_children(ix)
-			.map(|i| self.value_offset() + if self.possible_inline_children { i * 2 } else { i })
-	}
-	fn bit_index_children_type(&self, ix: u8) -> Option<usize> {
-		self.possible_inline_children
-			.then(|| self.bit_index_children(ix).map(|i| i + 1))
-			.flatten()
-	}
-}
-
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default)]
-pub struct BitmapAccesses2 {
-	value_index: Option<u8>,
-	children_index: [Option<u8>; nibble_ops::NIBBLE_LENGTH],
-}
-
-pub fn get_bitmap_accesses<
-	const POSSIBLE_INLINE_VALUE: bool,
-	const POSSIBLE_INLINE_CHILDREN: bool,
->(
-	unaccessed_value: bool,
-	unaccessed_ranges: &[Range<usize>],
-	value_present: bool,
-	children_present: &[bool],
-) -> (BitmapAccesses2, BitmapAccesses2) {
-	let mut presence = BitmapAccesses2::default();
-	let mut is_inline = BitmapAccesses2::default();
-	let mut index: u8 = 0;
-	if unaccessed_value {
-		presence.value_index = Some(index);
-		index += 1;
-		if POSSIBLE_INLINE_VALUE {
-			is_inline.value_index = Some(index);
-			index += 1;
-		}
-	}
-	for range in unaccessed_ranges {
-		for i in range.start..range.end {
-			presence.children_index[i] = Some(index);
-			index += 1;
-			if POSSIBLE_INLINE_CHILDREN {
-				is_inline.children_index[i] = Some(index);
-				index += 1;
-			}
-		}
-	}
-	(presence, is_inline)
-}
-*/
-
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, Copy)]
 pub enum OpHash<'a> {
@@ -803,10 +669,6 @@ pub fn encode_hashes<'a, I, I2, L, O, C>(
 	output: &mut O,
 	mut iter_defined: I, // TODO remove or use
 	mut iter_possible: I2,
-	header_bitmap_len: usize, // TODO from trait
-	header_init: fn(u8) -> u8, /* TODO from trait
-	                           *	#[cfg(debug_assert)]
-	                           *	hashes_indexes: (BitmapAccesses2, BitmapAccesses2), */
 ) -> Result<(), TrieHash<L>, CError<L>>
 where
 	O: CountedWrite,
@@ -832,12 +694,13 @@ where
 		i_hash = 0;
 		let mut bitmap = Bitmap1::default();
 
+		let header_bitmap_len = C::header_hash_bitmap_size() as usize;
 		let bound = if !header_written && header_bitmap_len > 0 {
 			header_bitmap_len
 		} else {
 			if !header_written {
 				header_written = true;
-				let header = header_init(bitmap.0);
+				let header = C::header_hash_with_bitmap(bitmap.clone());
 				buff_bef_first.push(header);
 			}
 			8
@@ -884,7 +747,7 @@ where
 
 		if !header_written {
 			header_written = true;
-			let header = header_init(bitmap.0);
+			let header = C::header_hash_with_bitmap(bitmap);
 			buff_bef_first.push(header);
 		} else {
 			buff_bef_first.push(bitmap.0);
@@ -955,14 +818,6 @@ fn put_value<L: TrieLayout, C: RangeProofCodec>(
 		.write(value)
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 	Ok(())
-}
-
-fn hash_header_no_bitmap(_: u8) -> u8 {
-	ProofOp::Hashes.as_u8()
-}
-
-pub fn no_bitmap_hash_header(_: u8) -> u8 {
-	0
 }
 
 /// `exclusive_start` is the last returned key from a previous proof.
@@ -1101,8 +956,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				output,
 				core::iter::empty(),
 				iter_possible,
-				0,
-				hash_header_no_bitmap,
 			)?;
 		}
 	}
@@ -1249,8 +1102,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 						output,
 						core::iter::empty(),
 						iter_possible,
-						0,
-						hash_header_no_bitmap,
 					)?;
 				}
 				match node.node_plan() {

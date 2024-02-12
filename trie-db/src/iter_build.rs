@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
-	iterator::{no_bitmap_hash_header, Bitmap1},
+	range_proof::{Bitmap1},
 	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
@@ -790,12 +790,12 @@ pub fn visit_range_proof<
 							return Err(());
 						},
 				}
-				let nb_bitmap_hash = 0;
+				let nb_bitmap_hash = C::header_hash_bitmap_size();
 				let mut i = 8; // trigger a header read.
 				let mut bitmap = Bitmap1(0);
 				if nb_bitmap_hash > 0 {
-					i = 8 - nb_bitmap_hash;
-					bitmap = Bitmap1(no_bitmap_hash_header(buff[0]));
+					i = 8 - (nb_bitmap_hash as usize);
+					bitmap = C::header_hash_bitmap_from(buff[0]);
 				}
 				let mut expect_value = false;
 				let mut range_bef = 0;
