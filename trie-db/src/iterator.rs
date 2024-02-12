@@ -350,10 +350,9 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	/// Fetches the next raw item.
 	//
 	/// Must be called with the same `db` as when the iterator was created.
-	pub(crate) fn next_raw_item<O: CountedWrite>(
+	pub(crate) fn next_raw_item(
 		&mut self,
 		db: &TrieDB<L>,
-		mut cb: Option<&mut &mut IterCallback<L, O>>,
 	) -> Option<
 		Result<
 			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
@@ -375,11 +374,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 				},
 				(Status::Exiting, _) => {
 					let crumb = self.trail.pop().expect("we've just fetched the last element using `last_mut` so this cannot fail; qed");
-					if let Some(cb) = cb.as_mut() {
-						if let Err(e) = cb.on_pop(&crumb, &self.key_nibbles) {
-							return Some(Err(e));
-						}
-					}
 					match crumb.node.node_plan() {
 						NodePlan::Empty | NodePlan::Leaf { .. } => {},
 						NodePlan::Extension { partial, .. } => {
@@ -457,25 +451,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_item(&mut self, db: &TrieDB<L>) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		self.next_inner::<NoWrite>(db, None)
-	}
-
-	/// Same as `next_item` but with callback.
-	pub(crate) fn next_item_with_callback<O: CountedWrite>(
-		&mut self,
-		db: &TrieDB<L>,
-		cb: &mut IterCallback<L, O>,
-	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		self.next_inner(db, Some(cb))
-	}
-
-	#[inline]
-	fn next_inner<O: CountedWrite>(
-		&mut self,
-		db: &TrieDB<L>,
-		mut cb: Option<&mut IterCallback<L, O>>,
-	) -> Option<TrieItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item::<O>(db, cb.as_mut()) {
+		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -525,7 +501,7 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 	///
 	/// Must be called with the same `db` as when the iterator was created.
 	pub fn next_key(&mut self, db: &TrieDB<L>) -> Option<TrieKeyItem<TrieHash<L>, CError<L>>> {
-		while let Some(raw_item) = self.next_raw_item::<NoWrite>(db, None) {
+		while let Some(raw_item) = self.next_raw_item(db) {
 			let (prefix, _, node) = match raw_item {
 				Ok(raw_item) => raw_item,
 				Err(err) => return Some(Err(err)),
@@ -629,7 +605,7 @@ impl<'a, 'cache, L: TrieLayout> Iterator for TrieDBNodeIterator<'a, 'cache, L> {
 	>;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		self.raw_iter.next_raw_item::<NoWrite>(self.db, None).map(|result| {
+		self.raw_iter.next_raw_item(self.db).map(|result| {
 			result.map(|(nibble, hash, node)| (nibble.clone(), hash.cloned(), node.clone()))
 		})
 	}
@@ -982,187 +958,6 @@ fn put_value<L: TrieLayout>(
 	Ok(())
 }
 
-// Call on pop, passed as parameter.
-pub(crate) struct IterCallback<'a, L, O> {
-	output: &'a mut O,
-	start_key: Option<&'a [u8]>,
-	start_range_height: usize,
-	first: bool,
-	write_aft: bool,
-	not_first_branch_aft: bool,
-	aft_written: bool,
-	_ph: core::marker::PhantomData<L>,
-}
-
-impl<'a, L, O> IterCallback<'a, L, O> {
-	pub fn new(output: &'a mut O, start_key: Option<&'a [u8]>) -> Self {
-		let start_range_height =
-			start_key.map(|s| s.len() * nibble_ops::NIBBLE_PER_BYTE).unwrap_or(0);
-		Self {
-			output,
-			start_key,
-			first: true,
-			start_range_height,
-			aft_written: false,
-			not_first_branch_aft: false,
-			write_aft: false,
-			_ph: Default::default(),
-		}
-	}
-}
-
-impl<'a, L: TrieLayout, O: CountedWrite> IterCallback<'a, L, O> {
-	pub(crate) fn on_pop(
-		&mut self,
-		crumb: &Crumb<L::Hash, L::Location>,
-		key_nibbles: &NibbleVec,
-	) -> Result<(), TrieHash<L>, CError<L>> {
-		if crumb.hash.is_none() {
-			// inline got nothing to add
-			if self.write_aft {
-				self.not_first_branch_aft = true;
-			}
-			self.first = false;
-			return Ok(());
-		}
-
-		let mut value_only = false;
-		match crumb.node.node_plan() {
-			NodePlan::Branch { .. } | NodePlan::NibbledBranch { .. } => (),
-			NodePlan::Leaf { value, partial, .. } => {
-				// note that key_nibbles do not contain partial.
-				if self.first {
-					if let Some(start_key) = self.start_key {
-						let mut start_key_nibbles = NibbleSlice::new(start_key);
-						if start_key_nibbles.starts_with_vec(key_nibbles) {
-							start_key_nibbles.advance(key_nibbles.len());
-							if start_key_nibbles == partial.build(crumb.node.data()) {
-								value_only = true;
-							}
-						}
-					}
-				}
-				if !value_only {
-					return Ok(());
-				}
-			},
-			_ => return Ok(()),
-		}
-		self.first = false;
-
-		// exclusive
-		let mut range_bef = None;
-		// inclusive
-		let mut range_aft = nibble_ops::NIBBLE_LENGTH;
-
-		if value_only {
-			self.start_range_height = key_nibbles.len();
-		} else if self.write_aft && !self.not_first_branch_aft {
-			// stop on a branch with value.
-			range_aft = 0;
-		} else {
-			// on branch the key nibbles is not popped yet and contains the index of last accessed
-			// node.
-			let depth_current_ix = key_nibbles.len();
-			let current_ix =
-				(depth_current_ix > 0).then(|| key_nibbles.at(depth_current_ix - 1) as usize);
-
-			if let Some(key) = self.start_key.as_ref() {
-				if depth_current_ix > 0 && (depth_current_ix - 1) <= self.start_range_height {
-					let at = key_nibbles.len() - 1;
-					debug_assert!({
-						let common =
-							crate::nibble::nibble_ops::biggest_depth(key, key_nibbles.inner());
-						// can be sup as we may have compare agains byte padded inner).
-						common >= at
-					});
-					let key_slice = NibbleSlice::new(key);
-					if at < key_slice.len() {
-						range_bef = Some(key_slice.at(at) as usize);
-					} else {
-						// only case in range is a seek into branch that got popped, in this case
-						// at == keyslice.len()
-						debug_assert!(at == key_slice.len());
-					}
-					self.start_range_height = at - 1;
-				}
-			}
-			// inclusive
-			if self.write_aft {
-				range_aft = current_ix.map(|i| i + 1).unwrap_or(nibble_ops::NIBBLE_LENGTH)
-			};
-		}
-
-		if self.write_aft {
-			self.not_first_branch_aft = true;
-		}
-
-		debug_assert!(range_aft >= range_bef.unwrap_or(0));
-		// if key is less than start key, we attach the value hash if there is one.
-		let mut value_node = None;
-		if range_bef.is_some() || value_only {
-			// Values before start needed.
-			// Other values from exiting (pop are already part of the proof (we range over all
-			// them).
-			value_node = Some(match crumb.node.node_plan().value_plan() {
-				Some(ValuePlan::Node(hash_range)) =>
-					OpHash::Fix(&crumb.node.data()[hash_range.clone()]),
-				Some(ValuePlan::Inline(inline_range)) =>
-					OpHash::Var(&crumb.node.data()[inline_range.clone()]),
-				None => OpHash::None,
-			});
-		}
-
-		let mut i = 0;
-		let write_aft = self.write_aft;
-		let aft_written = &mut self.aft_written;
-		let iter_possible = core::iter::from_fn(|| loop {
-			// value first.
-			if let Some(value_hash) = value_node.take() {
-				return Some(value_hash);
-			}
-			if i == range_bef.unwrap_or(0) {
-				i = range_aft;
-			}
-			if i == nibble_ops::NIBBLE_LENGTH {
-				return None;
-			}
-			i += 1;
-			match crumb.node.node_plan() {
-				NodePlan::NibbledBranch { children, .. } | NodePlan::Branch { children, .. } =>
-					return Some(match &children[i - 1] {
-						Some(NodeHandlePlan::Hash(hash_range)) => {
-							if write_aft && i > range_aft {
-								*aft_written = true;
-							}
-							OpHash::Fix(&crumb.node.data()[hash_range.clone()])
-						},
-						Some(NodeHandlePlan::Inline(inline_range)) => {
-							// can result in proof containing all remaining values, but
-							// still returning proofs, but makes things easier at the
-							// cost of this very corner case.
-							if write_aft && i > range_aft {
-								*aft_written = true;
-							}
-							OpHash::Var(&crumb.node.data()[inline_range.clone()])
-						},
-						None => OpHash::None,
-					}),
-				_ => unreachable!(),
-			}
-		});
-
-		encode_hashes::<_, _, L, _>(
-			self.output,
-			core::iter::empty(),
-			iter_possible,
-			0,
-			hash_header_no_bitmap,
-		)?;
-		Ok(())
-	}
-}
-
 fn hash_header_no_bitmap(_: u8) -> u8 {
 	ProofOp::Hashes.as_u8()
 }
@@ -1313,7 +1108,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		}
 	}
 
-	while let Some(n) = { iter.next_raw_item::<NoWrite>(db, None) } {
+	while let Some(n) = { iter.next_raw_item(db) } {
 		let (prefix, hash, node) = n?;
 
 		if seek_to_value {

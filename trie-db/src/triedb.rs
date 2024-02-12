@@ -478,14 +478,6 @@ impl<'a, 'cache, L: TrieLayout> TrieDBIterator<'a, 'cache, L> {
 	pub fn into_raw(self) -> (TrieDBRawIterator<L>, &'a TrieDB<'a, 'cache, L>) {
 		(self.raw_iter, self.db)
 	}
-
-	/// Iterator next method, but with callbacks.
-	pub(crate) fn next_with_callback<O: crate::range_proof::CountedWrite>(
-		&mut self,
-		cb: &mut crate::iterator::IterCallback<L, O>,
-	) -> Option<<Self as Iterator>::Item> {
-		self.raw_iter.next_item_with_callback(self.db, cb)
-	}
 }
 
 impl<'a, 'cache, L: TrieLayout> TrieIterator<L> for TrieDBIterator<'a, 'cache, L> {

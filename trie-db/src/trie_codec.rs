@@ -241,7 +241,7 @@ where
 	// iteration of the loop below, the stack always has at least one entry and the bottom (front)
 	// of the stack is the root node, which is not inline. Furthermore, the iterator is not empty,
 	// so at least one iteration always occurs.
-	while let Some(item) = iter.next_raw_item::<crate::range_proof::NoWrite>(db, None) {
+	while let Some(item) = iter.next_raw_item(db) {
 		match item {
 			Ok((prefix, node_hash, node)) => {
 				// Skip inline nodes, as they cannot contain hash references to other nodes by
