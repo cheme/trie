@@ -791,7 +791,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 				}
 				let mut expect_value = false;
 				let mut range_bef = 0;
-				let mut range_aft = nibble_ops::NIBBLE_PER_BYTE as u8;
+				let mut range_aft = nibble_ops::NIBBLE_LENGTH as u8;
 				if exiting.is_none() && can_seek {
 					expect_value = true;
 					if let Some(k) = start_key {
@@ -880,7 +880,13 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 								know_has_first_child = true;
 								break;
 							}
+						} else {
+							child_ix += 1;
 						}
+					}
+
+					if child_ix == nibble_ops::NIBBLE_LENGTH {
+						break; // TODO always break and use label on inner break
 					}
 				}
 			},

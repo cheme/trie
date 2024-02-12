@@ -960,8 +960,6 @@ where
 			}
 		}
 	}
-	bitmap_len += i_bitmap;
-	hash_len += i_hash;
 	Ok(())
 }
 
