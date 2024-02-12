@@ -1212,7 +1212,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 ) -> Result<Option<Vec<u8>>, TrieHash<L>, CError<L>> {
 	let start_written = output.written();
 
-	let mut prev_key_depth = 0; // TODO rename as written cursor depth
+	// current depth encoded.
+	let mut cursor = 0;
 	let mut seek_to_value = false;
 	if let Some(start) = exclusive_start {
 		let _ = iter.seek(db, start)?;
@@ -1284,8 +1285,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 			let bound = node_depth / nibble_ops::NIBBLE_PER_BYTE +
 				if (node_depth % nibble_ops::NIBBLE_PER_BYTE) == 0 { 0 } else { 1 };
-			push_partial_key::<L>(node_depth, prev_key_depth, &start[..bound], output)?;
-			prev_key_depth = node_depth;
+			push_partial_key::<L>(node_depth, cursor, &start[..bound], output)?;
+			cursor = node_depth;
 			if is_branch {
 				node_depth += 1;
 			}
@@ -1344,11 +1345,11 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 
 		let pref_len = prefix.len();
 
-		if pref_len < prev_key_depth {
+		if pref_len < cursor {
 			// write prev pop
-			let pop_from = prev_key_depth;
-			prev_key_depth = pref_len - 1; // one for branch index
-			let to_pop = pop_from - prev_key_depth;
+			let pop_from = cursor;
+			cursor = pref_len - 1; // one for branch index
+			let to_pop = pop_from - cursor;
 
 			let op = ProofOp::DropPartial;
 			output
@@ -1396,8 +1397,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		}
 
 		// value push key content TODO make a function
-		push_partial_key::<L>(key_len, prev_key_depth, &key, output)?;
-		prev_key_depth = key_len;
+		push_partial_key::<L>(key_len, cursor, &key, output)?;
+		cursor = key_len;
 
 		// TODO non vec value
 		let value = match value {
