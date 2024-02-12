@@ -361,21 +361,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 			CError<L>,
 		>,
 	> {
-		self.next_raw_item_with_pop(db, cb, false)
-	}
-
-	pub(crate) fn next_raw_item_with_pop<O: CountedWrite>(
-		&mut self,
-		db: &TrieDB<L>,
-		mut cb: Option<&mut &mut IterCallback<L, O>>,
-		with_pop: bool,
-	) -> Option<
-		Result<
-			(&NibbleVec, Option<&TrieHash<L>>, &Arc<OwnedNode<DBValue, L::Location>>),
-			TrieHash<L>,
-			CError<L>,
-		>,
-	> {
 		loop {
 			let crumb = self.trail.last_mut()?;
 			// TODO this call to node is costly and not needed in most case.
@@ -408,13 +393,6 @@ impl<L: TrieLayout> TrieDBRawIterator<L> {
 						},
 					}
 					self.trail.last_mut()?.increment();
-					if with_pop {
-						if let Some(crumb) = self.trail.last_mut() {
-							return Some(Ok((&self.key_nibbles, crumb.hash.as_ref(), &crumb.node)))
-						} else {
-							return None;
-						}
-					}
 				},
 				(Status::At, Node::Extension(partial, child)) => {
 					self.key_nibbles.append_partial(partial.right());
@@ -1335,7 +1313,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout>(
 		}
 	}
 
-	while let Some(n) = { iter.next_raw_item_with_pop::<NoWrite>(db, None, false) } {
+	while let Some(n) = { iter.next_raw_item::<NoWrite>(db, None) } {
 		let (prefix, hash, node) = n?;
 
 		if seek_to_value {
