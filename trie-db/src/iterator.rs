@@ -1404,7 +1404,9 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 				continue;
 			}
 
-			push_partial_key::<L>(node_depth, prev_key_depth, start, output)?;
+			let bound = node_depth / nibble_ops::NIBBLE_PER_BYTE +
+				if (node_depth % nibble_ops::NIBBLE_PER_BYTE) == 0 { 0 } else { 1 };
+			push_partial_key::<L>(node_depth, prev_key_depth, &start[..bound], output)?;
 			prev_key_depth = node_depth;
 			if is_branch {
 				node_depth += 1;
@@ -1469,8 +1471,8 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 			// a pop
 			// write prev pop
 			let pop_from = prev_key_depth;
-			prev_key_depth = prev_pref_depth.map(|p| p - 1).unwrap_or(0); // one for branch index
-			let to_pop = pop_from - (pref_len - 1);
+			prev_key_depth = pref_len - 1; // one for branch index
+			let to_pop = pop_from - prev_key_depth;
 
 			let op = ProofOp::DropPartial;
 			output
@@ -1625,12 +1627,12 @@ pub fn range_proof2<'a, 'cache, L: TrieLayout>(
 }
 
 fn push_partial_key<L: TrieLayout>(
-	from: usize,
 	to: usize,
+	from: usize,
 	key: &[u8],
 	output: &mut impl CountedWrite,
 ) -> Result<(), TrieHash<L>, CError<L>> {
-	let to_write = from - to;
+	let to_write = to - from;
 	let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
 	let op = ProofOp::Partial;
 	output
@@ -1641,8 +1643,8 @@ fn push_partial_key<L: TrieLayout>(
 		.encode_into(output)
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	let start_aligned = to % nibble_ops::NIBBLE_PER_BYTE == 0;
-	let start_ix = to / nibble_ops::NIBBLE_PER_BYTE;
+	let start_aligned = from % nibble_ops::NIBBLE_PER_BYTE == 0;
+	let start_ix = from / nibble_ops::NIBBLE_PER_BYTE;
 	if start_aligned {
 		let off = if aligned { 0 } else { 1 };
 		let slice_to_write = &key[start_ix..key.len() - off];

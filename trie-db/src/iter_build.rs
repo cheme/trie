@@ -691,6 +691,7 @@ pub fn visit_range_proof<'a, 'cache, L: TrieLayout, F: ProcessEncodedNode<TrieHa
 							crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
 						let common = core::cmp::min(common, key.len());
 						if common < key.len() {
+							// TODO here if valid seek should only be equal
 							let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 							if common == start_key_len {
 								can_seek = false;
