@@ -635,137 +635,6 @@ impl<'a> OpHash<'a> {
 	}
 }
 
-pub fn encode_hashes<'a, I, I2, L, O, C>(
-	output: &mut O,
-	mut iter_defined: I, // TODO remove or use
-	mut iter_possible: I2,
-) -> Result<(), TrieHash<L>, CError<L>>
-where
-	O: CountedWrite,
-	L: TrieLayout + 'a,
-	I: Iterator<Item = OpHash<'a>>,
-	I2: Iterator<Item = OpHash<'a>>,
-	C: RangeProofCodec,
-{
-	let mut nexts: [OpHash; 8] = [OpHash::None; 8];
-	let mut header_written = false;
-	let mut i_hash = 0;
-	let mut i_bitmap = 0;
-	let mut hash_len = 0;
-	let mut bitmap_len = 0;
-	// if bit in previous bitmap (presence to true and type expected next).
-	let mut prev_bit: Option<OpHash> = None;
-	let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new(); // TODO shoul be single byte
-
-	loop {
-		bitmap_len += i_bitmap;
-		hash_len += i_hash;
-		i_bitmap = 0;
-		i_hash = 0;
-		let mut bitmap = Bitmap1::default();
-
-		let header_bitmap_len = C::op_attached_range(ProofOp::Hashes);
-		let bound = if !header_written {
-			if let Some(l) = header_bitmap_len {
-				l as usize
-			} else {
-				header_written = true;
-				let header = C::encode_op(ProofOp::Hashes, None); // TODO should be written with first bitmap (using header_written)
-				buff_bef_first.push(header);
-				8
-			}
-		} else {
-			8
-		};
-
-		if let Some(h) = prev_bit.take() {
-			debug_assert!(h.is_some());
-			if h.is_var() {
-				bitmap.set(i_bitmap);
-			}
-			i_bitmap += 1;
-			if h.is_some() {
-				nexts[i_hash] = h;
-				i_hash += 1;
-			}
-		}
-
-		while let Some(h) = iter_possible.next() {
-			if h.is_some() {
-				bitmap.set(i_bitmap);
-				i_bitmap += 1;
-				if i_bitmap == bound {
-					prev_bit = Some(h);
-					break;
-				}
-				if h.is_var() {
-					bitmap.set(i_bitmap);
-				}
-			}
-			i_bitmap += 1;
-			if h.is_some() {
-				nexts[i_hash] = h;
-				i_hash += 1;
-			}
-			if i_bitmap == bound {
-				break;
-			}
-		}
-
-		if i_bitmap == 0 {
-			debug_assert!(header_written && i_hash == 0);
-			break
-		}
-
-		if !header_written {
-			header_written = true;
-			let header = C::encode_op(ProofOp::Hashes, Some(bitmap.0));
-			buff_bef_first.push(header);
-		} else {
-			buff_bef_first.push(bitmap.0);
-		}
-		output
-			.write(&buff_bef_first)
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-		buff_bef_first.clear();
-		for j in 0..i_hash {
-			match nexts[j] {
-				OpHash::Fix(s) => {
-					output
-						.write(s)
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-				},
-				OpHash::Var(s) => {
-					C::varint_encode_into(s.len() as u32, output)
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-					output
-						.write(s)
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-				},
-				OpHash::None => unreachable!(),
-			}
-		}
-	}
-	Ok(())
-}
-
-fn put_value<L: TrieLayout, C: RangeProofCodec>(
-	value: &[u8],
-	output: &mut impl CountedWrite,
-) -> Result<(), TrieHash<L>, CError<L>> {
-	C::encode_with_size(ProofOp::Value, value.len(), output)
-		// TODO right error (when doing no_std writer / reader
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	output
-		.write(value)
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	Ok(())
-}
-
 /// `exclusive_start` is the last returned key from a previous proof.
 /// Proof will there for contains seek information for this key. The proof
 /// itself may contain value that where already returned by previous proof.
@@ -898,7 +767,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				}
 			});
 
-			encode_hashes::<_, _, L, _, C>(output, core::iter::empty(), iter_possible)?;
+			C::push_hashes(output, iter_possible)?;
 		}
 	}
 
@@ -972,7 +841,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				},
 			Value::Inline(value) => value.to_vec(),
 		};
-		put_value::<L, C>(value.as_slice(), output)?;
+		C::push_value(value.as_slice(), output)?;
 		if !is_inline &&
 			size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
 		{
@@ -1030,7 +899,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 						}
 					});
 
-					encode_hashes::<_, _, L, _, C>(output, core::iter::empty(), iter_possible)?;
+					C::push_hashes(output, iter_possible)?;
 				}
 				match node.node_plan() {
 					NodePlan::NibbledBranch { partial, .. } | NodePlan::Leaf { partial, .. } => {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{nibble_ops, CError, TrieError, TrieHash};
+use crate::{iterator::OpHash, nibble_ops, CError, TrieError, TrieHash};
 
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, PartialEq, Eq)]
@@ -49,7 +49,7 @@ impl<'a> Read for &'a [u8] {
 
 /// Trait similar to std::io::Write, but that can run in no_std.
 pub trait Write {
-	fn write(&mut self, buf: &[u8]) -> Result<usize>;
+	fn write_all(&mut self, buf: &[u8]) -> Result<()>;
 	fn flush(&mut self) -> Result<()>;
 }
 
@@ -74,10 +74,10 @@ impl<T: Write> From<T> for Counted<T> {
 }
 
 impl<T: Write> Write for Counted<T> {
-	fn write(&mut self, buf: &[u8]) -> Result<usize> {
-		let written = self.inner.write(buf)?;
-		self.written += written;
-		Ok(written)
+	fn write_all(&mut self, buf: &[u8]) -> Result<()> {
+		self.inner.write_all(buf)?;
+		self.written += buf.len();
+		Ok(())
 	}
 
 	fn flush(&mut self) -> Result<()> {
@@ -98,9 +98,9 @@ impl CountedWrite for Vec<u8> {
 }
 
 impl Write for Vec<u8> {
-	fn write(&mut self, buff: &[u8]) -> Result<usize> {
+	fn write_all(&mut self, buff: &[u8]) -> Result<()> {
 		self.extend_from_slice(buff);
-		Ok(buff.len())
+		Ok(())
 	}
 	fn flush(&mut self) -> Result<()> {
 		Ok(())
@@ -112,7 +112,7 @@ pub struct NoWrite;
 
 // TODO no need for NoWrite
 impl Write for NoWrite {
-	fn write(&mut self, _: &[u8]) -> Result<usize> {
+	fn write_all(&mut self, _: &[u8]) -> Result<()> {
 		Err(RangeProofError::Unsupported)
 	}
 
@@ -196,10 +196,10 @@ pub trait RangeProofCodec {
 	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()> {
 		let mut to_encode = len;
 		for _ in 0..varint_encoded_len(len) - 1 {
-			out.write(&[0b1000_0000 | to_encode as u8])?;
+			out.write_all(&[0b1000_0000 | to_encode as u8])?;
 			to_encode >>= 7;
 		}
-		out.write(&[to_encode as u8])?;
+		out.write_all(&[to_encode as u8])?;
 		Ok(())
 	}
 
@@ -244,7 +244,7 @@ pub trait RangeProofCodec {
 
 		let header = Self::encode_op(op, attached);
 
-		output.write(&[header])?;
+		output.write_all(&[header])?;
 		if let Some(size) = size {
 			Self::varint_encode_into(size as u32, output)?;
 		}
@@ -278,19 +278,125 @@ pub trait RangeProofCodec {
 		if start_aligned {
 			let off = if aligned { 0 } else { 1 };
 			let slice_to_write = &key[start_ix..key.len() - off];
-			output.write(slice_to_write);
+			output.write_all(slice_to_write);
 			if !aligned {
-				output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+				output.write_all(&[nibble_ops::pad_left(key[key.len() - 1])]);
 			}
 		} else {
 			for i in start_ix..key.len() - 1 {
 				let mut b = key[i] << 4;
 				b |= key[i + 1] >> 4;
-				output.write(&[b]);
+				output.write_all(&[b]);
 			}
 			if !aligned {
 				let b = key[key.len() - 1] << 4;
-				output.write(&[b]);
+				output.write_all(&[b]);
+			}
+		}
+		Ok(())
+	}
+
+	fn push_value(value: &[u8], output: &mut impl CountedWrite) -> Result<()> {
+		Self::encode_with_size(ProofOp::Value, value.len(), output)?;
+		output.write_all(value)?;
+		Ok(())
+	}
+
+	fn push_hashes<'a, I, O>(output: &mut O, mut iter_possible: I) -> Result<()>
+	where
+		O: CountedWrite,
+		I: Iterator<Item = OpHash<'a>>,
+	{
+		let mut nexts: [OpHash; 8] = [OpHash::None; 8];
+		let mut header_written = false;
+		let mut i_hash = 0;
+		let mut i_bitmap = 0;
+		let mut hash_len = 0;
+		let mut bitmap_len = 0;
+		// if bit in previous bitmap (presence to true and type expected next).
+		let mut prev_bit: Option<OpHash> = None;
+		let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new(); // TODO shoul be single byte
+
+		loop {
+			bitmap_len += i_bitmap;
+			hash_len += i_hash;
+			i_bitmap = 0;
+			i_hash = 0;
+			let mut bitmap = Bitmap1::default();
+
+			let header_bitmap_len = Self::op_attached_range(ProofOp::Hashes);
+			let bound = if !header_written {
+				if let Some(l) = header_bitmap_len {
+					l as usize
+				} else {
+					header_written = true;
+					let header = Self::encode_op(ProofOp::Hashes, None); // TODO should be written with first bitmap (using header_written)
+					buff_bef_first.push(header);
+					8
+				}
+			} else {
+				8
+			};
+
+			if let Some(h) = prev_bit.take() {
+				debug_assert!(h.is_some());
+				if h.is_var() {
+					bitmap.set(i_bitmap);
+				}
+				i_bitmap += 1;
+				if h.is_some() {
+					nexts[i_hash] = h;
+					i_hash += 1;
+				}
+			}
+
+			while let Some(h) = iter_possible.next() {
+				if h.is_some() {
+					bitmap.set(i_bitmap);
+					i_bitmap += 1;
+					if i_bitmap == bound {
+						prev_bit = Some(h);
+						break;
+					}
+					if h.is_var() {
+						bitmap.set(i_bitmap);
+					}
+				}
+				i_bitmap += 1;
+				if h.is_some() {
+					nexts[i_hash] = h;
+					i_hash += 1;
+				}
+				if i_bitmap == bound {
+					break;
+				}
+			}
+
+			if i_bitmap == 0 {
+				debug_assert!(header_written && i_hash == 0);
+				break
+			}
+
+			if !header_written {
+				header_written = true;
+				let header = Self::encode_op(ProofOp::Hashes, Some(bitmap.0));
+				buff_bef_first.push(header);
+			} else {
+				buff_bef_first.push(bitmap.0);
+			}
+			output.write_all(&buff_bef_first)?;
+			buff_bef_first.clear();
+			for j in 0..i_hash {
+				match nexts[j] {
+					OpHash::Fix(s) => {
+						output.write_all(s);
+					},
+					OpHash::Var(s) => {
+						Self::varint_encode_into(s.len() as u32, output)?;
+						output.write_all(s)?;
+					},
+					OpHash::None => unreachable!(),
+				}
 			}
 		}
 		Ok(())
