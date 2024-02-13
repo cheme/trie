@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{iterator::OpHash, nibble_ops};
-use crate::rstd::vec::Vec;
+use crate::{iterator::OpHash, nibble_ops, rstd::vec::Vec};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RangeProofError {
