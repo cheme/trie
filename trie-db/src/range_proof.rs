@@ -318,9 +318,6 @@ pub trait RangeProofCodec {
 				if let Some(l) = header_bitmap_len {
 					l as usize
 				} else {
-					header_written = true;
-					let header = Self::encode_op(ProofOp::Hashes, None); // TODO should be written with first bitmap (using header_written)
-					buff_bef_first.push(header);
 					8
 				}
 			} else {
@@ -368,8 +365,13 @@ pub trait RangeProofCodec {
 
 			if !header_written {
 				header_written = true;
-				let header = Self::encode_op(ProofOp::Hashes, Some(bitmap.0));
+
+				let attached = header_bitmap_len.map(|_| bitmap.0);
+				let header = Self::encode_op(ProofOp::Hashes, attached);
 				buff_bef_first.push(header);
+				if attached.is_none() {
+					buff_bef_first.push(bitmap.0);
+				}
 			} else {
 				buff_bef_first.push(bitmap.0);
 			}
