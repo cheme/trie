@@ -26,14 +26,14 @@
 //! trie.
 
 use crate::{
+	memory_db::{HashKey, MemoryDB},
 	nibble_ops::NIBBLE_LENGTH,
 	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, ValuePlan},
+	node_db::Prefix,
 	rstd::{boxed::Box, convert::TryInto, marker::PhantomData, result, sync::Arc, vec, vec::Vec},
 	CError, ChildReference, DBValue, NibbleVec, NodeCodec, Result, TrieDB, TrieDBRawIterator,
 	TrieError, TrieHash, TrieLayout,
 };
-use hash_db::Prefix;
-use memory_db::MemoryDB;
 
 const OMIT_VALUE_HASH: crate::node::Value<'static, ()> = crate::node::Value::Inline(&[]);
 
@@ -241,7 +241,7 @@ where
 	// iteration of the loop below, the stack always has at least one entry and the bottom (front)
 	// of the stack is the root node, which is not inline. Furthermore, the iterator is not empty,
 	// so at least one iteration always occurs.
-	while let Some(item) = iter.next_raw_item(db) {
+	while let Some(item) = iter.next_raw_item(db, true) {
 		match item {
 			Ok((prefix, node_hash, node)) => {
 				// Skip inline nodes, as they cannot contain hash references to other nodes by
@@ -465,7 +465,7 @@ impl<'a, C: NodeCodec, L: Copy + Default> DecoderStackEntry<'a, C, L> {
 /// This function makes the assumption that all child references in an inline trie node are inline
 /// references.
 pub fn decode_compact<L>(
-	db: &mut MemoryDB<L::Hash, memory_db::HashKey<L::Hash>, DBValue>,
+	db: &mut MemoryDB<L::Hash, HashKey<L::Hash>, DBValue>,
 	encoded: &[Vec<u8>],
 ) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
 where
@@ -476,7 +476,7 @@ where
 
 /// Variant of 'decode_compact' that accept an iterator of encoded nodes as input.
 pub fn decode_compact_from_iter<'a, L, I>(
-	db: &mut MemoryDB<L::Hash, memory_db::HashKey<L::Hash>, DBValue>,
+	db: &mut MemoryDB<L::Hash, HashKey<L::Hash>, DBValue>,
 	encoded: I,
 ) -> Result<(TrieHash<L>, usize), TrieHash<L>, CError<L>>
 where

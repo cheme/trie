@@ -15,11 +15,11 @@
 use crate::{
 	nibble::{self, nibble_ops, NibbleSlice, NibbleVec},
 	node_codec::NodeCodec,
+	node_db::Hasher,
 	Bytes, CError, ChildReference, Result, TrieError, TrieHash, TrieLayout,
 };
 #[cfg(not(feature = "std"))]
 use alloc::{boxed::Box, vec::Vec};
-use hash_db::Hasher;
 
 use crate::rstd::{borrow::Borrow, mem, ops::Range};
 
@@ -572,60 +572,49 @@ impl NodePlan {
 				child.build(data, locations.first().copied().unwrap_or_default()),
 			),
 			NodePlan::Branch { value, children } => {
-				let mut child_slices = [None; nibble_ops::NIBBLE_LENGTH];
-				let mut nc = 0;
-				let value = if let Some(v) = value {
-					if v.is_inline() {
-						Some(v.build(data, Default::default()))
-					} else {
-						nc += 1;
-						Some(v.build(data, locations.first().copied().unwrap_or_default()))
-					}
-				} else {
-					None
-				};
-				for i in 0..nibble_ops::NIBBLE_LENGTH {
-					if let Some(child) = &children[i] {
-						let location = if child.is_inline() {
-							Default::default()
-						} else {
-							let l = locations.get(nc).copied().unwrap_or_default();
-							nc += 1;
-							l
-						};
-						child_slices[i] = Some(child.build(data, location));
-					}
-				}
+				let (value, child_slices) =
+					Self::build_value_and_children(value.as_ref(), children, data, locations);
 				Node::Branch(child_slices, value)
 			},
 			NodePlan::NibbledBranch { partial, value, children } => {
-				let mut child_slices = [None; nibble_ops::NIBBLE_LENGTH];
-				let mut nc = 0;
-				let value = if let Some(v) = value {
-					if v.is_inline() {
-						Some(v.build(data, Default::default()))
-					} else {
-						nc += 1;
-						Some(v.build(data, locations.first().copied().unwrap_or_default()))
-					}
-				} else {
-					None
-				};
-				for i in 0..nibble_ops::NIBBLE_LENGTH {
-					if let Some(child) = &children[i] {
-						let location = if child.is_inline() {
-							Default::default()
-						} else {
-							let l = locations.get(nc).copied().unwrap_or_default();
-							nc += 1;
-							l
-						};
-						child_slices[i] = Some(child.build(data, location));
-					}
-				}
+				let (value, child_slices) =
+					Self::build_value_and_children(value.as_ref(), children, data, locations);
 				Node::NibbledBranch(partial.build(data), child_slices, value)
 			},
 		}
+	}
+
+	pub(crate) fn build_value_and_children<'a, 'b, L: Copy + Default>(
+		value: Option<&'a ValuePlan>,
+		children: &'a [Option<NodeHandlePlan>; nibble_ops::NIBBLE_LENGTH],
+		data: &'b [u8],
+		locations: &[L],
+	) -> (Option<Value<'b, L>>, [Option<NodeHandle<'b, L>>; nibble_ops::NIBBLE_LENGTH]) {
+		let mut child_slices = [None; nibble_ops::NIBBLE_LENGTH];
+		let mut nc = 0;
+		let value = if let Some(v) = value {
+			if v.is_inline() {
+				Some(v.build(data, Default::default()))
+			} else {
+				nc += 1;
+				Some(v.build(data, locations.first().copied().unwrap_or_default()))
+			}
+		} else {
+			None
+		};
+		for i in 0..nibble_ops::NIBBLE_LENGTH {
+			if let Some(child) = &children[i] {
+				let location = if child.is_inline() {
+					Default::default()
+				} else {
+					let l = locations.get(nc).copied().unwrap_or_default();
+					nc += 1;
+					l
+				};
+				child_slices[i] = Some(child.build(data, location));
+			}
+		}
+		(value, child_slices)
 	}
 
 	/// Access value plan from node plan, return `None` for
@@ -647,6 +636,40 @@ impl NodePlan {
 			NodePlan::Leaf { value, .. } => Some(value),
 			NodePlan::Branch { value, .. } | NodePlan::NibbledBranch { value, .. } =>
 				value.as_mut(),
+		}
+	}
+
+	/// Check if the node has a location for value.
+	pub fn has_location_for_value(&self) -> bool {
+		self.value_plan().map(|v| !v.is_inline()).unwrap_or(false)
+	}
+
+	/// Check how many children location value node has.
+	pub fn num_children_locations(&self) -> usize {
+		match self {
+			NodePlan::Extension { child: NodeHandlePlan::Hash(_), .. } => 1,
+			NodePlan::Branch { children, .. } | NodePlan::NibbledBranch { children, .. } => {
+				let mut count = 0;
+				for child in children {
+					if let Some(NodeHandlePlan::Hash(_)) = child {
+						count += 1;
+					}
+				}
+				count
+			},
+			_ => 0,
+		}
+	}
+
+	pub fn additional_ref_location<L: Copy + Default>(&self, locations: &[L]) -> Option<L> {
+		let offset =
+			if self.has_location_for_value() { 1 } else { 0 } + self.num_children_locations();
+		if locations.len() > offset {
+			// only one additional location expected with current code.
+			debug_assert!(locations.len() == offset + 1);
+			Some(locations[offset])
+		} else {
+			None
 		}
 	}
 }
@@ -677,6 +700,7 @@ impl<D: Borrow<[u8]>, L: Default + Copy> OwnedNode<D, L> {
 	pub fn locations(&self) -> &[L] {
 		&self.locations
 	}
+
 	/// Returns a reference to the node decode plan.
 	pub fn node_plan(&self) -> &NodePlan {
 		&self.plan

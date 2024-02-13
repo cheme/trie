@@ -45,14 +45,26 @@ mod rstd {
 use self::rstd::{fmt, Error};
 
 use self::rstd::{boxed::Box, vec::Vec};
-use hash_db::MaybeDebug;
+pub use iterator::TrieDBNodeDoubleEndedIterator;
 use node::NodeOwned;
+use node_db::MaybeDebug;
 use range_proof::RangeProofError;
 
+#[cfg(feature = "bench")]
+pub mod bench;
+#[cfg(any(feature = "test_utils", test))]
+pub mod keccak_hasher;
+#[cfg(feature = "std")]
+pub mod mem_tree_db;
+pub mod memory_db;
 pub mod node;
+pub mod node_db;
 pub mod proof;
 pub mod range_proof;
 pub mod recorder;
+#[cfg(feature = "test_utils")]
+pub mod test_utils;
+pub mod trie_root;
 pub mod triedb;
 pub mod triedbmut;
 
@@ -69,10 +81,11 @@ pub use self::{
 	recorder::Recorder,
 	triedb::{TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBKeyIterator},
 	triedbmut::{
-		Changeset, ChangesetNodeRef, ChildReference, ExistingChangesetNode, NewChangesetNode,
-		TrieDBMut, TrieDBMutBuilder, Value,
+		Changeset, ChildReference, ExistingChangesetNode, NewChangesetNode, OwnedPrefix, TrieDBMut,
+		TrieDBMutBuilder, Value,
 	},
 };
+use crate::node_db::Hasher;
 pub use crate::{
 	iter_build::{
 		trie_visit, visit_range_proof, ProcessEncodedNode, TrieBuilder, TrieRoot, TrieRootUnhashed,
@@ -81,7 +94,6 @@ pub use crate::{
 	node_codec::{NodeCodec, Partial},
 	trie_codec::{decode_compact, decode_compact_from_iter, encode_compact},
 };
-pub use hash_db::{HashDB, Hasher};
 
 #[cfg(feature = "std")]
 pub use crate::iter_build::TrieRootPrint;
@@ -275,6 +287,11 @@ pub trait Trie<L: TrieLayout> {
 	/// Return the root of the trie.
 	fn root(&self) -> &TrieHash<L>;
 
+	/// Return the root location of the trie if it was set.
+	fn root_location(&self) -> L::Location {
+		Default::default()
+	}
+
 	/// Is the trie empty?
 	fn is_empty(&self) -> bool {
 		*self.root() == L::Codec::hashed_null_node()
@@ -337,6 +354,9 @@ pub trait TrieIterator<L: TrieLayout>: Iterator {
 	fn seek(&mut self, key: &[u8]) -> Result<(), TrieHash<L>, CError<L>>;
 }
 
+/// Extending the `TrieIterator` trait with `DoubleEndedIterator` trait.
+pub trait TrieDoubleEndedIterator<L: TrieLayout>: TrieIterator<L> + DoubleEndedIterator {}
+
 /// Trie types
 #[derive(PartialEq, Clone)]
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -369,8 +389,13 @@ pub trait TrieLayout {
 	type Hash: Hasher;
 	/// Codec to use (needs to match hasher and nibble ops).
 	type Codec: NodeCodec<HashOut = <Self::Hash as Hasher>::Out>;
-	type Location: Copy + Default + Eq + PartialEq + MaybeDebug;
+	type Location: Location;
 }
+
+/// Trait alias for requirement of location with `TrieLayout`.
+pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug {}
+
+impl<T: Copy + Default + Eq + PartialEq + MaybeDebug> Location for T {}
 
 /// This trait associates a trie definition with preferred methods.
 /// It also contains own default implementations and can be

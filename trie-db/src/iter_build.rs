@@ -18,16 +18,16 @@
 //! See `trie_visit` function.
 
 use crate::{
+	memory_db::{KeyFunction, MemoryDB},
 	nibble::{nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
+	node_db::{Hasher, Prefix, EMPTY_PREFIX},
 	range_proof::{Bitmap1, ProofOp, RangeProofCodec},
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
 };
-use hash_db::{Hasher, Prefix};
-use memory_db::MemoryDB;
 
 macro_rules! exponential_out {
 	(@3, [$($inpp:expr),*]) => { exponential_out!(@2, [$($inpp,)* $($inpp),*]) };
@@ -426,7 +426,7 @@ where
 		}
 	} else {
 		// nothing null root corner case
-		callback.process(hash_db::EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true);
+		callback.process(EMPTY_PREFIX, T::Codec::empty_node().to_vec(), true);
 	}
 }
 
@@ -438,7 +438,7 @@ pub trait ProcessEncodedNode<HO> {
 	/// Note that the returned value can change depending on implementation,
 	/// but usually it should be the Hash of encoded node.
 	/// This is not something direcly related to encoding but is here for
-	/// optimisation purpose (builder hash_db does return this value).
+	/// optimisation purpose (builder node_db does return this value).
 	fn process(
 		&mut self,
 		prefix: Prefix,
@@ -450,21 +450,21 @@ pub trait ProcessEncodedNode<HO> {
 	fn process_inner_hashed_value(&mut self, prefix: Prefix, value: &[u8]) -> HO;
 }
 
-/// Get trie root and insert visited node in a hash_db.
+/// Get trie root and insert visited node in a node_db.
 /// As for all `ProcessEncodedNode` implementation, it
 /// is only for full trie parsing (not existing trie).
-pub struct TrieBuilder<'a, T: TrieLayout, K: memory_db::KeyFunction<T::Hash> + Send + Sync> {
+pub struct TrieBuilder<'a, T: TrieLayout, K: KeyFunction<T::Hash> + Send + Sync> {
 	db: &'a mut MemoryDB<T::Hash, K, DBValue>,
 	pub root: Option<TrieHash<T>>,
 }
 
-impl<'a, T: TrieLayout, K: memory_db::KeyFunction<T::Hash> + Send + Sync> TrieBuilder<'a, T, K> {
+impl<'a, T: TrieLayout, K: KeyFunction<T::Hash> + Send + Sync> TrieBuilder<'a, T, K> {
 	pub fn new(db: &'a mut MemoryDB<T::Hash, K, DBValue>) -> Self {
 		TrieBuilder { db, root: None }
 	}
 }
 
-impl<'a, T, K: memory_db::KeyFunction<T::Hash> + Send + Sync> ProcessEncodedNode<TrieHash<T>>
+impl<'a, T, K: KeyFunction<T::Hash> + Send + Sync> ProcessEncodedNode<TrieHash<T>>
 	for TrieBuilder<'a, T, K>
 where
 	T: TrieLayout,
