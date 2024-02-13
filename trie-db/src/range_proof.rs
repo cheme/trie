@@ -137,6 +137,7 @@ impl From<std::io::Error> for RangeProofError {
 
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, Copy)]
+#[repr(u8)]
 // TODO rename Partial per key
 pub enum ProofOp {
 	Partial,     // slice next, with size as number of nibbles. Attached could be size.
@@ -147,6 +148,31 @@ pub enum ProofOp {
 	              * for possible. Attached could be bitmap.
 	              * When structure allows either inline or hash, we add a bit in the bitmap
 	              * to indicate if inline or single value hash: the first one */
+}
+
+impl ProofOp {
+	// warn this does not presume from header encoding,
+	// just a helper.
+	fn as_u8(self: Self) -> u8 {
+		match self {
+			ProofOp::Partial => 0,
+			ProofOp::Value => 1,
+			ProofOp::DropPartial => 2,
+			ProofOp::Hashes => 3,
+		}
+	}
+
+	// warn this does not presume from header encoding,
+	// just a helper.
+	fn from_u8(encoded: u8) -> Option<Self> {
+		Some(match encoded {
+			0 => ProofOp::Partial,
+			1 => ProofOp::Value,
+			2 => ProofOp::DropPartial,
+			3 => ProofOp::Hashes,
+			_ => return None,
+		})
+	}
 }
 
 fn varint_encoded_len(len: u32) -> usize {
@@ -246,25 +272,11 @@ impl RangeProofCodec for VarIntSimple {
 
 	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8 {
 		debug_assert!(attached.is_none());
-		match op {
-			ProofOp::Partial => 0,
-			ProofOp::Value => 1,
-			ProofOp::DropPartial => 2,
-			ProofOp::Hashes => 3,
-		}
+		op.as_u8()
 	}
 
 	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)> {
-		Some((
-			match encoded {
-				0 => ProofOp::Partial,
-				1 => ProofOp::Value,
-				2 => ProofOp::DropPartial,
-				3 => ProofOp::Hashes,
-				_ => return None,
-			},
-			None,
-		))
+		ProofOp::from_u8(encoded).map(|e| (e, None))
 	}
 }
 
@@ -274,60 +286,45 @@ pub struct VarIntSix;
 impl RangeProofCodec for VarIntSix {
 	fn op_attached_range(op: ProofOp) -> Option<u8> {
 		match op {
-			ProofOp::Partial => Some(1u8 << 6), // 0 len partial is invalid
-			ProofOp::Value => Some((1u8 << 6) - 1), // 0 is valid
-			ProofOp::DropPartial => Some(1u8 << 6), /* inclusive as we skip invalid 0 value in */
+			ProofOp::Partial | ProofOp::DropPartial => Some(1u8 << 6), // 0 len partial is invalid
+			ProofOp::Value => Some((1u8 << 6) - 1),                    // 0 is valid
 			// ranche.
 			ProofOp::Hashes => Some(6),
 		}
 	}
 
 	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8 {
-		match op {
-			ProofOp::Partial =>
-				0 | if let Some(a) = attached {
-					let a = a - 1; // 0 is invalid
-					debug_assert!((a & 0b1100_0000) == 0);
-					a << 2
-				} else {
-					0
+		let base = op.as_u8();
+		debug_assert!(attached.is_some());
+		let attached = if let Some(mut attached) = attached {
+			match op {
+				ProofOp::Partial | ProofOp::DropPartial => {
+					attached -= 1;
 				},
-			ProofOp::Value =>
-				1 | if let Some(a) = attached {
-					debug_assert!((a & 0b1100_0000) == 0);
-					a << 2
-				} else {
-					0
-				},
-			ProofOp::DropPartial =>
-				2 | if let Some(a) = attached {
-					let a = a - 1; // 0 is invalid
-					debug_assert!((a & 0b1100_0000) == 0);
-					a << 2
-				} else {
-					0
-				},
-			ProofOp::Hashes =>
-				3 | if let Some(a) = attached {
-					debug_assert!((a & 0b1100_0000) == 0);
-					a << 2
-				} else {
-					0
-				},
-		}
+				_ => (),
+			}
+			debug_assert!((attached & 0b1100_0000) == 0);
+			attached << 2
+		} else {
+			0
+		};
+		base | attached
 	}
 
 	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)> {
-		Some((
-			match (encoded & 0b11) {
-				0 => return Some((ProofOp::Partial, Some((encoded >> 2) + 1))),
-				1 => return Some((ProofOp::Value, Some(encoded >> 2))),
-				2 => return Some((ProofOp::DropPartial, Some((encoded >> 2) + 1))),
-				3 => return Some((ProofOp::Hashes, Some(encoded >> 2))),
-				_ => unreachable!(),
-			},
-			None,
-		))
+		if let Some(op) = ProofOp::from_u8(encoded & 0b11) {
+			let mut attached = encoded >> 2;
+			match (op) {
+				ProofOp::Partial | ProofOp::DropPartial => {
+					// no 0 value
+					attached += 1;
+				},
+				_ => (),
+			}
+			Some((op, Some(attached)))
+		} else {
+			None
+		}
 	}
 }
 
