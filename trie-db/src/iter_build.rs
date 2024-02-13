@@ -21,7 +21,7 @@ use crate::{
 	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
-	range_proof::{Bitmap1, RangeProofCodec, ProofOp},
+	range_proof::{Bitmap1, ProofOp, RangeProofCodec},
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
@@ -655,7 +655,6 @@ pub fn visit_range_proof<
 		let (proof_op, attached) = C::decode_op(buff[0]).ok_or(())?;
 		match proof_op {
 			ProofOp::Partial => {
-				unimplemented!("manage attached");
 				// TODO check the partial is post prev partial!!
 				match prev_op {
 					Some(ProofOp::Partial) => {
@@ -668,7 +667,7 @@ pub fn visit_range_proof<
 					return Err(());
 				}
 				last_drop = None;
-				let size = C::varint_decode_from(input).map_err(|_| ())? as usize;
+				let size = C::decode_size(proof_op, attached, input).map_err(|_| ())?;
 				if size == 0 {
 					return Err(());
 				}
@@ -710,7 +709,6 @@ pub fn visit_range_proof<
 				}
 			},
 			ProofOp::Value => {
-				unimplemented!("manage attached");
 				match prev_op {
 					Some(ProofOp::Value) => {
 						// no two value at same heigth
@@ -732,13 +730,12 @@ pub fn visit_range_proof<
 				last_drop = None;
 				can_seek = false;
 
-				let value = read_value::<BUFF_LEN, C>(input, &mut buff)?;
+				let value = read_value::<BUFF_LEN, C>(input, attached, &mut buff)?;
 				// not the most efficient as this is guaranted to be a push
 				depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 				last_key = Some(key.inner().to_vec());
 			},
 			ProofOp::DropPartial => {
-				unimplemented!("manage attached");
 				match prev_op {
 					Some(ProofOp::DropPartial) => {
 						// consecutive drop
@@ -756,7 +753,8 @@ pub fn visit_range_proof<
 				}
 				can_seek = false;
 
-				let to_drop = C::varint_decode_from(input).map_err(|_| ())? as usize;
+				let to_drop =
+					C::decode_size(ProofOp::DropPartial, attached, input).map_err(|_| ())?;
 				if to_drop == 0 {
 					return Err(());
 				}
@@ -794,7 +792,8 @@ pub fn visit_range_proof<
 				let mut i = 8; // trigger a header read.
 				let mut bitmap = Bitmap1(0);
 				if let Some(att) = attached {
-					let nb_bitmap_hash = C::op_attached_range(ProofOp::Hashes).expect("has attached");
+					let nb_bitmap_hash =
+						C::op_attached_range(ProofOp::Hashes).expect("has attached");
 					i = 8 - (nb_bitmap_hash as usize);
 					bitmap = Bitmap1(att);
 				}
@@ -831,7 +830,7 @@ pub fn visit_range_proof<
 					if has_value {
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
-							let value = read_value::<BUFF_LEN, C>(input, &mut buff)?;
+							let value = read_value::<BUFF_LEN, C>(input, None, &mut buff)?;
 							depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 						} else {
 							// hash value
@@ -931,10 +930,10 @@ fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
 
 fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
 	input: &mut impl crate::range_proof::Read,
+	attached: Option<u8>,
 	buff: &mut [u8; BUFF_LEN],
 ) -> Result<DBValue, ()> {
-	let mut nb_byte = C::varint_decode_from(input).map_err(|_| ())? as usize;
-
+	let mut nb_byte = C::decode_size(ProofOp::Value, attached, input).map_err(|_| ())?;
 	let mut value = DBValue::with_capacity(nb_byte);
 	while nb_byte > 0 {
 		let bound = core::cmp::min(nb_byte, BUFF_LEN);

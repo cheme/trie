@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{Bitmap1, CountedWrite, NoWrite, RangeProofCodec, Read, Write, ProofOp};
+use crate::range_proof::{Bitmap1, CountedWrite, NoWrite, ProofOp, RangeProofCodec, Read, Write};
 use core::ops::Range;
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
@@ -758,8 +758,8 @@ fn put_value<L: TrieLayout, C: RangeProofCodec>(
 	output: &mut impl CountedWrite,
 ) -> Result<(), TrieHash<L>, CError<L>> {
 	C::encode_with_size(ProofOp::Value, value.len(), output)
-			// TODO right error (when doing no_std writer / reader
-			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+		// TODO right error (when doing no_std writer / reader
+		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 	output
 		.write(value)
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
@@ -922,8 +922,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			let op = ProofOp::DropPartial;
 
 			C::encode_with_size(op, to_pop, output)
-					// TODO right error (when doing no_std writer / reader
-					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+				// TODO right error (when doing no_std writer / reader
+				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
 			//continue;
 		}

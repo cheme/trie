@@ -149,14 +149,15 @@ pub enum ProofOp {
 	              * to indicate if inline or single value hash: the first one */
 }
 
-
 /// Tools for encoding range proof.
 /// Mainly single byte header for ops and size encoding.
 pub trait RangeProofCodec {
+	// TODO rem?
 	fn varint_encoded_len(len: u32) -> usize;
 
 	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()>;
 
+	// TODO rem?
 	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)>;
 
 	fn varint_decode_from(input: &mut impl Read) -> Result<u32>;
@@ -175,7 +176,7 @@ pub trait RangeProofCodec {
 		let (attached, size) = if let Some(enc_size) = Self::op_attached_range(op) {
 			if size < enc_size as usize {
 				(Some(size as u8), None)
-			} else  {
+			} else {
 				(Some(enc_size), Some(size - enc_size as usize))
 			}
 		} else {
@@ -191,7 +192,18 @@ pub trait RangeProofCodec {
 		Ok(())
 	}
 
-
+	fn decode_size(op: ProofOp, attached: Option<u8>, input: &mut impl Read) -> Result<usize> {
+		Ok(if let Some(s) = attached {
+			let max = Self::op_attached_range(op).expect("got attached");
+			if s < max {
+				s as usize
+			} else {
+				s as usize + Self::varint_decode_from(input)? as usize
+			}
+		} else {
+			Self::varint_decode_from(input)? as usize
+		})
+	}
 }
 
 /// Test codec.
