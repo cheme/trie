@@ -19,7 +19,7 @@
 
 use crate::{
 	memory_db::{KeyFunction, MemoryDB},
-	nibble::{nibble_ops, BackingByteVec, NibbleSlice},
+	nibble::{nibble_ops, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
 	node_db::{Hasher, Prefix, EMPTY_PREFIX},
@@ -654,7 +654,7 @@ pub fn visit_range_proof<
 				_ => (),
 			}
 			return Err(e);
-		}; // TODO right erro from trie crate
+		};
 		let (proof_op, attached) =
 			C::decode_op(buff[0]).ok_or(RangeProofError::MalformedSequence)?;
 		match proof_op {
@@ -675,25 +675,22 @@ pub fn visit_range_proof<
 				if size == 0 {
 					return Err(RangeProofError::MalformedProofOp);
 				}
-				let mut nb_byte = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
-					size / nibble_ops::NIBBLE_PER_BYTE
+				let (mut nb_byte, last_byte) = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
+					(size / nibble_ops::NIBBLE_PER_BYTE, false)
 				} else {
-					(size / nibble_ops::NIBBLE_PER_BYTE) + 1
+					(size / nibble_ops::NIBBLE_PER_BYTE, true)
 				};
 
-				// TODO allocating a nibble_vec not really usefull.
-				let mut nibble_vec = BackingByteVec::with_capacity(nb_byte);
 				while nb_byte > 0 {
 					let bound = core::cmp::min(nb_byte, BUFF_LEN);
 					input.read_exact(&mut buff[..bound])?;
-					nibble_vec.extend_from_slice(&buff[..bound]);
+					key.append_partial(((0, 0), &buff[..bound]));
 					nb_byte -= bound;
 				}
-				let mut nibble_vec: NibbleVec = nibble_vec.into();
-				if nibble_vec.len() > size {
-					nibble_vec.drop_lasts(nibble_vec.len() - size);
+				if last_byte {
+					input.read_exact(&mut buff[..1])?;
+					key.push(NibbleSlice::new(&buff[..1]).at(0));
 				}
-				key.append(&nibble_vec);
 				if can_seek {
 					if let Some(start_key) = start_key {
 						let common = nibble_ops::biggest_depth(start_key, key.inner());
