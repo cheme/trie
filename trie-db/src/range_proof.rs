@@ -135,6 +135,8 @@ impl From<std::io::Error> for RangeProofError {
 	}
 }
 
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone, Copy)]
 // TODO rename Partial per key
 pub enum ProofOp {
 	Partial,     // slice next, with size as number of nibbles. Attached could be size.
@@ -146,6 +148,7 @@ pub enum ProofOp {
 	              * When structure allows either inline or hash, we add a bit in the bitmap
 	              * to indicate if inline or single value hash: the first one */
 }
+
 
 /// Tools for encoding range proof.
 /// Mainly single byte header for ops and size encoding.
@@ -167,6 +170,28 @@ pub trait RangeProofCodec {
 
 	/// Return op and range attached.
 	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)>;
+
+	fn encode_with_size(op: ProofOp, size: usize, output: &mut impl CountedWrite) -> Result<()> {
+		let (attached, size) = if let Some(enc_size) = Self::op_attached_range(op) {
+			if size < enc_size as usize {
+				(Some(size as u8), None)
+			} else  {
+				(Some(enc_size), Some(size - enc_size as usize))
+			}
+		} else {
+			(None, Some(size))
+		};
+
+		let header = Self::encode_op(op, attached);
+
+		output.write(&[header])?;
+		if let Some(size) = size {
+			Self::varint_encode_into(size as u32, output)?;
+		}
+		Ok(())
+	}
+
+
 }
 
 /// Test codec.

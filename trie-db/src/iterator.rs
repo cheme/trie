@@ -757,15 +757,9 @@ fn put_value<L: TrieLayout, C: RangeProofCodec>(
 	value: &[u8],
 	output: &mut impl CountedWrite,
 ) -> Result<(), TrieHash<L>, CError<L>> {
-	let op = ProofOp::Value;
-	output
-		.write(&[op.as_u8()])
-		// TODO right error (when doing no_std writer / reader
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	C::varint_encode_into(value.len() as u32, output)
-		// TODO right error (when doing no_std writer / reader
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-
+	C::encode_with_size(ProofOp::Value, value.len(), output)
+			// TODO right error (when doing no_std writer / reader
+			.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 	output
 		.write(value)
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
@@ -926,14 +920,10 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			let to_pop = pop_from - cursor;
 
 			let op = ProofOp::DropPartial;
-			output
-				.write(&[op.as_u8()])
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
-			let nb = C::varint_encode_into(to_pop as u32, output)
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			C::encode_with_size(op, to_pop, output)
+					// TODO right error (when doing no_std writer / reader
+					.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 
 			//continue;
 		}
@@ -1013,13 +1003,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				}
 				one_hash_written |= has_hash;
 				if has_hash && depth < depth_from {
-					let op = ProofOp::DropPartial;
-					output
-						.write(&[op.as_u8()])
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-
-					let nb = C::varint_encode_into((depth_from - depth) as u32, output)
+					C::encode_with_size(ProofOp::DropPartial, depth_from - depth, output)
 						// TODO right error (when doing no_std writer / reader
 						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 					depth_from = depth;
@@ -1076,12 +1060,7 @@ fn push_partial_key<L: TrieLayout, C: RangeProofCodec>(
 ) -> Result<(), TrieHash<L>, CError<L>> {
 	let to_write = to - from;
 	let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
-	let op = ProofOp::Partial;
-	output
-		.write(&[op.as_u8()])
-		// TODO right error (when doing no_std writer / reader
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	let nb = C::varint_encode_into(to_write as u32, output)
+	C::encode_with_size(ProofOp::Partial, to_write, output)
 		// TODO right error (when doing no_std writer / reader
 		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
 	let start_aligned = from % nibble_ops::NIBBLE_PER_BYTE == 0;
