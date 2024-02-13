@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{CountedWrite, ProofOp, RangeProofError, RangeProofCodec};
+use crate::range_proof::{CountedWrite, ProofOp, RangeProofCodec, RangeProofError};
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
@@ -1049,16 +1049,16 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 
 		let mut prefix = prefix.clone();
 		let is_inline = hash.is_none();
-		// TODO node.node_plan() instead
-		let value = match node.node() {
-			Node::Leaf(partial, value) => {
-				prefix.append_partial(partial.right());
-				Some(value)
+		let node_data = node.data();
+		let value = match node.node_plan() {
+			NodePlan::Leaf { partial, value } => {
+				prefix.append_partial(partial.build(node_data).right());
+				Some(value.clone())
 			},
-			Node::Branch(_, value) => value,
-			Node::NibbledBranch(partial, _, value) => {
-				prefix.append_partial(partial.right());
-				value
+			NodePlan::Branch { value, .. } => value.clone(),
+			NodePlan::NibbledBranch { partial, value, .. } => {
+				prefix.append_partial(partial.build(node_data).right());
+				value.clone()
 			},
 			_ => None,
 		};
@@ -1082,6 +1082,8 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 		C::push_partial_key(key_len, cursor, &key, output)?;
 		cursor = key_len;
 
+		let locations = node.locations();
+		let value = value.build(node_data, locations.first().copied().unwrap_or_default());
 		// TODO non vec value
 		let value = match value {
 			Value::Node(hash, location) =>
