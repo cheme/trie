@@ -139,10 +139,10 @@ pub enum ProofOp {
 	/// using next bit of bitmap to indicate that.
 	/// After each bitmap, hashes are written (fix size or prefix with len if varsize).
 	/// Bitmap and hashes are emmited only when content is not queried and node is accessed.
-	/// Can be emmitted when entering a child node for value if first access and child node not emmited before
-	/// the accessed child node index.
-	/// Can be emmitted when exiting node for children that are after last accessed child (value and all children
-	/// if first access).
+	/// Can be emmitted when entering a child node for value if first access and child node not
+	/// emmited before the accessed child node index.
+	/// Can be emmitted when exiting node for children that are after last accessed child (value
+	/// and all children if first access).
 	/// In header attached could be bitmap content.
 	Hashes,
 }
@@ -306,7 +306,6 @@ pub trait RangeProofCodec {
 		let mut i_bitmap;
 		// if bit in previous bitmap (presence to true and type expected next).
 		let mut prev_bit: Option<OpHash> = None;
-		let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new(); // TODO shoul be single byte
 
 		loop {
 			i_bitmap = 0;
@@ -365,18 +364,15 @@ pub trait RangeProofCodec {
 
 			if !header_written {
 				header_written = true;
-
-				let attached = header_bitmap_len.map(|_| bitmap.0);
-				let header = Self::encode_op(ProofOp::Hashes, attached);
-				buff_bef_first.push(header);
-				if attached.is_none() {
-					buff_bef_first.push(bitmap.0);
+				let header = Self::encode_op(ProofOp::Hashes, header_bitmap_len.map(|_| bitmap.0));
+				if header_bitmap_len.is_some() {
+					output.write_all(&[header])?;
+				} else {
+					output.write_all(&[header, bitmap.0])?;
 				}
 			} else {
-				buff_bef_first.push(bitmap.0);
+				output.write_all(&[bitmap.0])?;
 			}
-			output.write_all(&buff_bef_first)?;
-			buff_bef_first.clear();
 			for j in 0..i_hash {
 				match nexts[j] {
 					OpHash::Fix(s) => {
