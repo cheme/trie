@@ -274,24 +274,31 @@ pub struct VarIntSix;
 impl RangeProofCodec for VarIntSix {
 	fn op_attached_range(op: ProofOp) -> Option<u8> {
 		match op {
-			ProofOp::Partial => Some(1u8 << 6),
-			ProofOp::Value => None,
-			ProofOp::DropPartial => Some(1u8 << 6), /* inclusive as we skip invalid 0 value in
-			                                          * ranche. */
+			ProofOp::Partial => Some(1u8 << 6), // 0 len partial is invalid
+			ProofOp::Value => Some((1u8 << 6) - 1), // 0 is valid
+			ProofOp::DropPartial => Some(1u8 << 6), /* inclusive as we skip invalid 0 value in */
+			// ranche.
 			ProofOp::Hashes => Some(6),
 		}
 	}
 
 	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8 {
 		match op {
-			ProofOp::Partial => 0 |if let Some(a) = attached {
+			ProofOp::Partial =>
+				0 | if let Some(a) = attached {
 					let a = a - 1; // 0 is invalid
 					debug_assert!((a & 0b1100_0000) == 0);
 					a << 2
 				} else {
 					0
 				},
-			ProofOp::Value => 1,
+			ProofOp::Value =>
+				1 | if let Some(a) = attached {
+					debug_assert!((a & 0b1100_0000) == 0);
+					a << 2
+				} else {
+					0
+				},
 			ProofOp::DropPartial =>
 				2 | if let Some(a) = attached {
 					let a = a - 1; // 0 is invalid
@@ -314,7 +321,7 @@ impl RangeProofCodec for VarIntSix {
 		Some((
 			match (encoded & 0b11) {
 				0 => return Some((ProofOp::Partial, Some((encoded >> 2) + 1))),
-				1 => ProofOp::Value,
+				1 => return Some((ProofOp::Value, Some(encoded >> 2))),
 				2 => return Some((ProofOp::DropPartial, Some((encoded >> 2) + 1))),
 				3 => return Some((ProofOp::Hashes, Some(encoded >> 2))),
 				_ => unreachable!(),
