@@ -192,7 +192,7 @@ fn encoding_node_owned_and_decoding_node_works() {
 	}
 }
 
-fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
+fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>, C: trie_db::range_proof::RangeProofCodec>(
 	entries: Vec<(&'static [u8], &'static [u8])>,
 	size_limit: Option<usize>,
 ) -> (<L::Hash as Hasher>::Out, Vec<Vec<u8>>) {
@@ -218,7 +218,7 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 	loop {
 		let mut proof = Vec::new();
 		let iter = trie_db::TrieDBRawIterator::new(&trie).unwrap();
-		start = trie_db::range_proof::<_, trie_db::range_proof::VarIntSimple>(
+		start = trie_db::range_proof::<_, C>(
 			&trie,
 			iter,
 			&mut proof,
@@ -238,12 +238,13 @@ fn test_encode_full_state<L: TrieLayout, DB: TestDB<L>>(
 
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	trie_full_state_limitted::<T>(Some(1));
-	trie_full_state_limitted::<T>(Some(200));
-	trie_full_state_limitted::<T>(None);
+	use trie_db::range_proof::VarIntSimple;
+	trie_full_state_limitted::<T, VarIntSimple>(Some(1));
+	trie_full_state_limitted::<T, VarIntSimple>(Some(200));
+	trie_full_state_limitted::<T, VarIntSimple>(None);
 }
-fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
-	let (root, proofs) = test_encode_full_state::<T, PrefixedMemoryDB<T>>(
+fn trie_full_state_limitted<T: TrieLayout, C: trie_db::range_proof::RangeProofCodec>(size_limit: Option<usize>) {
+	let (root, proofs) = test_encode_full_state::<T, PrefixedMemoryDB<T>, C>(
 		vec![
 			// "alfa" is at a hash-referenced leaf node.
 			(b"alfa", &[0; 32]),
@@ -267,7 +268,7 @@ fn trie_full_state_limitted<T: TrieLayout>(size_limit: Option<usize>) {
 		let cb_root = {
 			//ProcessEncodedNode<TrieHash<L>
 			let mut cb = trie_db::TrieBuilder::<T, _>::new(&mut memdb);
-			start_key = trie_db::visit_range_proof::<T, _, trie_db::range_proof::VarIntSimple>(
+			start_key = trie_db::visit_range_proof::<T, _, C>(
 				&mut proof.as_slice(),
 				&mut cb,
 				start_key.as_ref().map(Vec::as_slice),
