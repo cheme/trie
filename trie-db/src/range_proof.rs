@@ -276,7 +276,8 @@ impl RangeProofCodec for VarIntSix {
 		match op {
 			ProofOp::Partial => None,
 			ProofOp::Value => None,
-			ProofOp::DropPartial => None,
+			ProofOp::DropPartial => Some(1u8 << 6), /* inclusive as we skip invalid 0 value in
+			                                          * ranche. */
 			ProofOp::Hashes => Some(6),
 		}
 	}
@@ -285,7 +286,14 @@ impl RangeProofCodec for VarIntSix {
 		match op {
 			ProofOp::Partial => 0,
 			ProofOp::Value => 1,
-			ProofOp::DropPartial => 2,
+			ProofOp::DropPartial =>
+				2 | if let Some(a) = attached {
+					let a = a - 1; // 0 is invalid
+					debug_assert!((a & 0b1100_0000) == 0);
+					a << 2
+				} else {
+					0
+				},
 			ProofOp::Hashes =>
 				3 | if let Some(a) = attached {
 					debug_assert!((a & 0b1100_0000) == 0);
@@ -301,7 +309,7 @@ impl RangeProofCodec for VarIntSix {
 			match (encoded & 0b11) {
 				0 => ProofOp::Partial,
 				1 => ProofOp::Value,
-				2 => ProofOp::DropPartial,
+				2 => return Some((ProofOp::DropPartial, Some((encoded >> 2) + 1))),
 				3 => return Some((ProofOp::Hashes, Some(encoded >> 2))),
 				_ => unreachable!(),
 			},
