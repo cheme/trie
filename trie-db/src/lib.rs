@@ -25,7 +25,7 @@ mod rstd {
 		collections::{BTreeMap, VecDeque},
 		convert,
 		error::Error,
-		fmt, hash, iter, marker, mem, ops, rc, result, sync, vec,
+		fmt, hash, iter, marker, mem, ops, result, sync, vec,
 	};
 }
 

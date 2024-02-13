@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{Bitmap1, CountedWrite, NoWrite, ProofOp, RangeProofCodec, Read, Write};
-use core::ops::Range;
+use crate::range_proof::{CountedWrite, ProofOp, RangeProofCodec};
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
-	node::{Node, NodeHandle, NodeHandlePlan, NodeOwned, NodePlan, OwnedNode, Value, ValuePlan},
+	node::{Node, NodeHandle, NodeHandlePlan, NodePlan, OwnedNode, Value, ValuePlan},
 	triedb::TrieDB,
-	ProcessEncodedNode, TrieError, TrieItem, TrieKeyItem,
+	TrieError, TrieItem, TrieKeyItem,
 };
 use hash_db::{Hasher, Prefix, EMPTY_PREFIX};
 
@@ -788,11 +787,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			cursor = pref_len - 1; // one for branch index
 			let to_pop = pop_from - cursor;
 
-			let op = ProofOp::DropPartial;
-
-			C::encode_with_size(op, to_pop, output)
-				// TODO right error (when doing no_std writer / reader
-				.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+			C::encode_with_size(ProofOp::DropPartial, to_pop, output)?;
 
 			//continue;
 		}
@@ -849,7 +844,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			let mut depth = key_len;
 			let mut first = true;
 			let mut one_hash_written = false;
-			while let Some(Crumb { node, hash, .. }) = iter.trail.pop() {
+			while let Some(Crumb { node, .. }) = iter.trail.pop() {
 				let range_aft = if first {
 					first = false;
 					// key we stop at, if branch then add all children
@@ -872,9 +867,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				}
 				one_hash_written |= has_hash;
 				if has_hash && depth < depth_from {
-					C::encode_with_size(ProofOp::DropPartial, depth_from - depth, output)
-						// TODO right error (when doing no_std writer / reader
-						.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
+					C::encode_with_size(ProofOp::DropPartial, depth_from - depth, output)?;
 					depth_from = depth;
 				}
 				if has_hash {

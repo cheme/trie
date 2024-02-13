@@ -18,7 +18,7 @@
 //! See `trie_visit` function.
 
 use crate::{
-	nibble::{self, nibble_ops, BackingByteVec, NibbleSlice},
+	nibble::{nibble_ops, BackingByteVec, NibbleSlice},
 	node::Value,
 	node_codec::NodeCodec,
 	range_proof::{Bitmap1, ProofOp, RangeProofCodec},
@@ -692,8 +692,7 @@ pub fn visit_range_proof<
 				key.append(&nibble_vec);
 				if can_seek {
 					if let Some(start_key) = start_key {
-						let common =
-							crate::nibble::nibble_ops::biggest_depth(start_key, key.inner());
+						let common = nibble_ops::biggest_depth(start_key, key.inner());
 						let common = core::cmp::min(common, key.len());
 						if common < key.len() {
 							// TODO here if valid seek should only be equal

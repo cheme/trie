@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{iterator::OpHash, nibble_ops, CError, TrieError, TrieHash};
+use crate::{iterator::OpHash, nibble_ops};
+use crate::rstd::vec::Vec;
 
-#[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RangeProofError {
 	/// No content to read from.
 	EndOfStream,
@@ -217,7 +217,6 @@ pub trait RangeProofCodec {
 			}
 			i += 1;
 		}
-		Err(RangeProofError::EndOfStream)
 	}
 
 	/// return range of value that can be attached to this op.
@@ -278,19 +277,19 @@ pub trait RangeProofCodec {
 		if start_aligned {
 			let off = if aligned { 0 } else { 1 };
 			let slice_to_write = &key[start_ix..key.len() - off];
-			output.write_all(slice_to_write);
+			output.write_all(slice_to_write)?;
 			if !aligned {
-				output.write_all(&[nibble_ops::pad_left(key[key.len() - 1])]);
+				output.write_all(&[nibble_ops::pad_left(key[key.len() - 1])])?;
 			}
 		} else {
 			for i in start_ix..key.len() - 1 {
 				let mut b = key[i] << 4;
 				b |= key[i + 1] >> 4;
-				output.write_all(&[b]);
+				output.write_all(&[b])?;
 			}
 			if !aligned {
 				let b = key[key.len() - 1] << 4;
-				output.write_all(&[b]);
+				output.write_all(&[b])?;
 			}
 		}
 		Ok(())
@@ -309,17 +308,13 @@ pub trait RangeProofCodec {
 	{
 		let mut nexts: [OpHash; 8] = [OpHash::None; 8];
 		let mut header_written = false;
-		let mut i_hash = 0;
-		let mut i_bitmap = 0;
-		let mut hash_len = 0;
-		let mut bitmap_len = 0;
+		let mut i_hash;
+		let mut i_bitmap;
 		// if bit in previous bitmap (presence to true and type expected next).
 		let mut prev_bit: Option<OpHash> = None;
 		let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new(); // TODO shoul be single byte
 
 		loop {
-			bitmap_len += i_bitmap;
-			hash_len += i_hash;
 			i_bitmap = 0;
 			i_hash = 0;
 			let mut bitmap = Bitmap1::default();
@@ -389,7 +384,7 @@ pub trait RangeProofCodec {
 			for j in 0..i_hash {
 				match nexts[j] {
 					OpHash::Fix(s) => {
-						output.write_all(s);
+						output.write_all(s)?;
 					},
 					OpHash::Var(s) => {
 						Self::varint_encode_into(s.len() as u32, output)?;
@@ -455,7 +450,7 @@ impl RangeProofCodec for VarIntSix {
 	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)> {
 		if let Some(op) = ProofOp::from_u8(encoded & 0b11) {
 			let mut attached = encoded >> 2;
-			match (op) {
+			match op {
 				ProofOp::Partial | ProofOp::DropPartial => {
 					// no 0 value
 					attached += 1;
