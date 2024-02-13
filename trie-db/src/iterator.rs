@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::range_proof::{CountedWrite, ProofOp, RangeProofCodec};
+use crate::range_proof::{CountedWrite, ProofOp, RangeProofError, RangeProofCodec};
 
 use super::{CError, DBValue, Result, Trie, TrieHash, TrieIterator, TrieLayout};
 use crate::{
@@ -947,13 +947,10 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			};
 
 			if node_depth > trail_key.len() {
-				// should be unreachable if stop at value: maybe just error in this case
-				seek_to_value = false;
-				break;
+				return Err(RangeProofError::ShouldSuspendOnValue.into());
 			} else if node_depth == trail_key.len() {
 				if value.is_none() {
-					// TODO proper error not starting at a value.
-					return Err(Box::new(TrieError::IncompleteDatabase(Default::default())));
+					return Err(RangeProofError::ShouldSuspendOnValue.into());
 				}
 				seek_to_value = true;
 			}

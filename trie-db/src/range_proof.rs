@@ -19,6 +19,9 @@ pub enum RangeProofError {
 	/// No content to read from.
 	EndOfStream,
 
+	/// Stopping the range proof only on value from non inline node.
+	ShouldSuspendOnValue,
+
 	/// Unsupported usage.
 	Unsupported,
 
