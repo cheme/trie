@@ -106,26 +106,6 @@ impl Write for Vec<u8> {
 	}
 }
 
-#[derive(Clone, Copy)]
-pub struct NoWrite;
-
-// TODO no need for NoWrite
-impl Write for NoWrite {
-	fn write_all(&mut self, _: &[u8]) -> Result<()> {
-		Err(RangeProofError::Unsupported)
-	}
-
-	fn flush(&mut self) -> Result<()> {
-		Ok(())
-	}
-}
-
-impl CountedWrite for NoWrite {
-	fn written(&self) -> usize {
-		0
-	}
-}
-
 #[cfg(feature = "std")]
 impl From<std::io::Error> for RangeProofError {
 	fn from(e: std::io::Error) -> Self {
@@ -140,16 +120,31 @@ impl From<std::io::Error> for RangeProofError {
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Clone, Copy)]
 #[repr(u8)]
-// TODO rename Partial per key
 pub enum ProofOp {
-	Partial,     // slice next, with size as number of nibbles. Attached could be size.
-	Value,       // value next. Attached could be size.
-	DropPartial, // followed by depth. Attached could be size.
-	Hashes,      /* followed by consecutive defined hash, then bitmap of maximum 8 possibly
-	              * defined hash then defined amongst them, then 8 next and repeat
-	              * for possible. Attached could be bitmap.
-	              * When structure allows either inline or hash, we add a bit in the bitmap
-	              * to indicate if inline or single value hash: the first one */
+	/// Followed by size and partial key content.
+	/// Emmitted everytime the iterator cursor advance on a key.
+	/// Two consecutive `Partial` are not allowed (should be merged).
+	/// In header attached could be size.
+	Partial,
+	/// Followed by value.
+	/// Emmitted every time a node with an attached value is queried.
+	/// In header attached could be size.
+	Value,
+	/// Folowed by depth.
+	/// Emmitted everytime the iterator cursor goes back on a key.
+	/// In header attached could be size.
+	DropPartial,
+	/// Folowed by bitmap of next items. Bitmap sized one byte max.
+	/// Items in bitmap if present and possibly varlength (inline node or inline value), are
+	/// using next bit of bitmap to indicate that.
+	/// After each bitmap, hashes are written (fix size or prefix with len if varsize).
+	/// Bitmap and hashes are emmited only when content is not queried and node is accessed.
+	/// Can be emmitted when entering a child node for value if first access and child node not emmited before
+	/// the accessed child node index.
+	/// Can be emmitted when exiting node for children that are after last accessed child (value and all children
+	/// if first access).
+	/// In header attached could be bitmap content.
+	Hashes,
 }
 
 impl ProofOp {
