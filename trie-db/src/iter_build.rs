@@ -23,7 +23,7 @@ use crate::{
 	node::Value,
 	node_codec::NodeCodec,
 	node_db::{Hasher, Prefix, EMPTY_PREFIX},
-	range_proof::{Bitmap1, ProofOp, RangeProofCodec},
+	range_proof::{Bitmap1, ProofOp, RangeProofCodec, RangeProofError},
 	rstd::{cmp::max, marker::PhantomData, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
@@ -123,12 +123,13 @@ where
 		self.0.len() == 1
 	}
 
+	// return true on success
 	fn drop_to(
 		&mut self,
 		key: &mut NibbleVec,
 		to: Option<usize>,
 		callback: &mut impl ProcessEncodedNode<TrieHash<T>>,
-	) {
+	) -> bool {
 		loop {
 			debug_assert!(!T::USE_EXTENSION);
 			let is_root = to.is_none() && self.0.len() == 1;
@@ -153,7 +154,7 @@ where
 			); // TODO is prefix ever different from nkey?
 
 			let Some((children, value, _depth)) = self.0.pop() else {
-				unimplemented!("TODO an error");
+				return false;
 			};
 			debug_assert!(_depth == key.len());
 
@@ -188,7 +189,7 @@ where
 			key.drop_lasts(key.len() - target_depth);
 
 			if is_root {
-				return;
+				return true;
 			}
 			let insert = if let Some(parent_depth) = self.0.last().map(|i| i.2) {
 				//debug_assert!(target_depth >= parent_depth);
@@ -203,7 +204,7 @@ where
 			debug_assert!(parent_children[index].is_none());
 			parent_children[index] = Some(hash);
 			if to.map(|t| t == target_depth).unwrap_or(false) {
-				return;
+				return true;
 			}
 		}
 	}
@@ -630,7 +631,7 @@ pub fn visit_range_proof<
 	input: &mut impl crate::range_proof::Read,
 	callback: &mut F,
 	start_key: Option<&[u8]>,
-) -> Result<Option<Vec<u8>>, ()> {
+) -> Result<Option<Vec<u8>>, RangeProofError> {
 	let mut key = NibbleVec::new();
 	let mut depth_queue = crate::iter_build::CacheAccum::<L, DBValue>::new();
 
@@ -644,32 +645,35 @@ pub fn visit_range_proof<
 	loop {
 		if let Err(e) = input.read_exact(&mut buff[..1]) {
 			match &e {
-				crate::range_proof::RangeProofError::EndOfStream => {
-					depth_queue.drop_to(&mut key, None, callback);
-					return Ok(exiting);
-				}, // aka ccannot read
+				RangeProofError::EndOfStream =>
+					if depth_queue.drop_to(&mut key, None, callback) {
+						return Ok(exiting);
+					} else {
+						return Err(RangeProofError::UnexpectedBehavior);
+					}, // aka ccannot read
 				_ => (),
 			}
-			return Err(());
+			return Err(e);
 		}; // TODO right erro from trie crate
-		let (proof_op, attached) = C::decode_op(buff[0]).ok_or(())?;
+		let (proof_op, attached) =
+			C::decode_op(buff[0]).ok_or(RangeProofError::MalformedSequence)?;
 		match proof_op {
 			ProofOp::Partial => {
 				// TODO check the partial is post prev partial!!
 				match prev_op {
 					Some(ProofOp::Partial) => {
 						// no two consecutive partial
-						return Err(())
+						return Err(RangeProofError::MalformedSequence)
 					},
 					_ => (),
 				}
 				if exiting.is_some() {
-					return Err(());
+					return Err(RangeProofError::MalformedSequence);
 				}
 				last_drop = None;
-				let size = C::decode_size(proof_op, attached, input).map_err(|_| ())?;
+				let size = C::decode_size(proof_op, attached, input)?;
 				if size == 0 {
-					return Err(());
+					return Err(RangeProofError::MalformedProofOp);
 				}
 				let mut nb_byte = if size % nibble_ops::NIBBLE_PER_BYTE == 0 {
 					size / nibble_ops::NIBBLE_PER_BYTE
@@ -681,7 +685,7 @@ pub fn visit_range_proof<
 				let mut nibble_vec = BackingByteVec::with_capacity(nb_byte);
 				while nb_byte > 0 {
 					let bound = core::cmp::min(nb_byte, BUFF_LEN);
-					input.read_exact(&mut buff[..bound]).map_err(|_| ())?;
+					input.read_exact(&mut buff[..bound])?;
 					nibble_vec.extend_from_slice(&buff[..bound]);
 					nb_byte -= bound;
 				}
@@ -701,7 +705,7 @@ pub fn visit_range_proof<
 								can_seek = false;
 							} else {
 								// not into seek
-								return Err(());
+								return Err(RangeProofError::MalformedSequence);
 							}
 						}
 					}
@@ -711,20 +715,20 @@ pub fn visit_range_proof<
 				match prev_op {
 					Some(ProofOp::Value) => {
 						// no two value at same heigth
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					Some(ProofOp::Hashes) => {
 						// value is before hashes
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					Some(ProofOp::DropPartial) => {
 						// value already sent after a drop
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					_ => (),
 				}
 				if exiting.is_some() {
-					return Err(());
+					return Err(RangeProofError::MalformedSequence);
 				}
 				last_drop = None;
 				can_seek = false;
@@ -738,27 +742,26 @@ pub fn visit_range_proof<
 				match prev_op {
 					Some(ProofOp::DropPartial) => {
 						// consecutive drop
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					Some(ProofOp::Partial) => {
 						// drop after a push, we should at least have hash or value
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					None => {
 						// drop from start doesn't work
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					_ => (),
 				}
 				can_seek = false;
 
-				let to_drop =
-					C::decode_size(ProofOp::DropPartial, attached, input).map_err(|_| ())?;
+				let to_drop = C::decode_size(ProofOp::DropPartial, attached, input)?;
 				if to_drop == 0 {
-					return Err(());
+					return Err(RangeProofError::MalformedProofOp);
 				}
 				if to_drop > key.len() {
-					return Err(());
+					return Err(RangeProofError::MalformedSequence);
 				}
 				let to = key.len() - to_drop;
 				last_drop = Some(key.at(to));
@@ -771,21 +774,21 @@ pub fn visit_range_proof<
 				match prev_op {
 					Some(ProofOp::Value) | Some(ProofOp::DropPartial) => {
 						if last_key.is_none() {
-							return Err(());
+							return Err(RangeProofError::MalformedSequence);
 						}
 						exiting = last_key.clone();
 					},
 					Some(ProofOp::Hashes) => {
 						// consecutive hashes
-						return Err(());
+						return Err(RangeProofError::MalformedSequence);
 					},
 					Some(ProofOp::Partial) =>
 						if !can_seek {
-							return Err(());
+							return Err(RangeProofError::MalformedSequence);
 						},
 					None =>
 						if !can_seek {
-							return Err(());
+							return Err(RangeProofError::MalformedSequence);
 						},
 				}
 				let mut i = 8; // trigger a header read.
@@ -810,7 +813,7 @@ pub fn visit_range_proof<
 							// only value hash
 						} else {
 							// even eq should contain no hash
-							return Err(());
+							return Err(RangeProofError::UnexpectedBehavior);
 						}
 					}
 				} else if exiting.is_some() {
@@ -820,7 +823,7 @@ pub fn visit_range_proof<
 					}
 				} else {
 					// should be unreachable, but error just in case.
-					return Err(());
+					return Err(RangeProofError::UnexpectedBehavior);
 				}
 
 				if expect_value {
@@ -906,11 +909,11 @@ fn read_bitmap(
 	i: &mut usize,
 	bitmap: &mut Bitmap1,
 	input: &mut impl crate::range_proof::Read,
-) -> Result<bool, ()> {
+) -> Result<bool, RangeProofError> {
 	let mut buff = [0u8; 1];
 	if *i == 8 {
 		*i = 0;
-		input.read_exact(&mut buff[0..1]).map_err(|_| ())?;
+		input.read_exact(&mut buff[0..1])?;
 		*bitmap = Bitmap1(buff[0]);
 	}
 	let r = Ok(bitmap.get(*i));
@@ -931,12 +934,12 @@ fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
 	input: &mut impl crate::range_proof::Read,
 	attached: Option<u8>,
 	buff: &mut [u8; BUFF_LEN],
-) -> Result<DBValue, ()> {
-	let mut nb_byte = C::decode_size(ProofOp::Value, attached, input).map_err(|_| ())?;
+) -> Result<DBValue, RangeProofError> {
+	let mut nb_byte = C::decode_size(ProofOp::Value, attached, input)?;
 	let mut value = DBValue::with_capacity(nb_byte);
 	while nb_byte > 0 {
 		let bound = core::cmp::min(nb_byte, BUFF_LEN);
-		input.read_exact(&mut buff[..bound]).map_err(|_| ())?; // TODO we got our own bufs: use read
+		input.read_exact(&mut buff[..bound])?; // TODO we got our own bufs: use read on value
 		value.extend_from_slice(&buff[..bound]);
 		nb_byte -= bound;
 	}
@@ -944,24 +947,26 @@ fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
 	Ok(value)
 }
 
-fn read_hash<L: TrieLayout>(input: &mut impl crate::range_proof::Read) -> Result<TrieHash<L>, ()> {
+fn read_hash<L: TrieLayout>(
+	input: &mut impl crate::range_proof::Read,
+) -> Result<TrieHash<L>, RangeProofError> {
 	let mut hash = TrieHash::<L>::default();
-	input.read_exact(&mut hash.as_mut()).map_err(|_| ())?;
+	input.read_exact(&mut hash.as_mut())?;
 
 	Ok(hash)
 }
 
 fn read_value_hash<L: TrieLayout, C: RangeProofCodec>(
 	input: &mut impl crate::range_proof::Read,
-) -> Result<(TrieHash<L>, usize), ()> {
-	let nb_byte = C::varint_decode_from(input).map_err(|_| ())? as usize;
+) -> Result<(TrieHash<L>, usize), RangeProofError> {
+	let nb_byte = C::varint_decode_from(input)? as usize;
 
 	let mut hash = TrieHash::<L>::default();
 	if nb_byte > hash.as_ref().len() {
-		return Err(());
+		return Err(RangeProofError::MalformedInlineValue);
 	}
 
-	input.read_exact(&mut hash.as_mut()[..nb_byte]).map_err(|_| ())?;
+	input.read_exact(&mut hash.as_mut()[..nb_byte])?;
 
 	Ok((hash, nb_byte))
 }

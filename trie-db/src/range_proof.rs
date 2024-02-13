@@ -16,11 +16,26 @@ use crate::{iterator::OpHash, nibble_ops, rstd::vec::Vec};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RangeProofError {
+	// TODO a specific one when there is right number of missing
+	// elements (well formed)
 	/// No content to read from.
 	EndOfStream,
 
 	/// Stopping the range proof only on value from non inline node.
 	ShouldSuspendOnValue,
+
+	/// This should be unreachable and indicate a bug but we don't
+	/// want to panic.
+	UnexpectedBehavior,
+
+	/// Unexpected sequence of ProofOp
+	MalformedSequence,
+
+	/// Proof content is invalid eg 0 len drop partial.
+	MalformedProofOp,
+
+	/// Inline value attached as hash is longer than a hash.
+	MalformedInlineValue,
 
 	/// Unsupported usage.
 	Unsupported,

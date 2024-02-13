@@ -991,8 +991,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 			let mut i = 0;
 			let iter_possible = core::iter::from_fn(|| loop {
 				// value first.
-				// TODO should be a known iter but we don't know if inline -> should avoid first bit
-				// of is present at least.
 				if let Some(value_hash) = value_node.take() {
 					return Some(value_hash);
 				}
