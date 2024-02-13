@@ -471,15 +471,6 @@ impl Bitmap1 {
 		self.0 & (0b0000_0001 << i) != 0
 	}
 
-	// TODO useless??
-	pub fn encode<I: Iterator<Item = bool>>(&mut self, has_children: I) {
-		for (i, v) in has_children.enumerate() {
-			if v {
-				self.set(i);
-			}
-		}
-	}
-
 	pub fn set(&mut self, i: usize) {
 		debug_assert!(i < 8);
 		self.0 |= 0b0000_0001 << i;
