@@ -655,7 +655,7 @@ where
 	let mut bitmap_len = 0;
 	// if bit in previous bitmap (presence to true and type expected next).
 	let mut prev_bit: Option<OpHash> = None;
-	let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new();
+	let mut buff_bef_first = smallvec::SmallVec::<[u8; 4]>::new(); // TODO shoul be single byte
 
 	loop {
 		bitmap_len += i_bitmap;
@@ -670,7 +670,7 @@ where
 				l as usize
 			} else {
 				header_written = true;
-				let header = C::encode_op(ProofOp::Hashes, None);
+				let header = C::encode_op(ProofOp::Hashes, None); // TODO should be written with first bitmap (using header_written)
 				buff_bef_first.push(header);
 				8
 			}

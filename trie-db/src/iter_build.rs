@@ -795,7 +795,7 @@ pub fn visit_range_proof<
 					let nb_bitmap_hash =
 						C::op_attached_range(ProofOp::Hashes).expect("has attached");
 					i = 8 - (nb_bitmap_hash as usize);
-					bitmap = Bitmap1(att);
+					bitmap = Bitmap1(att << i);
 				}
 				let mut expect_value = false;
 				let mut range_bef = 0;

@@ -149,18 +149,48 @@ pub enum ProofOp {
 	              * to indicate if inline or single value hash: the first one */
 }
 
+fn varint_encoded_len(len: u32) -> usize {
+	if len == 0 {
+		return 1
+	}
+	let len = 32 - len.leading_zeros() as usize;
+	if len % 7 == 0 {
+		len / 7
+	} else {
+		len / 7 + 1
+	}
+}
+
 /// Tools for encoding range proof.
 /// Mainly single byte header for ops and size encoding.
 pub trait RangeProofCodec {
-	// TODO rem?
-	fn varint_encoded_len(len: u32) -> usize;
+	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()> {
+		let mut to_encode = len;
+		for _ in 0..varint_encoded_len(len) - 1 {
+			out.write(&[0b1000_0000 | to_encode as u8])?;
+			to_encode >>= 7;
+		}
+		out.write(&[to_encode as u8])?;
+		Ok(())
+	}
 
-	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()>;
+	fn varint_decode_from(input: &mut impl Read) -> Result<u32> {
+		let mut value = 0u32;
+		let mut buff = [0u8];
+		let mut i = 0;
+		loop {
+			input.read_exact(&mut buff[..])?;
+			let byte = buff[0];
+			let last = byte & 0b1000_0000 == 0;
+			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
+			if last {
+				return Ok(value);
+			}
+			i += 1;
+		}
+		Err(RangeProofError::EndOfStream)
+	}
 
-	// TODO rem?
-	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)>;
-
-	fn varint_decode_from(input: &mut impl Read) -> Result<u32>;
 	/// return range of value that can be attached to this op.
 	/// for bitmap it returns bitmap len.
 	/// for others it attached a max size (if max then it got sub from varint next).
@@ -210,57 +240,6 @@ pub trait RangeProofCodec {
 pub struct VarIntSimple;
 
 impl RangeProofCodec for VarIntSimple {
-	fn varint_encoded_len(len: u32) -> usize {
-		if len == 0 {
-			return 1
-		}
-		let len = 32 - len.leading_zeros() as usize;
-		if len % 7 == 0 {
-			len / 7
-		} else {
-			len / 7 + 1
-		}
-	}
-
-	fn varint_encode_into(len: u32, out: &mut impl CountedWrite) -> Result<()> {
-		let mut to_encode = len;
-		for _ in 0..Self::varint_encoded_len(len) - 1 {
-			out.write(&[0b1000_0000 | to_encode as u8])?;
-			to_encode >>= 7;
-		}
-		out.write(&[to_encode as u8])?;
-		Ok(())
-	}
-
-	fn varint_decode(encoded: &[u8]) -> Result<(u32, usize)> {
-		let mut value = 0u32;
-		for (i, byte) in encoded.iter().enumerate() {
-			let last = byte & 0b1000_0000 == 0;
-			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
-			if last {
-				return Ok((value, i + 1))
-			}
-		}
-		Err(RangeProofError::EndOfStream)
-	}
-
-	fn varint_decode_from(input: &mut impl Read) -> Result<u32> {
-		let mut value = 0u32;
-		let mut buff = [0u8];
-		let mut i = 0;
-		loop {
-			input.read_exact(&mut buff[..])?;
-			let byte = buff[0];
-			let last = byte & 0b1000_0000 == 0;
-			value |= ((byte & 0b0111_1111) as u32) << (i * 7);
-			if last {
-				return Ok(value);
-			}
-			i += 1;
-		}
-		Err(RangeProofError::EndOfStream)
-	}
-
 	fn op_attached_range(_: ProofOp) -> Option<u8> {
 		None
 	}
@@ -283,6 +262,48 @@ impl RangeProofCodec for VarIntSimple {
 				2 => ProofOp::DropPartial,
 				3 => ProofOp::Hashes,
 				_ => return None,
+			},
+			None,
+		))
+	}
+}
+
+/// Test codec, with six bit any attached op.
+pub struct VarIntSix;
+
+impl RangeProofCodec for VarIntSix {
+	fn op_attached_range(op: ProofOp) -> Option<u8> {
+		match op {
+			ProofOp::Partial => None,
+			ProofOp::Value => None,
+			ProofOp::DropPartial => None,
+			ProofOp::Hashes => Some(6),
+		}
+	}
+
+	fn encode_op(op: ProofOp, attached: Option<u8>) -> u8 {
+		match op {
+			ProofOp::Partial => 0,
+			ProofOp::Value => 1,
+			ProofOp::DropPartial => 2,
+			ProofOp::Hashes =>
+				3 | if let Some(a) = attached {
+					debug_assert!((a & 0b1100_0000) == 0);
+					a << 2
+				} else {
+					0
+				},
+		}
+	}
+
+	fn decode_op(encoded: u8) -> Option<(ProofOp, Option<u8>)> {
+		Some((
+			match (encoded & 0b11) {
+				0 => ProofOp::Partial,
+				1 => ProofOp::Value,
+				2 => ProofOp::DropPartial,
+				3 => return Some((ProofOp::Hashes, Some(encoded >> 2))),
+				_ => unreachable!(),
 			},
 			None,
 		))
@@ -324,8 +345,8 @@ fn varint_encode_decode() {
 	let mut buf = Vec::new();
 	for i in 0..u16::MAX as u32 + 1 {
 		VarIntSimple::varint_encode_into(i, &mut buf);
-		assert_eq!(buf.len(), VarIntSimple::varint_encoded_len(i));
-		assert_eq!((i, buf.len()), VarIntSimple::varint_decode(&buf).unwrap());
+		assert_eq!(buf.len(), varint_encoded_len(i));
+		assert_eq!((i, buf.len()), VarIntSimple::varint_decode_from(&mut buf.as_slice()).unwrap());
 		buf.clear();
 	}
 }
