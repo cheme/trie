@@ -883,13 +883,6 @@ impl<'a> OpHash<'a> {
 	pub fn is_var(&self) -> bool {
 		matches!(self, OpHash::Var(..))
 	}
-	// TODO rem?
-	pub fn content(&self) -> &[u8] {
-		match self {
-			OpHash::Fix(s) | OpHash::Var(s) => s,
-			OpHash::None => &[],
-		}
-	}
 }
 
 /// `exclusive_start` is the last returned key from a previous proof.
@@ -1065,8 +1058,6 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 
 		let key_len = prefix.len();
 		let (key_slice, maybe_extra_nibble) = prefix.as_prefix();
-		// TODO avoid instanciating key here
-		let key = key_slice.to_vec();
 
 		let Some(value) = value else {
 			continue;
@@ -1075,25 +1066,25 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 		// a push
 
 		if let Some(extra_nibble) = maybe_extra_nibble {
-			return Err(Box::new(TrieError::ValueAtIncompleteKey(key, extra_nibble)))
+			return Err(Box::new(TrieError::ValueAtIncompleteKey(key_slice.to_vec(), extra_nibble)))
 		}
 
-		// value push key content TODO make a function
-		C::push_partial_key(key_len, cursor, &key, output)?;
+		C::push_partial_key(key_len, cursor, key_slice, output)?;
 		cursor = key_len;
 
 		let locations = node.locations();
-		let value = value.build(node_data, locations.first().copied().unwrap_or_default());
-		// TODO non vec value
-		let value = match value {
+		match value.build(node_data, locations.first().copied().unwrap_or_default()) {
 			Value::Node(hash, location) =>
 				match TrieDBRawIterator::<L>::fetch_value(db, &hash, (key_slice, None), location) {
-					Ok(value) => value,
+					Ok(value) => {
+						C::push_value(value.as_slice(), output)?;
+					},
 					Err(err) => return Err(err),
 				},
-			Value::Inline(value) => value.to_vec(),
-		};
-		C::push_value(value.as_slice(), output)?;
+			Value::Inline(value) => {
+				C::push_value(value, output)?;
+			},
+		}
 		if !is_inline &&
 			size_limit.map(|l| (output.written() - start_written) >= l).unwrap_or(false)
 		{
@@ -1160,8 +1151,9 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 				}
 			}
 			if one_hash_written {
-				return Ok(Some(key)); // Note this is suboptimal as we can restart at last branch with not aft
-				      // siblings, but makes things easier (always align, simple rule)
+				return Ok(Some(key_slice.to_vec())); // Note this is suboptimal as we can restart at last branch
+				                     // with not aft siblings, but makes things
+				                     // easier (always align, simple rule)
 			} else {
 				return Ok(None);
 			}
