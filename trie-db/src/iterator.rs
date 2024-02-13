@@ -859,7 +859,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 
 			let bound = node_depth / nibble_ops::NIBBLE_PER_BYTE +
 				if (node_depth % nibble_ops::NIBBLE_PER_BYTE) == 0 { 0 } else { 1 };
-			push_partial_key::<L, C>(node_depth, cursor, &start[..bound], output)?;
+			C::push_partial_key(node_depth, cursor, &start[..bound], output)?;
 			cursor = node_depth;
 			if is_branch {
 				node_depth += 1;
@@ -960,7 +960,7 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 		}
 
 		// value push key content TODO make a function
-		push_partial_key::<L, C>(key_len, cursor, &key, output)?;
+		C::push_partial_key(key_len, cursor, &key, output)?;
 		cursor = key_len;
 
 		// TODO non vec value
@@ -1050,38 +1050,4 @@ pub fn range_proof<'a, 'cache, L: TrieLayout, C: RangeProofCodec>(
 	}
 
 	Ok(None)
-}
-
-fn push_partial_key<L: TrieLayout, C: RangeProofCodec>(
-	to: usize,
-	from: usize,
-	key: &[u8],
-	output: &mut impl CountedWrite,
-) -> Result<(), TrieHash<L>, CError<L>> {
-	let to_write = to - from;
-	let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
-	C::encode_with_size(ProofOp::Partial, to_write, output)
-		// TODO right error (when doing no_std writer / reader
-		.map_err(|e| Box::new(TrieError::IncompleteDatabase(Default::default())))?;
-	let start_aligned = from % nibble_ops::NIBBLE_PER_BYTE == 0;
-	let start_ix = from / nibble_ops::NIBBLE_PER_BYTE;
-	if start_aligned {
-		let off = if aligned { 0 } else { 1 };
-		let slice_to_write = &key[start_ix..key.len() - off];
-		output.write(slice_to_write);
-		if !aligned {
-			output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
-		}
-	} else {
-		for i in start_ix..key.len() - 1 {
-			let mut b = key[i] << 4;
-			b |= key[i + 1] >> 4;
-			output.write(&[b]);
-		}
-		if !aligned {
-			let b = key[key.len() - 1] << 4;
-			output.write(&[b]);
-		}
-	}
-	Ok(())
 }

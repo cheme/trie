@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::{nibble_ops, CError, TrieError, TrieHash};
+
 #[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RangeProofError {
 	/// No content to read from.
 	EndOfStream,
@@ -22,7 +25,7 @@ pub enum RangeProofError {
 
 	/// Error from IO, generally Read or Write.
 	#[cfg(feature = "std")]
-	StdIO(std::io::Error),
+	StdIO(std::io::ErrorKind),
 }
 
 type Result<T> = core::result::Result<T, RangeProofError>;
@@ -131,7 +134,7 @@ impl From<std::io::Error> for RangeProofError {
 			return RangeProofError::EndOfStream;
 		}
 
-		RangeProofError::StdIO(e)
+		RangeProofError::StdIO(e.kind())
 	}
 }
 
@@ -259,6 +262,38 @@ pub trait RangeProofCodec {
 		} else {
 			Self::varint_decode_from(input)? as usize
 		})
+	}
+
+	fn push_partial_key(
+		to: usize,
+		from: usize,
+		key: &[u8],
+		output: &mut impl CountedWrite,
+	) -> Result<()> {
+		let to_write = to - from;
+		let aligned = to_write % nibble_ops::NIBBLE_PER_BYTE == 0;
+		Self::encode_with_size(ProofOp::Partial, to_write, output)?;
+		let start_aligned = from % nibble_ops::NIBBLE_PER_BYTE == 0;
+		let start_ix = from / nibble_ops::NIBBLE_PER_BYTE;
+		if start_aligned {
+			let off = if aligned { 0 } else { 1 };
+			let slice_to_write = &key[start_ix..key.len() - off];
+			output.write(slice_to_write);
+			if !aligned {
+				output.write(&[nibble_ops::pad_left(key[key.len() - 1])]);
+			}
+		} else {
+			for i in start_ix..key.len() - 1 {
+				let mut b = key[i] << 4;
+				b |= key[i + 1] >> 4;
+				output.write(&[b]);
+			}
+			if !aligned {
+				let b = key[key.len() - 1] << 4;
+				output.write(&[b]);
+			}
+		}
+		Ok(())
 	}
 }
 

@@ -242,8 +242,8 @@ fn test_encode_full_state<
 
 test_layouts_substrate!(trie_full_state);
 fn trie_full_state<T: TrieLayout>() {
-	trie_full_state_limitted::<T, VarIntSix>(Some(1));
 	use trie_db::range_proof::{VarIntSimple, VarIntSix};
+	trie_full_state_limitted::<T, VarIntSix>(Some(1));
 	trie_full_state_limitted::<T, VarIntSimple>(Some(1));
 	trie_full_state_limitted::<T, VarIntSimple>(Some(200));
 	trie_full_state_limitted::<T, VarIntSimple>(None);

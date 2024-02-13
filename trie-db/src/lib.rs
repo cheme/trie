@@ -47,6 +47,7 @@ use self::rstd::{fmt, Error};
 use self::rstd::{boxed::Box, vec::Vec};
 use hash_db::MaybeDebug;
 use node::NodeOwned;
+use range_proof::RangeProofError;
 
 pub mod node;
 pub mod proof;
@@ -106,6 +107,8 @@ pub enum TrieError<T, E> {
 	DecoderError(T, E),
 	/// Hash is not value.
 	InvalidHash(T, Vec<u8>),
+	/// Error using range proof.
+	RangeProof(RangeProofError),
 }
 
 #[cfg(feature = "std")]
@@ -115,22 +118,31 @@ where
 	E: MaybeDebug,
 {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
-			TrieError::InvalidStateRoot(ref root) => write!(f, "Invalid state root: {:?}", root),
-			TrieError::IncompleteDatabase(ref missing) =>
+		match self {
+			TrieError::InvalidStateRoot(root) => write!(f, "Invalid state root: {:?}", root),
+			TrieError::IncompleteDatabase(missing) =>
 				write!(f, "Database missing expected key: {:?}", missing),
-			TrieError::ValueAtIncompleteKey(ref bytes, ref extra) =>
+			TrieError::ValueAtIncompleteKey(bytes, extra) =>
 				write!(f, "Value found in trie at incomplete key {:?} + {:?}", bytes, extra),
-			TrieError::DecoderError(ref hash, ref decoder_err) => {
+			TrieError::DecoderError(hash, decoder_err) => {
 				write!(f, "Decoding failed for hash {:?}; err: {:?}", hash, decoder_err)
 			},
-			TrieError::InvalidHash(ref hash, ref data) => write!(
+			TrieError::RangeProof(e) => {
+				write!(f, "Range proof error {:?}", e)
+			},
+			TrieError::InvalidHash(hash, data) => write!(
 				f,
 				"Encoded node {:?} contains invalid hash reference with length: {}",
 				hash,
 				data.len()
 			),
 		}
+	}
+}
+
+impl<T, E> From<RangeProofError> for Box<TrieError<T, E>> {
+	fn from(error: RangeProofError) -> Self {
+		Box::new(TrieError::RangeProof(error))
 	}
 }
 

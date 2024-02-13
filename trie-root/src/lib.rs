@@ -23,19 +23,12 @@ extern crate alloc;
 
 #[cfg(feature = "std")]
 mod rstd {
-	pub use std::{
-		cmp,
-		collections::{BTreeMap, VecDeque},
-		vec::Vec,
-	};
+	pub use std::{cmp, collections::BTreeMap, vec::Vec};
 }
 
 #[cfg(not(feature = "std"))]
 mod rstd {
-	pub use alloc::{
-		collections::{BTreeMap, VecDeque},
-		vec::Vec,
-	};
+	pub use alloc::{collections::BTreeMap, vec::Vec};
 	pub use core::cmp;
 }
 
