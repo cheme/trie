@@ -148,11 +148,6 @@ where
 				let nkey = NibbleSlice::new_offset(&key.inner()[..], target_depth + 1);
 				(index, nkey, nsize)
 			};
-			let prefix = NibbleSlice::new_offset(
-				&key.inner()[..],
-				key.inner().len() * nibble_ops::NIBBLE_PER_BYTE - nkey.len(),
-			); // TODO is prefix ever different from nkey?
-
 			let Some((children, value, _depth)) = self.0.pop() else {
 				return false;
 			};
@@ -180,10 +175,10 @@ where
 					children.iter(),
 					value,
 				);
-				callback.process(prefix.left(), encoded, is_root)
+				callback.process(nkey.left(), encoded, is_root)
 			} else {
 				let encoded = T::Codec::leaf_node(nkey.right_iter(), nkey.len(), value.unwrap());
-				callback.process(prefix.left(), encoded, is_root)
+				callback.process(nkey.left(), encoded, is_root)
 			};
 
 			key.drop_lasts(key.len() - target_depth);
