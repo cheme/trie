@@ -24,7 +24,7 @@ use crate::{
 	node_codec::NodeCodec,
 	node_db::{Hasher, Prefix, EMPTY_PREFIX},
 	range_proof::{Bitmap1, ProofOp, RangeProofCodec, RangeProofError},
-	rstd::{cmp::max, marker::PhantomData, vec::Vec},
+	rstd::{cmp::max, marker::PhantomData, vec, vec::Vec},
 	triedbmut::ChildReference,
 	DBValue, NibbleVec, TrieHash, TrieLayout,
 };
