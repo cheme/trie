@@ -654,7 +654,6 @@ pub fn visit_range_proof<
 			C::decode_op(buff[0]).ok_or(RangeProofError::MalformedSequence)?;
 		match proof_op {
 			ProofOp::Partial => {
-				// TODO check the partial is post prev partial!!
 				match prev_op {
 					Some(ProofOp::Partial) => {
 						// no two consecutive partial
@@ -664,6 +663,13 @@ pub fn visit_range_proof<
 				}
 				if exiting.is_some() {
 					return Err(RangeProofError::MalformedSequence);
+				}
+				let mut prev_child_ix = None;
+				if let Some(last_key) = last_key.as_ref() {
+					let last = NibbleSlice::new(last_key);
+					if last.len() > key.len() {
+						prev_child_ix = Some((last.at(key.len()), key.len()));
+					}
 				}
 				last_drop = None;
 				let size = C::decode_size(proof_op, attached, input)?;
@@ -686,12 +692,16 @@ pub fn visit_range_proof<
 					input.read_exact(&mut buff[..1])?;
 					key.push(NibbleSlice::new(&buff[..1]).at(0));
 				}
+				if let Some((ix, at)) = prev_child_ix {
+					if key.at(at) <= ix {
+						return Err(RangeProofError::NonSequential);
+					}
+				}
 				if can_seek {
 					if let Some(start_key) = start_key {
 						let common = nibble_ops::biggest_depth(start_key, key.inner());
 						let common = core::cmp::min(common, key.len());
 						if common < key.len() {
-							// TODO here if valid seek should only be equal
 							let start_key_len = start_key.len() * nibble_ops::NIBBLE_PER_BYTE;
 							if common == start_key_len {
 								can_seek = false;
@@ -822,6 +832,7 @@ pub fn visit_range_proof<
 					let has_value = read_bitmap(&mut i, &mut bitmap, input)?;
 
 					if has_value {
+						last_key = Some(key.inner().to_vec());
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
 							let value = read_value::<C>(input, None)?;
@@ -922,7 +933,7 @@ fn read_value<C: RangeProofCodec>(
 ) -> Result<DBValue, RangeProofError> {
 	let nb_byte = C::decode_size(ProofOp::Value, attached, input)?;
 	let mut value = vec![0; nb_byte];
-	input.read_exact(&mut value[..])?; // TODO we got our own bufs: use read on value
+	input.read_exact(&mut value[..])?;
 
 	Ok(value)
 }

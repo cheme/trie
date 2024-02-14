@@ -31,6 +31,9 @@ pub enum RangeProofError {
 	/// Unexpected sequence of ProofOp
 	MalformedSequence,
 
+	/// Content is not following expected node ordering.
+	NonSequential,
+
 	/// Proof content is invalid eg 0 len drop partial.
 	MalformedProofOp,
 
