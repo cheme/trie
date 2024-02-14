@@ -926,13 +926,13 @@ fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
 	attached: Option<u8>,
 	buff: &mut [u8; BUFF_LEN],
 ) -> Result<DBValue, RangeProofError> {
-	let mut nb_byte = C::decode_size(ProofOp::Value, attached, input)?;
-	let mut value = DBValue::with_capacity(nb_byte);
-	while nb_byte > 0 {
-		let bound = core::cmp::min(nb_byte, BUFF_LEN);
-		input.read_exact(&mut buff[..bound])?; // TODO we got our own bufs: use read on value
-		value.extend_from_slice(&buff[..bound]);
-		nb_byte -= bound;
+	let nb_byte = C::decode_size(ProofOp::Value, attached, input)?;
+	let mut value = vec![0; nb_byte];
+	let mut offset = 0;
+	while offset < nb_byte {
+		let bound = core::cmp::min(nb_byte - offset, BUFF_LEN);
+		input.read_exact(&mut value[offset..offset + bound])?; // TODO we got our own bufs: use read on value
+		offset += bound;
 	}
 
 	Ok(value)
