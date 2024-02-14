@@ -730,7 +730,7 @@ pub fn visit_range_proof<
 				last_drop = None;
 				can_seek = false;
 
-				let value = read_value::<BUFF_LEN, C>(input, attached, &mut buff)?;
+				let value = read_value::<C>(input, attached)?;
 				// not the most efficient as this is guaranted to be a push
 				depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 				last_key = Some(key.inner().to_vec());
@@ -829,7 +829,7 @@ pub fn visit_range_proof<
 					if has_value {
 						if read_bitmap(&mut i, &mut bitmap, input)? {
 							// inline value
-							let value = read_value::<BUFF_LEN, C>(input, None, &mut buff)?;
+							let value = read_value::<C>(input, None)?;
 							depth_queue.set_cache_value(key.len(), CacheValue::Value(value));
 						} else {
 							// hash value
@@ -921,19 +921,13 @@ fn read_bitmap_no_fetch(i: &mut usize, bitmap: &Bitmap1) -> Option<bool> {
 	r
 }
 
-fn read_value<const BUFF_LEN: usize, C: RangeProofCodec>(
+fn read_value<C: RangeProofCodec>(
 	input: &mut impl crate::range_proof::Read,
 	attached: Option<u8>,
-	buff: &mut [u8; BUFF_LEN],
 ) -> Result<DBValue, RangeProofError> {
 	let nb_byte = C::decode_size(ProofOp::Value, attached, input)?;
 	let mut value = vec![0; nb_byte];
-	let mut offset = 0;
-	while offset < nb_byte {
-		let bound = core::cmp::min(nb_byte - offset, BUFF_LEN);
-		input.read_exact(&mut value[offset..offset + bound])?; // TODO we got our own bufs: use read on value
-		offset += bound;
-	}
+	input.read_exact(&mut value[..])?; // TODO we got our own bufs: use read on value
 
 	Ok(value)
 }
