@@ -841,59 +841,53 @@ pub fn visit_range_proof<
 
 				let mut child_ix = 0;
 				let mut know_has_first_child = false;
-				loop {
-					let mut first_read = true;
-					while child_ix < nibble_ops::NIBBLE_LENGTH {
-						if child_ix == range_bef as usize {
-							child_ix = range_aft as usize;
-							if child_ix == nibble_ops::NIBBLE_LENGTH {
-								break;
-							}
-						}
-						let has_child = if know_has_first_child {
-							know_has_first_child = false;
-							true
-						} else if first_read {
-							first_read = false;
-							read_bitmap(&mut i, &mut bitmap, input)?
-						} else {
-							if let Some(has_child) = read_bitmap_no_fetch(&mut i, &bitmap) {
-								has_child
-							} else {
-								break;
-							}
-						};
-						if has_child {
-							if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
-								if is_inline {
-									// child inline
-									let (value, len) = read_value_hash::<L, C>(input)?;
-									depth_queue.set_node(
-										key.len(),
-										child_ix as usize,
-										Some(ChildReference::Inline(value, len)),
-									);
-								} else {
-									// child hash
-									let hash = read_hash::<L>(input)?;
-									depth_queue.set_node(
-										key.len(),
-										child_ix as usize,
-										Some(ChildReference::Hash(hash, ())),
-									);
-								}
-								child_ix += 1;
-							} else {
-								know_has_first_child = true;
-								break;
-							}
-						} else {
-							child_ix += 1;
-						}
+				let mut first_bitmap_read = true;
+				while child_ix < nibble_ops::NIBBLE_LENGTH {
+					if child_ix == range_bef as usize && range_bef != range_aft {
+						child_ix = range_aft as usize;
+						continue;
 					}
-
-					if child_ix == nibble_ops::NIBBLE_LENGTH {
-						break; // TODO always break and use label on inner break
+					let has_child = if know_has_first_child {
+						know_has_first_child = false;
+						true
+					} else if first_bitmap_read {
+						first_bitmap_read = false;
+						read_bitmap(&mut i, &mut bitmap, input)?
+					} else {
+						if let Some(has_child) = read_bitmap_no_fetch(&mut i, &bitmap) {
+							has_child
+						} else {
+							first_bitmap_read = true;
+							continue;
+						}
+					};
+					if has_child {
+						if let Some(is_inline) = read_bitmap_no_fetch(&mut i, &bitmap) {
+							if is_inline {
+								// child inline
+								let (value, len) = read_value_hash::<L, C>(input)?;
+								depth_queue.set_node(
+									key.len(),
+									child_ix as usize,
+									Some(ChildReference::Inline(value, len)),
+								);
+							} else {
+								// child hash
+								let hash = read_hash::<L>(input)?;
+								depth_queue.set_node(
+									key.len(),
+									child_ix as usize,
+									Some(ChildReference::Hash(hash, ())),
+								);
+							}
+							child_ix += 1;
+						} else {
+							know_has_first_child = true;
+							first_bitmap_read = true;
+							continue;
+						}
+					} else {
+						child_ix += 1;
 					}
 				}
 			},
