@@ -78,7 +78,7 @@ pub use self::{
 	nibble::{nibble_ops, NibbleSlice, NibbleVec},
 	recorder::Recorder,
 	triedb::{TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBKeyIterator},
-	triedbmut::{Changeset, ChildReference, OwnedPrefix, TrieDBMut, TrieDBMutBuilder, Value},
+	triedbmut::{Changeset, NewChangesetNode, ChildReference, OwnedPrefix, TrieDBMut, TrieDBMutBuilder, Value},
 };
 use crate::node_db::Hasher;
 pub use crate::{
