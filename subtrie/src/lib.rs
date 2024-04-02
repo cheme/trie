@@ -375,9 +375,9 @@ pub trait TrieLayout {
 }
 
 /// Trait alias for requirement of location with `TrieLayout`.
-pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash {}
+pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash + Ord {}
 
-impl<T: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash> Location for T {}
+impl<T: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash + Ord> Location for T {}
 
 /// This trait associates a trie definition with preferred methods.
 /// It also contains own default implementations and can be
