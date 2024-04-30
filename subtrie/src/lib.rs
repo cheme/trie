@@ -79,7 +79,7 @@ pub use self::{
 	recorder::Recorder,
 	triedb::{TrieDB, TrieDBBuilder, TrieDBIterator, TrieDBKeyIterator},
 	triedbmut::{
-		Changenode, Changeset, ChildReference, ExistingChangesetNode, NewChangesetNode,
+		Changenode, Changeset, ChildReference, NewChangesetNode,
 		OwnedPrefix, TreeRefChangeset, TrieDBMut, TrieDBMutBuilder, Value,
 	},
 };
@@ -378,7 +378,7 @@ pub trait TrieLayout {
 }
 
 /// Trait alias for requirement of location with `TrieLayout`.
-pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug {
+pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash + Ord {
 	fn into_changes<L: TrieLayout<Location = Self>>(self) -> TreeRefChangeset<L> {
 		if self == Self::default() {
 			None
@@ -388,7 +388,7 @@ pub trait Location: Copy + Default + Eq + PartialEq + MaybeDebug {
 	}
 }
 
-impl<T: Copy + Default + Eq + PartialEq + MaybeDebug> Location for T {}
+impl<T: Copy + Default + Eq + PartialEq + MaybeDebug + rstd::hash::Hash + Ord> Location for T {}
 
 /// This trait associates a trie definition with preferred methods.
 /// It also contains own default implementations and can be

@@ -32,13 +32,14 @@ where
 {
 	nodes: Vec<NodeEntry<H::Out>>,
 	roots: HashMap<H::Out, usize>,
+	pruning_set: HashMap<H::Out, Vec<usize>>,
 	hashed_null_node: H::Out,
 	null_node_data: Vec<u8>,
 }
 
 #[derive(Clone)]
 enum NodeEntry<H> {
-	Live { key: H, data: Vec<u8>, children: Vec<usize>, rc: u32 },
+	Live { key: H, data: Vec<u8>, children: Vec<usize> },
 	Removed,
 }
 
@@ -62,6 +63,7 @@ where
 			roots: HashMap::default(),
 			hashed_null_node: H::hash(null_key),
 			null_node_data: null_node_data.to_vec(),
+			pruning_set: Default::default(),
 		}
 	}
 
@@ -76,11 +78,7 @@ where
 	}
 
 	pub fn remove_root(&mut self, key: &H::Out) {
-		let Some(location) = self.roots.get(key) else {
-			return;
-		};
-
-		if self.remove_tree(*location) {
+		if self.remove_tree(key) {
 			self.roots.remove(key);
 		}
 	}
@@ -110,24 +108,15 @@ where
 		}
 	}
 
-	fn remove_tree(&mut self, location: usize) -> bool {
-		let entry = self.nodes.get_mut(location).unwrap();
-		match entry {
-			NodeEntry::Live { rc, children, .. } =>
-				if *rc == 1 {
-					let children = std::mem::take(children);
-					*entry = NodeEntry::Removed;
-					for c in children {
-						self.remove_tree(c);
-					}
-					true
-				} else {
-					*rc -= 1;
-					false
-				},
-			NodeEntry::Removed => {
-				panic!("Accessing removed node");
-			},
+	fn remove_tree(&mut self, hash: &H::Out) -> bool {
+		if let Some(set) = self.pruning_set.remove(hash) {
+			for location in set {
+				let entry = self.nodes.get_mut(location).unwrap();
+				*entry = NodeEntry::Removed;
+			}
+			true
+		} else {
+			false
 		}
 	}
 
@@ -135,18 +124,18 @@ where
 		self.roots.is_empty()
 	}
 
-	fn apply(&mut self, c: &Changenode<H::Out, Location>, is_root: Option<H::Out>) -> usize {
+	fn apply(&mut self, c: &Changenode<H::Out, Location>, root: &H::Out, is_root: bool) -> usize {
 		match &c {
 			Changenode::Existing(e) => {
 				let location = if e == &Location::default() {
-					*self.roots.get(&is_root.unwrap()).unwrap()
+					assert!(is_root);
+					*self.roots.get(root).unwrap()
 				} else {
 					e.unwrap()
 				};
 				let entry = self.nodes.get_mut(location).unwrap();
 				match entry {
-					NodeEntry::Live { rc, .. } => {
-						*rc += 1;
+					NodeEntry::Live { .. } => {
 					},
 					NodeEntry::Removed => {
 						panic!("Accessing removed node");
@@ -155,12 +144,17 @@ where
 				location
 			},
 			Changenode::New(n) => {
-				let children = n.children.iter().map(|c| self.apply(c, None)).collect();
+				if let Some(removed_keys) = n.removed_keys.as_ref() {
+					for n in &removed_keys.1 {
+						let set = self.pruning_set.entry(*root).or_default();
+						n.2.map(|l| set.push(l));
+					}
+				}
+				let children = n.children.iter().map(|c| self.apply(c, root, false)).collect();
 				self.nodes.push(NodeEntry::Live {
 					key: n.hash,
 					data: n.data.clone(),
 					children,
-					rc: 1,
 				});
 				self.nodes.len() - 1
 			},
@@ -170,7 +164,10 @@ where
 	pub fn apply_commit(&mut self, commit: Changeset<H::Out, Location>) -> H::Out {
 		let root = commit.root_hash();
 		if root != self.hashed_null_node {
-			let root = self.apply(&commit.change, Some(commit.old_root));
+			let root = self.apply(&commit.change, &commit.old_root, true);
+			for c in &commit.death_row_child {
+				self.apply(c, &commit.old_root, false);
+			}
 			let key = commit.root_hash();
 			self.roots.insert(key, root);
 		}
@@ -261,11 +258,11 @@ mod tests {
 			children: vec![],
 			removed_keys: None,
 		}));
-		let new_location = db.apply(&new_node, None);
+		let new_location = db.apply(&new_node, &hash(0), false);
 
 		// Then, apply an existing node that refers to the new node
 		let existing_node = Changenode::Existing(Some(new_location));
-		let existing_location = db.apply(&existing_node, None);
+		let existing_location = db.apply(&existing_node, &hash(0), false);
 
 		assert_eq!(existing_location, new_location);
 	}
@@ -280,7 +277,7 @@ mod tests {
 			children: vec![],
 			removed_keys: None,
 		}));
-		let location = db.apply(&node, None);
+		let location = db.apply(&node, &hash(0), false);
 		assert_eq!(location, db.nodes.len() - 1);
 	}
 
@@ -350,7 +347,6 @@ mod tests {
 			key: key.clone(),
 			data: vec![1, 2, 3],
 			children: vec![],
-			rc: 1,
 		});
 		db.roots.insert(key.clone(), 0);
 		let result = db.get(&key, Default::default(), None);
@@ -365,7 +361,6 @@ mod tests {
 			key: key.clone(),
 			data: vec![1, 2, 3],
 			children: vec![],
-			rc: 1,
 		});
 		db.roots.insert(key.clone(), 0);
 		assert!(db.contains(&key, Default::default(), None));

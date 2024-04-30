@@ -183,6 +183,7 @@ fn remove_to_empty_checked_internal<T: TrieLayout, DB: TestDB<T>>() {
 	t.remove(&[0x01, 0x23]).unwrap();
 	t.remove(&[0x01, 0x34]).unwrap();
 	t.commit().commit_to(&mut memdb);
+	// TODO apply pruning set for memtreedb
 	assert!(memdb.is_empty());
 }
 

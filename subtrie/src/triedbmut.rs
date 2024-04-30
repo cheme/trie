@@ -811,16 +811,10 @@ pub struct NewChangesetNode<H, DL> {
 	pub data: Vec<u8>,
 	pub children: Vec<Changenode<H, DL>>,
 	// Storing the key and removed nodes related
-	// to this change set node (only needed for old trie).
+	// to this change set node.
 	// Warning this is also here that the contextual keyspace
 	// is stored (so it should always be define).
-	pub removed_keys: Option<(Option<Vec<u8>>, Vec<(H, OwnedPrefix)>)>,
-}
-
-#[derive(Debug)]
-pub struct ExistingChangesetNode<H, DL> {
-	pub hash: H, // TODO take lot of mem when only use for root
-	pub location: DL,
+	pub removed_keys: Option<(Option<Vec<u8>>, Vec<(H, OwnedPrefix, DL)>)>,
 }
 
 #[derive(Debug)]
@@ -892,7 +886,7 @@ impl<H: Copy, DL: Default> Changeset<H, DL> {
 			match node {
 				Changenode::New(node) => {
 					if let Some((k, removed)) = node.removed_keys.as_ref() {
-						for (hash, p) in removed.iter() {
+						for (hash, p, _l) in removed.iter() {
 							if let Some(k) = k {
 								let prefixed = prefix_prefix(k.as_slice(), (p.0.as_slice(), p.1));
 								mem_db.remove(hash, (prefixed.0.as_slice(), prefixed.1));
@@ -974,7 +968,7 @@ where
 	db: &'a dyn NodeDB<L::Hash, DBValue, L::Location>,
 	root: TrieHash<L>,
 	root_handle: NodeHandle<TrieHash<L>, L::Location>,
-	death_row: Set<(TrieHash<L>, OwnedPrefix)>,
+	death_row: Set<(TrieHash<L>, OwnedPrefix, L::Location)>,
 	death_row_child: Vec<Changenode<TrieHash<L>, L::Location>>,
 	/// Optional cache for speeding up the lookup of nodes.
 	cache: Option<&'a mut dyn TrieCache<L::Codec, L::Location>>,
@@ -1060,11 +1054,11 @@ where
 			Stored::Cached(node, hash, location) => match inspector(self, node, key)? {
 				Action::Restore(node) => Some((Stored::Cached(node, hash, location), false)),
 				Action::Replace(node) => {
-					self.death_row.insert((hash, current_key.left_owned())); // TODO don't feed deathrow when unused (location support except root)
+					self.death_row.insert((hash, current_key.left_owned(), location)); // TODO don't feed deathrow when unused (location support except root)
 					Some((Stored::New(node), true))
 				},
 				Action::Delete(tree_ref) => {
-					self.death_row.insert((hash, current_key.left_owned()));
+					self.death_row.insert((hash, current_key.left_owned(), location));
 					if let Some(c) = tree_ref {
 						self.death_row_child.push(c);
 					}
@@ -1203,12 +1197,18 @@ where
 		stored_value: Option<Value<L>>,
 		prefix: Prefix,
 	) {
+		let location = if let Some(Value::Node(_, location)) = &stored_value {
+			*location
+		} else {
+			Default::default()
+		};
 		match &stored_value {
 			Some(Value::NewNode(Some(hash), _)) // also removing new node in case commit is called multiple times
 			| Some(Value::Node(hash, _)) => {
 				self.death_row.insert((
 					hash.clone(),
 					(prefix.0.into(), prefix.1),
+					location,
 				));
 			},
 			_ => (),
@@ -1930,9 +1930,12 @@ where
 						};
 						let child_node = match stored {
 							Stored::New(node) => node,
-							Stored::Cached(node, hash, _location) => {
-								self.death_row
-									.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
+							Stored::Cached(node, hash, location) => {
+								self.death_row.insert((
+									hash,
+									(child_prefix.0[..].into(), child_prefix.1),
+									location,
+								));
 								node
 							},
 						};
@@ -2037,8 +2040,11 @@ where
 						// combine with node below.
 						if let Some(hash) = maybe_hash {
 							// delete the cached child since we are going to replace it.
-							self.death_row
-								.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
+							self.death_row.insert((
+								hash,
+								(child_prefix.0[..].into(), child_prefix.1),
+								child_location,
+							));
 						}
 						// subpartial
 						let mut partial = partial;
@@ -2056,8 +2062,11 @@ where
 						// combine with node below.
 						if let Some(hash) = maybe_hash {
 							// delete the cached child since we are going to replace it.
-							self.death_row
-								.insert((hash, (child_prefix.0[..].into(), child_prefix.1)));
+							self.death_row.insert((
+								hash,
+								(child_prefix.0[..].into(), child_prefix.1),
+								child_location,
+							));
 						}
 						// subpartial oly
 						let mut partial = partial;
@@ -2115,8 +2124,8 @@ where
 		let mut removed = Vec::with_capacity(self.death_row.len());
 
 		#[cfg(feature = "std")]
-		for (hash, prefix) in self.death_row.drain() {
-			removed.push((hash, prefix));
+		for (hash, prefix, location) in self.death_row.drain() {
+			removed.push((hash, prefix, location));
 		}
 
 		let handle = match self.root_handle() {
